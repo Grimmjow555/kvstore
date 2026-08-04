@@ -9,10 +9,16 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <vector>
-extern int kvs_protocol(char* msg, int length, char* response);
+
+// extern int kvs_protocol(char* msg, int length, char* response);
+
+typedef int (*msg_handler)(char* msg, int length, char* response);
+static msg_handler kvs_handler;
 
 #define ENTRIES_LENGTH 1024 // 提交队列和完成队列的大小
 #define BUFFER_LENGTH 1024
+
+static char response[BUFFER_LENGTH] = {0}; //
 
 enum class EVENT { ACCEPT = 0, READ = 1, WRITE = 2 };
 
@@ -25,7 +31,7 @@ struct conn_ctx {
     EVENT event;
 };
 
-int init_server(unsigned short port) {
+static int init_server(unsigned short port) {
 
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in servaddr;
@@ -34,6 +40,7 @@ int init_server(unsigned short port) {
     servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
     servaddr.sin_port = htons(port);
 
+    // 如果端口正在被占用会绑定失败
     if (bind(listenfd, (struct sockaddr*)&servaddr, sizeof(servaddr)) == -1) {
         printf("bind failed: %s\n", strerror(errno));
         return -1;
@@ -101,8 +108,10 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
             delete ctx;
         } else {
             printf("connection [%d], recv %d: %s\n", ctx->clientfd, recvlen, ctx->buffer);
-            char response[BUFFER_LENGTH] = {0};
-            int ret = kvs_protocol(ctx->buffer, recvlen, response);
+
+            // int ret = kvs_protocol(ctx->buffer, recvlen, response);
+            int ret = kvs_handler(ctx->buffer, recvlen, response);
+
             set_event_send(ring, ctx, response, ret, 0);
         }
         break;
@@ -122,9 +131,18 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
     return 0;
 }
 
-int main(int argc, char* argv[]) {
-    unsigned short port = 2000;
+// int main(int argc, char* argv[]) {
+int proactor_start(unsigned short port, msg_handler handler) {
+    // unsigned short port = 2000;       //原始情况
+    printf("USE proactor\n");
+
+    kvs_handler = handler;
+
     int listenfd = init_server(port); // 初始化并监听端口
+    if (listenfd < 0) {
+        fprintf(stderr, "Server initialization failed.\n");
+        return 1;
+    }
 
     // 初始化io_uring实例的参数结构体
     struct io_uring_params params;

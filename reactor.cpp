@@ -1,26 +1,41 @@
 #include <arpa/inet.h>
 #include <errno.h>
+#include <iostream>
 #include <netinet/in.h>
-#include <stdio.h>
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 #include "server.h"
-extern int kvs_protocol(char* msg, int length, char* response);
 
-typedef int (*RCALLBACK)(int fd);
+// extern int kvs_protocol(char* msg, int length, char* response);
+
+//定义了一个类型别名msg_handler
+//它代表的类型就是“返回值 int、参数 (char*, int, char*)的函数指针”。
+typedef int (*msg_handler)(char* msg, int length, char* response);
+static msg_handler kvs_handler;
+
+int kvs_request(struct conn* c) {
+    printf("[kvs_request]recv %d: %s\n", c->rlength, c->rbuffer);
+
+    // c->wlength = kvs_protocol(c->rbuffer, c->rlength, c->wbuffer);
+
+    c->wlength = kvs_handler(c->rbuffer, c->rlength, c->wbuffer);
+
+    return 0;
+}
+
+int kvs_response(struct conn* c) {
+    printf("recv %d: %s\n", c->wlength, c->wbuffer);
+    return 0;
+}
 
 int epfd = 0;
 
 struct conn conn_list[CONN_SIZE] = {0};
 
-int accept_cb(int listenfd);
-int recv_cb(int clientfd);
-int send_cb(int clientfd);
-
-int init_server(unsigned short port) {
+static int init_server(unsigned short port) {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in servaddr = {0};
     servaddr.sin_family = AF_INET;
@@ -88,7 +103,7 @@ int recv_cb(int clientfd) {
     int count = recv(clientfd, conn_list[clientfd].rbuffer, BUFFER_LENGTH, 0);
     if (count <= 0) {
         printf("client disconnect: %d\n", clientfd);
-        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, NULL); // unfinished
+        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr); // unfinished
         close(clientfd);
         return 0;
     }
@@ -107,12 +122,17 @@ int recv_cb(int clientfd) {
     conn_list[clientfd].rlength = count;
     printf("[%d]RECV: %s\n", conn_list[clientfd].rlength, conn_list[clientfd].rbuffer);
 #endif
+    // 原样回发
     // memcpy(conn_list[clientfd].wbuffer, conn_list[clientfd].rbuffer, count);
     // conn_list[clientfd].wlength = conn_list[clientfd].rlength;
 
-    int ret = kvs_protocol(conn_list[clientfd].rbuffer, conn_list[clientfd].rlength,
-                           conn_list[clientfd].wbuffer);
-    conn_list[clientfd].wlength = ret;
+    //调用kvs协议
+    // int ret = kvs_protocol(conn_list[clientfd].rbuffer, conn_list[clientfd].rlength,
+    //                        conn_list[clientfd].wbuffer);
+    // conn_list[clientfd].wlength = ret;
+
+    //封装kvs请求
+    kvs_request(&conn_list[clientfd]);
 
     set_event(clientfd, EPOLLOUT, 0);
 
@@ -140,8 +160,12 @@ int is_listenfd(int* sockfds, int fd) {
     }
     return 0;
 }
-int main() {
-    unsigned short port = 2000;
+
+// int main() {
+int reactor_start(unsigned short port, msg_handler handler) {
+    printf("USE reactor\n");
+    kvs_handler = handler;
+    // unsigned short port = 2000;
     epfd = epoll_create(1);
     int sockfds[PORT_NUMS];
     for (int i = 0; i < PORT_NUMS; ++i) {

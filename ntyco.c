@@ -3,7 +3,10 @@
 #include "nty_coroutine.h"
 
 #include <arpa/inet.h>
-extern int kvs_protocol(char* msg, int length, char* response);
+// extern int kvs_protocol(char* msg, int length, char* response);
+
+typedef int (*msg_handler)(char* msg, int length, char* response);
+static msg_handler kvs_handler;
 
 void server_reader(void* arg) {
     int fd = *(int*)arg;
@@ -17,7 +20,10 @@ void server_reader(void* arg) {
             printf("read from server: %.*s\n", ret, buf);
 
             char response[1024] = {0};
-            int slength = kvs_protocol(buf, ret, response);
+
+            // int slength = kvs_protocol(buf, ret, response);
+            int slength = kvs_handler(buf, ret, response);
+
             ret = send(fd, response, slength, 0);
 
             // ret = send(fd, buf, sizeof(buf), 0);
@@ -32,7 +38,7 @@ void server_reader(void* arg) {
     }
 }
 
-void server(void* arg) {
+static void server(void* arg) {
 
     unsigned short port = *(unsigned short*)arg;
 
@@ -58,11 +64,12 @@ void server(void* arg) {
     }
 }
 
-int main(int argc, char* argv[]) {
-    if (argc < 2)
-        return -1;
+int ntyco_start(unsigned short port, msg_handler handler) {
+    printf("USE NtyCo\n");
 
-    int port = atoi(argv[1]);
+    // unsigned short port = atoi(argv[1]); //原始情况，直接从命令行读取端口，需要转化为整数
+
+    kvs_handler = handler;
 
     nty_coroutine* co = NULL;
     nty_coroutine_create(&co, server, &port);

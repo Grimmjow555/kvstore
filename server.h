@@ -25,5 +25,9 @@ struct conn {
     } r_action;
 };
 
+int accept_cb(int listenfd);
+int recv_cb(int clientfd);
+int send_cb(int clientfd);
+
 int kvs_request(struct conn* c);
 int kvs_response(struct conn* c);
