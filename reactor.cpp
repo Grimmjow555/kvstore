@@ -163,7 +163,6 @@ int is_listenfd(int* sockfds, int fd) {
 
 // int main() {
 int reactor_start(unsigned short port, msg_handler handler) {
-    printf("USE reactor\n");
     kvs_handler = handler;
     // unsigned short port = 2000;
     epfd = epoll_create(1);

@@ -65,7 +65,6 @@ static void server(void* arg) {
 }
 
 int ntyco_start(unsigned short port, msg_handler handler) {
-    printf("USE NtyCo\n");
 
     // unsigned short port = atoi(argv[1]); //原始情况，直接从命令行读取端口，需要转化为整数
 

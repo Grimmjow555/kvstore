@@ -134,7 +134,6 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
 // int main(int argc, char* argv[]) {
 int proactor_start(unsigned short port, msg_handler handler) {
     // unsigned short port = 2000;       //原始情况
-    printf("USE proactor\n");
 
     kvs_handler = handler;
 
