@@ -1,0 +1,23 @@
+
+# Consider dependencies only in project.
+set(CMAKE_DEPENDS_IN_PROJECT_ONLY OFF)
+
+# The set of languages for which implicit dependencies are needed:
+set(CMAKE_DEPENDS_LANGUAGES
+  )
+
+# The set of dependency files which are needed:
+set(CMAKE_DEPENDS_DEPENDENCY_FILES
+  "/home/Share/VScode/12.kvstore/ntyco.c" "CMakeFiles/kvstore.dir/ntyco.c.o" "gcc" "CMakeFiles/kvstore.dir/ntyco.c.o.d"
+  "/home/Share/VScode/12.kvstore/kvs_array.cpp" "CMakeFiles/kvstore.dir/kvs_array.cpp.o" "gcc" "CMakeFiles/kvstore.dir/kvs_array.cpp.o.d"
+  "/home/Share/VScode/12.kvstore/kvstore.cpp" "CMakeFiles/kvstore.dir/kvstore.cpp.o" "gcc" "CMakeFiles/kvstore.dir/kvstore.cpp.o.d"
+  "/home/Share/VScode/12.kvstore/proactor.cpp" "CMakeFiles/kvstore.dir/proactor.cpp.o" "gcc" "CMakeFiles/kvstore.dir/proactor.cpp.o.d"
+  "/home/Share/VScode/12.kvstore/reactor.cpp" "CMakeFiles/kvstore.dir/reactor.cpp.o" "gcc" "CMakeFiles/kvstore.dir/reactor.cpp.o.d"
+  )
+
+# Targets to which this target links.
+set(CMAKE_TARGET_LINKED_INFO_FILES
+  )
+
+# Fortran module output directory.
+set(CMAKE_Fortran_TARGET_MODULE_DIR "")
