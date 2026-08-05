@@ -1,4 +1,4 @@
-分别基于 reactor(epoll), proactor(io_uring) 以及协程框架（NtyCo）实现的kv存储。
+分别基于 reactor(epoll), proactor(io_uring) 以及协程框架(NtyCo)实现的kv存储。
 
 编译：
 
@@ -12,7 +12,7 @@ g++ kvstore.o proactor.o reactor.o ntyco.o -o kvstore -luring -L NtyCo-master/ -
 
 ./kvstore 端口号 网络架构
 
-网络架构：0代表reactor(epoll)，1代表协程（NtyCo），2代表 proactor(io_uring)
+网络架构：0 代表 reactor(epoll) ，1 代表协程框架(NtyCo)，2 代表 proactor(io_uring)
 
 默认监听端口2000
 
