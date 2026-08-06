@@ -15,6 +15,7 @@ int kvs_array_create(kvs_array_t* inst) {
     if (inst->table == nullptr)
         return -1;
 
+    inst->max_idx = 0;
     inst->total = 0;
     return 0;
 }
@@ -31,10 +32,12 @@ void kvs_array_destory(kvs_array_t* inst) {
  *@return: nullptr, no exist; ptr exist
  */
 char* kvs_array_get(kvs_array_t* inst, char* key) {
-    if (inst == nullptr || key == nullptr)
+    if (inst == nullptr || key == nullptr) {
+        // printf("kvs_array_get error!\n");
         return nullptr;
+    }
 
-    for (int i = 0; i < inst->total; ++i) {
+    for (int i = 0; i < inst->max_idx; ++i) {
         if (inst->table[i].key == nullptr)
             continue;
 
@@ -43,6 +46,7 @@ char* kvs_array_get(kvs_array_t* inst, char* key) {
         }
     }
 
+    // printf("kvs_array_get not find!\n");
     return nullptr;
 }
 
@@ -52,7 +56,7 @@ char* kvs_array_get(kvs_array_t* inst, char* key) {
 int kvs_array_set(kvs_array_t* inst, char* key, char* value) {
     if (inst == nullptr || key == nullptr || value == nullptr)
         return -1;
-    if (inst->total == KVS_ARRAY_SIZE)
+    if (inst->max_idx == KVS_ARRAY_SIZE)
         return -1;
 
     char* ret = kvs_array_get(inst, key);
@@ -72,18 +76,19 @@ int kvs_array_set(kvs_array_t* inst, char* key, char* value) {
     strncpy(kvalue, value, strlen(value));
 
     int i = 0;
-    for (i = 0; i < inst->total; ++i) {
+    for (i = 0; i < inst->max_idx; ++i) {
         if (inst->table[i].key == nullptr) {
             inst->table[i].key = kcopy;
             inst->table[i].value = kvalue;
-            // inst->total++;
+            inst->total++;
             return 0;
         }
     }
 
-    if (i == inst->total && i < KVS_ARRAY_SIZE) {
+    if (i == inst->max_idx && i < KVS_ARRAY_SIZE) {
         inst->table[i].key = kcopy;
         inst->table[i].value = kvalue;
+        inst->max_idx++;
         inst->total++;
     }
 
@@ -97,7 +102,7 @@ int kvs_array_del(kvs_array_t* inst, char* key) {
     if (inst == nullptr || key == nullptr)
         return -1;
 
-    for (int i = 0; i < inst->total; ++i) {
+    for (int i = 0; i < inst->max_idx; ++i) {
         if (inst->table[i].key == nullptr)
             continue;
         if (strcmp(inst->table[i].key, key) == 0) {
@@ -106,9 +111,11 @@ int kvs_array_del(kvs_array_t* inst, char* key) {
 
             kvs_free(inst->table[i].value);
             inst->table[i].value = nullptr;
-            if (i == inst->total - 1) {
-                while ((inst->total > 0) && (inst->table[inst->total - 1].key == nullptr)) {
-                    inst->total--;
+
+            inst->total--;
+            if (i == inst->max_idx - 1) {
+                while ((inst->max_idx > 0) && (inst->table[inst->max_idx - 1].key == nullptr)) {
+                    inst->max_idx--;
                 }
             }
             return 0;
@@ -125,7 +132,7 @@ int kvs_array_mod(kvs_array_t* inst, char* key, char* value) {
     if (inst == nullptr || key == nullptr || value == nullptr)
         return -1;
 
-    for (int i = 0; i < inst->total; ++i) {
+    for (int i = 0; i < inst->max_idx; ++i) {
         if (inst->table[i].key == nullptr)
             continue;
         if (strcmp(inst->table[i].key, key) == 0) {

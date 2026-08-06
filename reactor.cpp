@@ -17,7 +17,7 @@ typedef int (*msg_handler)(char* msg, int length, char* response);
 static msg_handler kvs_handler;
 
 int kvs_request(struct conn* c) {
-    printf("[kvs_request]recv %d: %s\n", c->rlength, c->rbuffer);
+    // printf("[kvs_request]recv %d: %s\n", c->rlength, c->rbuffer);
 
     // c->wlength = kvs_protocol(c->rbuffer, c->rlength, c->wbuffer);
 
@@ -27,7 +27,7 @@ int kvs_request(struct conn* c) {
 }
 
 int kvs_response(struct conn* c) {
-    printf("recv %d: %s\n", c->wlength, c->wbuffer);
+    // printf("recv %d: %s\n", c->wlength, c->wbuffer);
     return 0;
 }
 
@@ -100,18 +100,29 @@ int accept_cb(int listenfd) {
     return 0;
 }
 int recv_cb(int clientfd) {
+    memset(conn_list[clientfd].rbuffer, 0, BUFFER_LENGTH);
     int count = recv(clientfd, conn_list[clientfd].rbuffer, BUFFER_LENGTH, 0);
-    if (count <= 0) {
+    if (count == 0) {
         printf("client disconnect: %d\n", clientfd);
-        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr); // unfinished
+        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
+        close(clientfd);
+        return 0;
+    } else if (count < 0) {
+        printf("count: %d, errno: %d, %s\n", count, errno, strerror(errno));
+        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
         close(clientfd);
         return 0;
     }
 
 #if USE_EPOLLET
+    // 此处读取BUFFER_LENGTH长度，存入rbuffer、rlength，并打印。然后清空rbuffer，再读取再打印。
+    // 数据是分段的，而且新数据覆盖旧数据，不同时存在。
+    // 最后rbuffer里所呈现的就是接收数据中最后的一小截，rlength是这一小截的长度
+    /*******需要做出修改，拼接在一起*******/
+
     while (true) { //若管道中数据不为空，继续读取
         conn_list[clientfd].rlength = count;
-        printf("[%d]RECV: %s\n", conn_list[clientfd].rlength, conn_list[clientfd].rbuffer);
+        // printf("[%d]RECV: %s\n", conn_list[clientfd].rlength, conn_list[clientfd].rbuffer);
         memset(conn_list[clientfd].rbuffer, 0, BUFFER_LENGTH);
 
         count = recv(clientfd, conn_list[clientfd].rbuffer, BUFFER_LENGTH, 0);
@@ -120,16 +131,11 @@ int recv_cb(int clientfd) {
     }
 #else
     conn_list[clientfd].rlength = count;
-    printf("[%d]RECV: %s\n", conn_list[clientfd].rlength, conn_list[clientfd].rbuffer);
+    // printf("[%d]RECV: %s\n", conn_list[clientfd].rlength, conn_list[clientfd].rbuffer);
 #endif
     // 原样回发
     // memcpy(conn_list[clientfd].wbuffer, conn_list[clientfd].rbuffer, count);
     // conn_list[clientfd].wlength = conn_list[clientfd].rlength;
-
-    //调用kvs协议
-    // int ret = kvs_protocol(conn_list[clientfd].rbuffer, conn_list[clientfd].rlength,
-    //                        conn_list[clientfd].wbuffer);
-    // conn_list[clientfd].wlength = ret;
 
     //封装kvs请求
     kvs_request(&conn_list[clientfd]);
@@ -141,7 +147,7 @@ int recv_cb(int clientfd) {
 
 int send_cb(int clientfd) {
     int count = send(clientfd, conn_list[clientfd].wbuffer, conn_list[clientfd].wlength, 0);
-    printf("SEND: %d\n", count);
+    // printf("SEND: %d\n", count);
 
 #if USE_EPOLLET
     set_event(clientfd, EPOLLIN | EPOLLET, 0);

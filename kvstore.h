@@ -50,7 +50,8 @@ struct kvs_array_t {
 
     // std::vector<kvs_array_item_t> table;
 
-    int total; //实际上是最大的索引+1，而非总数，因为删除数据不是连续的，允许中间删除
+    int max_idx; //最大的索引+1，而非总数，因为删除数据不是连续的，允许中间删除
+    int total; // 当前的总数
 };
 
 int kvs_array_create(kvs_array_t* inst);

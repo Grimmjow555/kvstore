@@ -29,7 +29,7 @@ int kvs_split_token(char* msg, char* tokens[]) {
     char* token = strtok(msg, " ");
     int idx = 0;
     while (token != nullptr) {
-        printf("idx: %d, %s\n", idx, token); // idx为子串的索引
+        // printf("idx: %d, %s\n", idx, token); // idx为子串的索引
         tokens[idx++] = token;
         token = strtok(nullptr, " ");
     }

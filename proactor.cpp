@@ -10,15 +10,11 @@
 #include <unistd.h>
 #include <vector>
 
-// extern int kvs_protocol(char* msg, int length, char* response);
-
 typedef int (*msg_handler)(char* msg, int length, char* response);
 static msg_handler kvs_handler;
 
 #define ENTRIES_LENGTH 1024 // 提交队列和完成队列的大小
 #define BUFFER_LENGTH 1024
-
-static char response[BUFFER_LENGTH] = {0}; //
 
 enum class EVENT { ACCEPT = 0, READ = 1, WRITE = 2 };
 
@@ -27,7 +23,9 @@ struct conn_ctx {
     int clientfd;
     struct sockaddr_in clientaddr;
     socklen_t len = sizeof(clientaddr);
-    char buffer[BUFFER_LENGTH];
+    char rbuffer[BUFFER_LENGTH];
+    char wbuffer[BUFFER_LENGTH];
+
     EVENT event;
 };
 
@@ -70,17 +68,17 @@ int set_event_recv(struct io_uring* ring, int clientfd, int flags) {
     struct conn_ctx* ctx = new conn_ctx();
     ctx->clientfd = clientfd;
     ctx->event = EVENT::READ;
-    memset(ctx->buffer, 0, BUFFER_LENGTH);
+    memset(ctx->rbuffer, 0, BUFFER_LENGTH);
     struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-    io_uring_prep_recv(sqe, clientfd, ctx->buffer, BUFFER_LENGTH, flags);
+    io_uring_prep_recv(sqe, clientfd, ctx->rbuffer, BUFFER_LENGTH, flags);
     sqe->user_data = (__u64)(uintptr_t)ctx;
     return 0;
 }
 
-int set_event_send(struct io_uring* ring, conn_ctx* ctx, char* buffer, size_t recvlen, int flags) {
+int set_event_send(struct io_uring* ring, conn_ctx* ctx, size_t sendlen, int flags) {
     ctx->event = EVENT::WRITE;
     struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-    io_uring_prep_send(sqe, ctx->clientfd, buffer, recvlen, flags);
+    io_uring_prep_send(sqe, ctx->clientfd, ctx->wbuffer, sendlen, flags);
     sqe->user_data = (__u64)(uintptr_t)ctx;
     return 0;
 }
@@ -107,12 +105,11 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
             printf("connection [%d] break\n", ctx->clientfd);
             delete ctx;
         } else {
-            printf("connection [%d], recv %d: %s\n", ctx->clientfd, recvlen, ctx->buffer);
+            // printf("connection [%d], recv %d: %s\n", ctx->clientfd, recvlen, ctx->rbuffer);
 
-            // int ret = kvs_protocol(ctx->buffer, recvlen, response);
-            int ret = kvs_handler(ctx->buffer, recvlen, response);
+            int ret = kvs_handler(ctx->rbuffer, recvlen, ctx->wbuffer);
 
-            set_event_send(ring, ctx, response, ret, 0);
+            set_event_send(ring, ctx, ret, 0);
         }
         break;
     }
@@ -120,7 +117,7 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
     case EVENT::WRITE: {
         int sendlen = entries->res;
 
-        printf("sendback to connection [%d]: %d\n", ctx->clientfd, sendlen);
+        // printf("sendback to connection --> %d: [%d]%s\n", ctx->clientfd, sendlen, ctx->wbuffer);
 
         set_event_recv(ring, ctx->clientfd, 0);
         delete ctx;
