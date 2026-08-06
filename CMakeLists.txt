@@ -15,10 +15,13 @@ include_directories(NtyCo-master/core/)
 # 注意：C 源文件和 C++ 源文件要分开列出，CMake 会自动选择合适的编译器
 add_executable(kvstore
     kvstore.cpp
-    kvs_array.cpp
+
     proactor.cpp
     reactor.cpp
     ntyco.c          # 纯 C 源文件
+
+    kvs_array.cpp
+    rbtree.cpp
 )
 
 

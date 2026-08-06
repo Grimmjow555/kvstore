@@ -20,7 +20,7 @@ int kvs_array_create(kvs_array_t* inst) {
     return 0;
 }
 
-void kvs_array_destory(kvs_array_t* inst) {
+void kvs_array_destroy(kvs_array_t* inst) {
     if (inst == nullptr)
         return;
     if (inst->table) {
@@ -29,7 +29,7 @@ void kvs_array_destory(kvs_array_t* inst) {
 }
 
 /*
- *@return: nullptr, no exist; ptr exist
+ *@return: (char*)ptr, exist; nullptr, no exist
  */
 char* kvs_array_get(kvs_array_t* inst, char* key) {
     if (inst == nullptr || key == nullptr) {
@@ -51,13 +51,13 @@ char* kvs_array_get(kvs_array_t* inst, char* key) {
 }
 
 /*
- *@return: <0, error; = 0, success; >0, exist
+ *@return: = 0, success; <0, error; >0, exist
  */
 int kvs_array_set(kvs_array_t* inst, char* key, char* value) {
     if (inst == nullptr || key == nullptr || value == nullptr)
         return -1;
-    if (inst->max_idx == KVS_ARRAY_SIZE)
-        return -1;
+    if (inst->max_idx >= KVS_ARRAY_SIZE)
+        return -2;
 
     char* ret = kvs_array_get(inst, key);
     if (ret != nullptr)
@@ -65,38 +65,37 @@ int kvs_array_set(kvs_array_t* inst, char* key, char* value) {
 
     char* kcopy = (char*)kvs_malloc(strlen(key) + 1);
     if (kcopy == nullptr)
-        return -2;
-    memset(kcopy, 0, strlen(key) + 1);
-    strncpy(kcopy, key, strlen(key));
+        return -3;
+    // memset(kcopy, 0, strlen(key) + 1);
+    // strncpy(kcopy, key, strlen(key));
+    memcpy(kcopy, key, strlen(key) + 1);
 
-    char* kvalue = (char*)kvs_malloc(strlen(value) + 1);
-    if (kvalue == nullptr)
-        return -2;
-    memset(kvalue, 0, strlen(value) + 1);
-    strncpy(kvalue, value, strlen(value));
+    char* vcopy = (char*)kvs_malloc(strlen(value) + 1);
+    if (vcopy == nullptr)
+        return -4;
+    // memset(vcopy, 0, strlen(value) + 1);
+    // strncpy(vcopy, value, strlen(value));
+    memcpy(vcopy, value, strlen(value) + 1);
 
     int i = 0;
     for (i = 0; i < inst->max_idx; ++i) {
         if (inst->table[i].key == nullptr) {
             inst->table[i].key = kcopy;
-            inst->table[i].value = kvalue;
+            inst->table[i].value = vcopy;
             inst->total++;
             return 0;
         }
     }
 
-    if (i == inst->max_idx && i < KVS_ARRAY_SIZE) {
-        inst->table[i].key = kcopy;
-        inst->table[i].value = kvalue;
-        inst->max_idx++;
-        inst->total++;
-    }
-
+    inst->table[i].key = kcopy;
+    inst->table[i].value = vcopy;
+    inst->max_idx++;
+    inst->total++;
     return 0;
 }
 
 /*
- *@return: <0, error; = 0, success; >0, no exist
+ *@return: = 0, success; <0, error; >0, no exist
  */
 int kvs_array_del(kvs_array_t* inst, char* key) {
     if (inst == nullptr || key == nullptr)
@@ -126,7 +125,7 @@ int kvs_array_del(kvs_array_t* inst, char* key) {
 }
 
 /*
- *@return: < 0, error; = 0, success, > 0 no exist
+ *@return: = 0, success; < 0, error; > 0 no exist
  */
 int kvs_array_mod(kvs_array_t* inst, char* key, char* value) {
     if (inst == nullptr || key == nullptr || value == nullptr)
@@ -152,7 +151,7 @@ int kvs_array_mod(kvs_array_t* inst, char* key, char* value) {
 }
 
 /*
- *@return: = 0, exist; > 0 no exist; < 0, error
+ *@return: = 0, exist; < 0, error; > 0 no exist
  */
 int kvs_array_exist(kvs_array_t* inst, char* key) {
     if (inst == nullptr || key == nullptr)

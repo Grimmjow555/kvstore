@@ -4,19 +4,33 @@
 extern kvs_array_t global_array;
 #endif
 
+#if ENABLE_RBTREE
+extern kvs_rbtree_t global_rbtree;
+#endif
+
 void* kvs_malloc(size_t size) { return malloc(size); }
 
 void kvs_free(void* ptr) { return free(ptr); }
 
-const char* command[] = {"SET", "GET", "DEL", "MOD", "EXIST"};
+const char* command[] = {"SET",  "GET",  "DEL",  "MOD",  "EXIST",
+                         "RSET", "RGET", "RDEL", "RMOD", "REXIST"};
 
 enum KVS_CMD {
     KVS_CMD_START = 0,
+    // array
     KVS_CMD_SET = KVS_CMD_START,
     KVS_CMD_GET,
     KVS_CMD_DEL,
     KVS_CMD_MOD,
     KVS_CMD_EXIST,
+
+    // rbtree
+    KVS_CMD_RSET,
+    KVS_CMD_RGET,
+    KVS_CMD_RDEL,
+    KVS_CMD_RMOD,
+    KVS_CMD_REXIST,
+
     KVS_CMD_COUNT,
 };
 
@@ -57,6 +71,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response) {
     // char* value = tokens[2];
 
     switch (cmd) {
+// array
+#if ENABLE_ARRAY
     case KVS_CMD_SET: {
         int ret = kvs_array_set(&global_array, tokens[1], tokens[2]);
         if (ret == 0) {
@@ -116,6 +132,75 @@ int kvs_filter_protocol(char* tokens[], int count, char* response) {
 
         break;
     }
+#endif
+
+// rbtree
+#if ENABLE_RBTREE
+    case KVS_CMD_RSET: {
+        int ret = kvs_rbtree_set(&global_rbtree, tokens[1], tokens[2]);
+
+        if (ret == 0) {
+            length = sprintf(response, "OK\r\n");
+        } else if (ret > 0) {
+            length = sprintf(response, "EXIST\r\n");
+        } else if (ret < 0) {
+            length = sprintf(response, "ERROR\r\n");
+        }
+
+        break;
+    }
+    case KVS_CMD_RGET: {
+        char* value = kvs_rbtree_get(&global_rbtree, tokens[1]);
+
+        if (value == nullptr) {
+            length = sprintf(response, "NO EXIST\r\n");
+        } else {
+            length = sprintf(response, "%s\r\n", value);
+        }
+
+        break;
+    }
+    case KVS_CMD_RDEL: {
+        int ret = kvs_rbtree_del(&global_rbtree, tokens[1]);
+
+        if (ret == 0) {
+            length = sprintf(response, "OK\r\n");
+        } else if (ret > 0) {
+            length = sprintf(response, "NO EXIST\r\n");
+        } else if (ret < 0) {
+            length = sprintf(response, "ERROR\r\n");
+        }
+
+        break;
+    }
+    case KVS_CMD_RMOD: {
+        int ret = kvs_rbtree_mod(&global_rbtree, tokens[1], tokens[2]);
+
+        if (ret == 0) {
+            length = sprintf(response, "OK\r\n");
+        } else if (ret > 0) {
+            length = sprintf(response, "NO EXIST\r\n");
+        } else if (ret < 0) {
+            length = sprintf(response, "ERROR\r\n");
+        }
+
+        break;
+    }
+    case KVS_CMD_REXIST: {
+        int ret = kvs_rbtree_exist(&global_rbtree, tokens[1]);
+
+        if (ret == 0) {
+            length = sprintf(response, "EXIST\r\n");
+        } else if (ret > 0) {
+            length = sprintf(response, "NO EXIST\r\n");
+        } else if (ret < 0) {
+            length = sprintf(response, "ERROR\r\n");
+        }
+
+        break;
+    }
+#endif
+
     default: {
         break;
     }
@@ -150,8 +235,29 @@ int init_kvengine() {
     memset(&global_array, 0, sizeof(kvs_array_t));
     kvs_array_create(&global_array);
 #endif
+
+#if ENABLE_RBTREE
+    memset(&global_rbtree, 0, sizeof(kvs_rbtree_t));
+    kvs_rbtree_create(&global_rbtree);
+#endif
     return 0;
 }
+
+int destroy_kvengine() {
+#if ENABLE_ARRAY
+    kvs_array_destroy(&global_array);
+#endif
+
+#if ENABLE_RBTREE
+    kvs_rbtree_destroy(&global_rbtree);
+#endif
+    return 0;
+}
+
+// ./kvstore 2000 select
+// select 1: reactor
+// select 2: NtyCo
+// select 3: proactor
 
 int main(int argc, char* argv[]) {
     if (argc != 3) {
@@ -187,4 +293,5 @@ int main(int argc, char* argv[]) {
         break;
     }
     }
+    destroy_kvengine();
 }

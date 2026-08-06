@@ -7,6 +7,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/kvstore.dir/ntyco.c.o.d"
   "CMakeFiles/kvstore.dir/proactor.cpp.o"
   "CMakeFiles/kvstore.dir/proactor.cpp.o.d"
+  "CMakeFiles/kvstore.dir/rbtree.cpp.o"
+  "CMakeFiles/kvstore.dir/rbtree.cpp.o.d"
   "CMakeFiles/kvstore.dir/reactor.cpp.o"
   "CMakeFiles/kvstore.dir/reactor.cpp.o.d"
   "kvstore"

@@ -225,6 +225,30 @@ proactor.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/proactor.cpp.s
 .PHONY : proactor.cpp.s
 
+rbtree.o: rbtree.cpp.o
+.PHONY : rbtree.o
+
+# target to build an object file
+rbtree.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/rbtree.cpp.o
+.PHONY : rbtree.cpp.o
+
+rbtree.i: rbtree.cpp.i
+.PHONY : rbtree.i
+
+# target to preprocess a source file
+rbtree.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/rbtree.cpp.i
+.PHONY : rbtree.cpp.i
+
+rbtree.s: rbtree.cpp.s
+.PHONY : rbtree.s
+
+# target to generate assembly for a file
+rbtree.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/rbtree.cpp.s
+.PHONY : rbtree.cpp.s
+
 reactor.o: reactor.cpp.o
 .PHONY : reactor.o
 
@@ -270,6 +294,9 @@ help:
 	@echo "... proactor.o"
 	@echo "... proactor.i"
 	@echo "... proactor.s"
+	@echo "... rbtree.o"
+	@echo "... rbtree.i"
+	@echo "... rbtree.s"
 	@echo "... reactor.o"
 	@echo "... reactor.i"
 	@echo "... reactor.s"
