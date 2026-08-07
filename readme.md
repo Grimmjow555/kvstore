@@ -1,35 +1,22 @@
-分别基于 reactor(epoll), proactor(io_uring) 以及协程框架(NtyCo)实现的kv存储。
-
-编译：
-
-gcc -c ntyco.c -I NtyCo-master/core/ -o ntyco.o && \
-g++ -c proactor.cpp -o proactor.o && \
-g++ -c reactor.cpp -o reactor.o && \
-g++ -c kvstore.cpp -o kvstore.o && \
-g++ kvstore.o proactor.o reactor.o ntyco.o -o kvstore -luring -L NtyCo-master/ -lntyco
-
-运行：
-
-./kvstore 端口号 网络架构
-
-网络架构：0 代表 reactor(epoll) ，1 代表协程框架(NtyCo)，2 代表 proactor(io_uring)
-
-默认监听端口2000
-
-reactor
+kv存储
 -
-g++ reactor.cpp kvstore.c -o reactor
 
-./reactor
+网络框架: reactor(epoll), proactor(io_uring) 以及协程框架(NtyCo)
 
-proactor
--
-g++ uring.cpp kvstore.c -o uring -luring
+引擎: array, rbtree, hash 
 
-./uring
+编译: 
 
-协程
--
-gcc hook_tcpserver.c kvstore.c -o hook_tcpserver -I NtyCo-master/core/ -L NtyCo-master/ -lntyco
+cd build
 
-./hook_tcpserver 2000
+cmake ..
+
+make -j$(nproc)
+
+运行: 
+
+./kvstore <端口号> <网络架构>
+
+网络架构: 0 代表 reactor(epoll) , 1 代表协程框架(NtyCo), 2 代表 proactor(io_uring)
+
+
