@@ -20,7 +20,8 @@ add_executable(kvstore
     ntyco.c          # 纯 C 源文件
 
     kvs_array.cpp
-    rbtree.cpp
+    kvs_rbtree.cpp
+    kvs_hash.cpp
 )
 
 # 指定头文件搜索路径（相当于之前的 -I NtyCo-master/core/）

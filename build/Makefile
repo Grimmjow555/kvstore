@@ -153,6 +153,54 @@ kvs_array.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_array.cpp.s
 .PHONY : kvs_array.cpp.s
 
+kvs_hash.o: kvs_hash.cpp.o
+.PHONY : kvs_hash.o
+
+# target to build an object file
+kvs_hash.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_hash.cpp.o
+.PHONY : kvs_hash.cpp.o
+
+kvs_hash.i: kvs_hash.cpp.i
+.PHONY : kvs_hash.i
+
+# target to preprocess a source file
+kvs_hash.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_hash.cpp.i
+.PHONY : kvs_hash.cpp.i
+
+kvs_hash.s: kvs_hash.cpp.s
+.PHONY : kvs_hash.s
+
+# target to generate assembly for a file
+kvs_hash.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_hash.cpp.s
+.PHONY : kvs_hash.cpp.s
+
+kvs_rbtree.o: kvs_rbtree.cpp.o
+.PHONY : kvs_rbtree.o
+
+# target to build an object file
+kvs_rbtree.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_rbtree.cpp.o
+.PHONY : kvs_rbtree.cpp.o
+
+kvs_rbtree.i: kvs_rbtree.cpp.i
+.PHONY : kvs_rbtree.i
+
+# target to preprocess a source file
+kvs_rbtree.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_rbtree.cpp.i
+.PHONY : kvs_rbtree.cpp.i
+
+kvs_rbtree.s: kvs_rbtree.cpp.s
+.PHONY : kvs_rbtree.s
+
+# target to generate assembly for a file
+kvs_rbtree.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_rbtree.cpp.s
+.PHONY : kvs_rbtree.cpp.s
+
 kvstore.o: kvstore.cpp.o
 .PHONY : kvstore.o
 
@@ -225,30 +273,6 @@ proactor.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/proactor.cpp.s
 .PHONY : proactor.cpp.s
 
-rbtree.o: rbtree.cpp.o
-.PHONY : rbtree.o
-
-# target to build an object file
-rbtree.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/rbtree.cpp.o
-.PHONY : rbtree.cpp.o
-
-rbtree.i: rbtree.cpp.i
-.PHONY : rbtree.i
-
-# target to preprocess a source file
-rbtree.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/rbtree.cpp.i
-.PHONY : rbtree.cpp.i
-
-rbtree.s: rbtree.cpp.s
-.PHONY : rbtree.s
-
-# target to generate assembly for a file
-rbtree.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/rbtree.cpp.s
-.PHONY : rbtree.cpp.s
-
 reactor.o: reactor.cpp.o
 .PHONY : reactor.o
 
@@ -285,6 +309,12 @@ help:
 	@echo "... kvs_array.o"
 	@echo "... kvs_array.i"
 	@echo "... kvs_array.s"
+	@echo "... kvs_hash.o"
+	@echo "... kvs_hash.i"
+	@echo "... kvs_hash.s"
+	@echo "... kvs_rbtree.o"
+	@echo "... kvs_rbtree.i"
+	@echo "... kvs_rbtree.s"
 	@echo "... kvstore.o"
 	@echo "... kvstore.i"
 	@echo "... kvstore.s"
@@ -294,9 +324,6 @@ help:
 	@echo "... proactor.o"
 	@echo "... proactor.i"
 	@echo "... proactor.s"
-	@echo "... rbtree.o"
-	@echo "... rbtree.i"
-	@echo "... rbtree.s"
 	@echo "... reactor.o"
 	@echo "... reactor.i"
 	@echo "... reactor.s"

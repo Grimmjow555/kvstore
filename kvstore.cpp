@@ -8,12 +8,16 @@ extern kvs_array_t global_array;
 extern kvs_rbtree_t global_rbtree;
 #endif
 
+#if ENABLE_HASH
+extern kvs_hash_t global_hash;
+#endif
+
 void* kvs_malloc(size_t size) { return malloc(size); }
 
 void kvs_free(void* ptr) { return free(ptr); }
 
-const char* command[] = {"SET",  "GET",  "DEL",  "MOD",  "EXIST",
-                         "RSET", "RGET", "RDEL", "RMOD", "REXIST"};
+const char* command[] = {"SET",  "GET",    "DEL",  "MOD",  "EXIST", "RSET", "RGET",  "RDEL",
+                         "RMOD", "REXIST", "HSET", "HGET", "HDEL",  "HMOD", "HEXIST"};
 
 enum KVS_CMD {
     KVS_CMD_START = 0,
@@ -30,6 +34,13 @@ enum KVS_CMD {
     KVS_CMD_RDEL,
     KVS_CMD_RMOD,
     KVS_CMD_REXIST,
+
+    // hash
+    KVS_CMD_HSET,
+    KVS_CMD_HGET,
+    KVS_CMD_HDEL,
+    KVS_CMD_HMOD,
+    KVS_CMD_HEXIST,
 
     KVS_CMD_COUNT,
 };
@@ -201,6 +212,73 @@ int kvs_filter_protocol(char* tokens[], int count, char* response) {
     }
 #endif
 
+// hash
+#if ENABLE_HASH
+    case KVS_CMD_HSET: {
+        int ret = kvs_hash_set(&global_hash, tokens[1], tokens[2]);
+
+        if (ret == 0) {
+            length = sprintf(response, "OK\r\n");
+        } else if (ret > 0) {
+            length = sprintf(response, "EXIST\r\n");
+        } else if (ret < 0) {
+            length = sprintf(response, "ERROR\r\n");
+        }
+
+        break;
+    }
+    case KVS_CMD_HGET: {
+        char* value = kvs_hash_get(&global_hash, tokens[1]);
+
+        if (value == nullptr) {
+            length = sprintf(response, "NO EXIST\r\n");
+        } else {
+            length = sprintf(response, "%s\r\n", value);
+        }
+
+        break;
+    }
+    case KVS_CMD_HDEL: {
+        int ret = kvs_hash_del(&global_hash, tokens[1]);
+
+        if (ret == 0) {
+            length = sprintf(response, "OK\r\n");
+        } else if (ret > 0) {
+            length = sprintf(response, "NO EXIST\r\n");
+        } else if (ret < 0) {
+            length = sprintf(response, "ERROR\r\n");
+        }
+
+        break;
+    }
+    case KVS_CMD_HMOD: {
+        int ret = kvs_hash_mod(&global_hash, tokens[1], tokens[2]);
+
+        if (ret == 0) {
+            length = sprintf(response, "OK\r\n");
+        } else if (ret > 0) {
+            length = sprintf(response, "NO EXIST\r\n");
+        } else if (ret < 0) {
+            length = sprintf(response, "ERROR\r\n");
+        }
+
+        break;
+    }
+    case KVS_CMD_HEXIST: {
+        int ret = kvs_hash_exist(&global_hash, tokens[1]);
+
+        if (ret == 0) {
+            length = sprintf(response, "EXIST\r\n");
+        } else if (ret > 0) {
+            length = sprintf(response, "NO EXIST\r\n");
+        } else if (ret < 0) {
+            length = sprintf(response, "ERROR\r\n");
+        }
+
+        break;
+    }
+#endif
+
     default: {
         break;
     }
@@ -240,6 +318,11 @@ int init_kvengine() {
     memset(&global_rbtree, 0, sizeof(kvs_rbtree_t));
     kvs_rbtree_create(&global_rbtree);
 #endif
+
+#if ENABLE_HASH
+    memset(&global_hash, 0, sizeof(kvs_hash_t));
+    kvs_hash_create(&global_hash);
+#endif
     return 0;
 }
 
@@ -250,6 +333,10 @@ int destroy_kvengine() {
 
 #if ENABLE_RBTREE
     kvs_rbtree_destroy(&global_rbtree);
+#endif
+
+#if ENABLE_HASH
+    kvs_hash_destroy(&global_hash);
 #endif
     return 0;
 }
