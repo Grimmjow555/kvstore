@@ -7,6 +7,7 @@
 #define ENABLE_ARRAY 1
 #define ENABLE_RBTREE 1
 #define ENABLE_HASH 1
+#define ENABLE_SKIPTABLE 1
 
 // 选择网络框架
 enum NETWORK_ARCHITECTURE { NETWORK_REACTOR = 0, NETWORK_NTYCO = 1, NETWORK_PROACTOR = 2 };
@@ -144,4 +145,36 @@ int kvs_hash_mod(kvs_hash_t* hash, char* key, char* value);
 int kvs_hash_del(kvs_hash_t* hash, char* key);
 int kvs_hash_exist(kvs_hash_t* hash, char* key);
 
+#endif
+
+#if ENABLE_SKIPTABLE
+
+#define HASH_ENABLE_CHAR_KV 1
+#define MAX_LEVEL 6
+
+typedef struct Node {
+#if HASH_ENABLE_CHAR_KV
+    char* key;
+    char* value;
+#else
+    int key;
+    int value;
+#endif
+    struct Node** forward;
+} Node;
+
+typedef struct SkipList {
+    int level;
+    Node* header;
+} SkipList;
+
+typedef struct SkipList kvs_skiptable_t;
+
+int kvs_skiptable_create(kvs_skiptable_t* skiptable);
+void kvs_skiptable_destroy(kvs_skiptable_t* skiptable);
+int kvs_skiptable_set(kvs_skiptable_t* skiptable, char* key, char* value);
+char* kvs_skiptable_get(kvs_skiptable_t* skiptable, char* key);
+int kvs_skiptable_mod(kvs_skiptable_t* skiptable, char* key, char* value);
+int kvs_skiptable_del(kvs_skiptable_t* skiptable, char* key);
+int kvs_skiptable_exist(kvs_skiptable_t* skiptable, char* key);
 #endif

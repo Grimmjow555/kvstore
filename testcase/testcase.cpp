@@ -107,34 +107,7 @@ void array_testcase(int connfd) {
     testcase(connfd, "EXIST Teacher", "NO EXIST\r\n", "EXIST-Teacher", 0);
 }
 
-void array_testcase_1w(int connfd) {
-
-    int count = 10000;
-
-    struct timeval tv_begin;
-    gettimeofday(&tv_begin, NULL);
-
-    for (int i = 0; i < count; i++) {
-        testcase(connfd, "SET Teacher King", "OK\r\n", "SET-Teacher", 0);
-        testcase(connfd, "GET Teacher", "King\r\n", "GET-King-Teacher", 0);
-        testcase(connfd, "MOD Teacher Darren", "OK\r\n", "MOD-D-Teacher", 0);
-        testcase(connfd, "GET Teacher", "Darren\r\n", "GET-Darren-Teacher", 0);
-        testcase(connfd, "EXIST Teacher", "EXIST\r\n", "EXIST-Teacher", 0);
-        testcase(connfd, "DEL Teacher", "OK\r\n", "DEL-Teacher", 0);
-        testcase(connfd, "GET Teacher", "NO EXIST\r\n", "GET-K-Teacher", 0);
-        testcase(connfd, "MOD Teacher KING", "NO EXIST\r\n", "MOD-K-Teacher", 0);
-        testcase(connfd, "EXIST Teacher", "NO EXIST\r\n", "EXIST-Teacher", 0);
-    }
-
-    struct timeval tv_end;
-    gettimeofday(&tv_end, NULL);
-
-    int time_used = TIME_SUB_MS(tv_end, tv_begin); // ms
-
-    printf("array testcase --> time_used: %d, qps: %d\n", time_used, 9 * count * 1000 / time_used);
-}
-
-void array_testcase_pth(int thread_id, int connfd) {
+void array_testcase_pth(int connfd, int thread_id) {
 
     int count = 10000;
 
@@ -195,34 +168,7 @@ void rbtree_testcase(int connfd) {
     testcase(connfd, "REXIST Teacher", "NO EXIST\r\n", "REXIST-Teacher", 0);
 }
 
-void rbtree_testcase_1w(int connfd) {
-
-    int count = 10000;
-
-    struct timeval tv_begin;
-    gettimeofday(&tv_begin, NULL);
-
-    for (int i = 0; i < count; i++) {
-        testcase(connfd, "RSET Teacher King", "OK\r\n", "RSET-Teacher", 0);
-        testcase(connfd, "RGET Teacher", "King\r\n", "RGET-King-Teacher", 0);
-        testcase(connfd, "RMOD Teacher Darren", "OK\r\n", "RMOD-D-Teacher", 0);
-        testcase(connfd, "RGET Teacher", "Darren\r\n", "RGET-Darren-Teacher", 0);
-        testcase(connfd, "REXIST Teacher", "EXIST\r\n", "REXIST-Teacher", 0);
-        testcase(connfd, "RDEL Teacher", "OK\r\n", "RDEL-Teacher", 0);
-        testcase(connfd, "RGET Teacher", "NO EXIST\r\n", "RGET-K-Teacher", 0);
-        testcase(connfd, "RMOD Teacher KING", "NO EXIST\r\n", "RMOD-K-Teacher", 0);
-        testcase(connfd, "REXIST Teacher", "NO EXIST\r\n", "REXIST-Teacher", 0);
-    }
-
-    struct timeval tv_end;
-    gettimeofday(&tv_end, NULL);
-
-    int time_used = TIME_SUB_MS(tv_end, tv_begin); // ms
-
-    printf("rbtree testcase --> time_used: %d, qps: %d\n", time_used, 9 * count * 1000 / time_used);
-}
-
-void rbtree_testcase_pth(int thread_id, int connfd) {
+void rbtree_testcase_pth(int connfd, int thread_id) {
 
     int count = 10000;
 
@@ -271,6 +217,47 @@ void rbtree_testcase_pth(int thread_id, int connfd) {
     printf("rbtree testcase --> time_used: %d, qps: %d\n", time_used, 9 * count * 1000 / time_used);
 }
 
+void rbtree_testcase_3w(int connfd) {
+
+    int count = 10000;
+    int i = 0;
+
+    struct timeval tv_begin;
+    gettimeofday(&tv_begin, NULL);
+
+    for (i = 0; i < count; i++) {
+
+        char cmd[128] = {0};
+        snprintf(cmd, 128, "RSET Teacher%d King%d", i, i);
+        testcase(connfd, cmd, "OK\r\n", "RSET-Teacher", 0);
+    }
+
+    for (i = 0; i < count; i++) {
+
+        char cmd[128] = {0};
+        snprintf(cmd, 128, "RGET Teacher%d", i);
+
+        char result[128] = {0};
+        snprintf(result, 128, "King%d\r\n", i);
+
+        testcase(connfd, cmd, result, "RGET-King-Teacher", 0);
+    }
+
+    for (i = 0; i < count; i++) {
+
+        char cmd[128] = {0};
+        snprintf(cmd, 128, "RMOD Teacher%d King%d", i, i);
+        testcase(connfd, cmd, "OK\r\n", "RGET-King-Teacher", 0);
+    }
+
+    struct timeval tv_end;
+    gettimeofday(&tv_end, NULL);
+
+    int time_used = TIME_SUB_MS(tv_end, tv_begin); // ms
+
+    printf("rbtree testcase --> time_used: %d, qps: %d\n", time_used, 3 * count * 1000 / time_used);
+}
+
 void hash_testcase(int connfd) {
     testcase(connfd, "HSET Teacher King", "OK\r\n", "HSET-Teacher", 0);
     testcase(connfd, "HGET Teacher", "King\r\n", "HGET-King-Teacher", 0);
@@ -283,34 +270,7 @@ void hash_testcase(int connfd) {
     testcase(connfd, "HEXIST Teacher", "NO EXIST\r\n", "HEXIST-Teacher", 0);
 }
 
-void hash_testcase_1w(int connfd) {
-
-    int count = 10000;
-
-    struct timeval tv_begin;
-    gettimeofday(&tv_begin, NULL);
-
-    for (int i = 0; i < count; i++) {
-        testcase(connfd, "HSET Teacher King", "OK\r\n", "HSET-Teacher", 0);
-        testcase(connfd, "HGET Teacher", "King\r\n", "HGET-King-Teacher", 0);
-        testcase(connfd, "HMOD Teacher Darren", "OK\r\n", "HMOD-D-Teacher", 0);
-        testcase(connfd, "HGET Teacher", "Darren\r\n", "HGET-Darren-Teacher", 0);
-        testcase(connfd, "HEXIST Teacher", "EXIST\r\n", "HEXIST-Teacher", 0);
-        testcase(connfd, "HDEL Teacher", "OK\r\n", "HDEL-Teacher", 0);
-        testcase(connfd, "HGET Teacher", "NO EXIST\r\n", "HGET-K-Teacher", 0);
-        testcase(connfd, "HMOD Teacher KING", "NO EXIST\r\n", "HMOD-K-Teacher", 0);
-        testcase(connfd, "HEXIST Teacher", "NO EXIST\r\n", "HEXIST-Teacher", 0);
-    }
-
-    struct timeval tv_end;
-    gettimeofday(&tv_end, NULL);
-
-    int time_used = TIME_SUB_MS(tv_end, tv_begin); // ms
-
-    printf("hash testcase --> time_used: %d, qps: %d\n", time_used, 9 * count * 1000 / time_used);
-}
-
-void hash_testcase_pth(int thread_id, int connfd) {
+void hash_testcase_pth(int connfd, int thread_id) {
 
     int count = 10000;
 
@@ -359,6 +319,68 @@ void hash_testcase_pth(int thread_id, int connfd) {
     printf("hash testcase --> time_used: %d, qps: %d\n", time_used, 9 * count * 1000 / time_used);
 }
 
+void skiptable_testcase(int connfd) {
+    testcase(connfd, "SSET Teacher King", "OK\r\n", "SSET-Teacher", 0);
+    testcase(connfd, "SGET Teacher", "King\r\n", "SGET-King-Teacher", 0);
+    testcase(connfd, "SMOD Teacher Darren", "OK\r\n", "SMOD-D-Teacher", 0);
+    testcase(connfd, "SGET Teacher", "Darren\r\n", "SGET-Darren-Teacher", 0);
+    testcase(connfd, "SEXIST Teacher", "EXIST\r\n", "SEXIST-Teacher", 0);
+    testcase(connfd, "SDEL Teacher", "OK\r\n", "SDEL-Teacher", 0);
+    testcase(connfd, "SGET Teacher", "NO EXIST\r\n", "SGET-K-Teacher", 0);
+    testcase(connfd, "SMOD Teacher KING", "NO EXIST\r\n", "SMOD-K-Teacher", 0);
+    testcase(connfd, "SEXIST Teacher", "NO EXIST\r\n", "SEXIST-Teacher", 0);
+}
+
+void skiptable_testcase_pth(int connfd, int thread_id) {
+
+    int count = 10000;
+
+    struct timeval tv_begin;
+    gettimeofday(&tv_begin, NULL);
+
+    for (int i = 0; i < count; i++) {
+
+        // Teacher + connfd
+        char buf[128]; // 临时缓冲区
+
+        snprintf(buf, sizeof(buf), "SSET Teacher%d King", thread_id);
+        testcase(connfd, buf, "OK\r\n", "SSET-Teacher", thread_id);
+
+        snprintf(buf, sizeof(buf), "SGET Teacher%d", thread_id);
+        testcase(connfd, buf, "King\r\n", "SGET-Teacher", thread_id);
+
+        snprintf(buf, sizeof(buf), "SMOD Teacher%d Darren", thread_id);
+        testcase(connfd, buf, "OK\r\n", "SMOD-Teacher", thread_id);
+
+        snprintf(buf, sizeof(buf), "SGET Teacher%d", thread_id);
+        testcase(connfd, buf, "Darren\r\n", "SGET-Teacher", thread_id);
+
+        snprintf(buf, sizeof(buf), "SEXIST Teacher%d", thread_id);
+        testcase(connfd, buf, "EXIST\r\n", "SGET-Teacher", thread_id);
+
+        snprintf(buf, sizeof(buf), "SDEL Teacher%d", thread_id);
+        testcase(connfd, buf, "OK\r\n", "SDEL-Teacher", thread_id);
+
+        snprintf(buf, sizeof(buf), "SGET Teacher%d", thread_id);
+        testcase(connfd, buf, "NO EXIST\r\n", "SGET-Teacher", thread_id);
+
+        snprintf(buf, sizeof(buf), "SMOD Teacher%d KING", thread_id);
+        testcase(connfd, buf, "NO EXIST\r\n", "SMOD-Teacher", thread_id);
+
+        snprintf(buf, sizeof(buf), "SEXIST Teacher%d", thread_id);
+        testcase(connfd, buf, "NO EXIST\r\n", "SGET-Teacher", thread_id);
+    }
+    struct timeval tv_end;
+    gettimeofday(&tv_end, NULL);
+
+    int time_used = TIME_SUB_MS(tv_end, tv_begin); // ms
+
+    printf("thread[%d]", thread_id);
+
+    printf("skiptable testcase --> time_used: %d, qps: %d\n", time_used,
+           9 * count * 1000 / time_used);
+}
+
 #if LEVEL3
 
 #define THREAD_NUM 10
@@ -379,11 +401,13 @@ static void* test_qps_entry(void* arg) {
     printf("thread[%d] --> connfd[%d]\n", pctx->thread_id, connfd);
 
     if (pctx->mode == 0) {
-        rbtree_testcase_pth(pctx->thread_id, connfd);
+        rbtree_testcase_pth(connfd, pctx->thread_id);
     } else if (pctx->mode == 1) {
-        array_testcase_pth(pctx->thread_id, connfd);
+        array_testcase_pth(connfd, pctx->thread_id);
     } else if (pctx->mode == 2) {
-        hash_testcase_pth(pctx->thread_id, connfd);
+        hash_testcase_pth(connfd, pctx->thread_id);
+    } else if (pctx->mode == 3) {
+        skiptable_testcase_pth(connfd, pctx->thread_id);
     }
 
     return nullptr;
@@ -413,6 +437,8 @@ int main(int argc, char* argv[]) {
         array_testcase(connfd);
     } else if (mode == 2) {
         hash_testcase(connfd);
+    } else if (mode == 3) {
+        skiptable_testcase(connfd);
     }
 
 #elif LEVEL2
@@ -420,11 +446,13 @@ int main(int argc, char* argv[]) {
     int connfd = connect_tcpserver(ip, port);
 
     if (mode == 0) {
-        rbtree_testcase_1w(connfd);
+        rbtree_testcase_pth(connfd, 0);
     } else if (mode == 1) {
-        array_testcase_1w(connfd);
+        array_testcase_pth(connfd, 0);
     } else if (mode == 2) {
-        hash_testcase_1w(connfd);
+        hash_testcase_pth(connfd, 0);
+    } else if (mode == 3) {
+        skiptable_testcase_pth(connfd, 0);
     }
 #elif LEVEL3
 

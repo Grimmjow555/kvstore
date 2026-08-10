@@ -201,6 +201,30 @@ kvs_rbtree.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_rbtree.cpp.s
 .PHONY : kvs_rbtree.cpp.s
 
+kvs_skiptable.o: kvs_skiptable.cpp.o
+.PHONY : kvs_skiptable.o
+
+# target to build an object file
+kvs_skiptable.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_skiptable.cpp.o
+.PHONY : kvs_skiptable.cpp.o
+
+kvs_skiptable.i: kvs_skiptable.cpp.i
+.PHONY : kvs_skiptable.i
+
+# target to preprocess a source file
+kvs_skiptable.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_skiptable.cpp.i
+.PHONY : kvs_skiptable.cpp.i
+
+kvs_skiptable.s: kvs_skiptable.cpp.s
+.PHONY : kvs_skiptable.s
+
+# target to generate assembly for a file
+kvs_skiptable.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_skiptable.cpp.s
+.PHONY : kvs_skiptable.cpp.s
+
 kvstore.o: kvstore.cpp.o
 .PHONY : kvstore.o
 
@@ -315,6 +339,9 @@ help:
 	@echo "... kvs_rbtree.o"
 	@echo "... kvs_rbtree.i"
 	@echo "... kvs_rbtree.s"
+	@echo "... kvs_skiptable.o"
+	@echo "... kvs_skiptable.i"
+	@echo "... kvs_skiptable.s"
 	@echo "... kvstore.o"
 	@echo "... kvstore.i"
 	@echo "... kvstore.s"

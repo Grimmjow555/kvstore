@@ -4,6 +4,7 @@
 // #include <stdio.h>
 // #include <stdlib.h>
 // #include <string.h>
+kvs_rbtree_t global_rbtree = {0};
 
 rbtree_node* rbtree_mini(rbtree* T, rbtree_node* x) {
     while (x->left != T->nil) {
@@ -395,8 +396,6 @@ int main() {
 }
 
 #else
-
-kvs_rbtree_t global_rbtree = {0};
 
 int kvs_rbtree_create(kvs_rbtree_t* inst) {
     inst->nil = (rbtree_node*)kvs_malloc(sizeof(rbtree_node));

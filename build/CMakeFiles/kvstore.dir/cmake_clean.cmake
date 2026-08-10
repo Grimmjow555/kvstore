@@ -5,6 +5,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/kvstore.dir/kvs_hash.cpp.o.d"
   "CMakeFiles/kvstore.dir/kvs_rbtree.cpp.o"
   "CMakeFiles/kvstore.dir/kvs_rbtree.cpp.o.d"
+  "CMakeFiles/kvstore.dir/kvs_skiptable.cpp.o"
+  "CMakeFiles/kvstore.dir/kvs_skiptable.cpp.o.d"
   "CMakeFiles/kvstore.dir/kvstore.cpp.o"
   "CMakeFiles/kvstore.dir/kvstore.cpp.o.d"
   "CMakeFiles/kvstore.dir/ntyco.c.o"
