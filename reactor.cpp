@@ -99,6 +99,113 @@ int accept_cb(int listenfd) {
 
     return 0;
 }
+#if 1
+int recv_cb(int clientfd) {
+    // 1. 读取 4 字节长度头
+    uint32_t net_len;
+    ssize_t n = recv(clientfd, &net_len, sizeof(net_len), 0);
+    if (n == 0) {
+        printf("client disconnect: %d\n", clientfd);
+        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
+        close(clientfd);
+        return 0;
+    } else if (n < 0) {
+        printf("recv header error, errno: %d, %s\n", errno, strerror(errno));
+        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
+        close(clientfd);
+        return 0;
+    }
+
+    // 确保读满 4 字节（处理半包）
+    while (n < (ssize_t)sizeof(net_len)) {
+        ssize_t ret = recv(clientfd, (char*)&net_len + n, sizeof(net_len) - n, 0);
+        if (ret == 0) {
+            printf("client disconnect: %d\n", clientfd);
+            epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
+            close(clientfd);
+            return 0;
+        } else if (ret < 0) {
+            if (errno == EINTR)
+                continue;
+            printf("recv header error, errno: %d, %s\n", errno, strerror(errno));
+            epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
+            close(clientfd);
+            return 0;
+        }
+        n += ret;
+    }
+
+    uint32_t msg_len = ntohl(net_len);
+
+    // 检查消息体长度是否超过缓冲区（留一个字节给 '\0'）
+    if (msg_len >= BUFFER_LENGTH) {
+        printf("message too long: %u\n", msg_len);
+        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
+        close(clientfd);
+        return 0;
+    }
+
+    // 2. 读取消息体（循环读满 msg_len 字节）
+    char* buffer = conn_list[clientfd].rbuffer;
+    n = 0;
+    while (n < (ssize_t)msg_len) {
+        ssize_t ret = recv(clientfd, buffer + n, msg_len - n, 0);
+        if (ret == 0) {
+            printf("client disconnect: %d\n", clientfd);
+            epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
+            close(clientfd);
+            return 0;
+        } else if (ret < 0) {
+            if (errno == EINTR)
+                continue;
+            printf("recv body error, errno: %d, %s\n", errno, strerror(errno));
+            epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
+            close(clientfd);
+            return 0;
+        }
+        n += ret;
+    }
+
+    buffer[msg_len] = '\0'; // 方便字符串处理
+    conn_list[clientfd].rlength = msg_len;
+
+    // printf("[%d]RECV: %s\n", conn_list[clientfd].rlength, conn_list[clientfd].rbuffer);
+
+    // 封装 kvs 请求
+    kvs_request(&conn_list[clientfd]);
+
+    set_event(clientfd, EPOLLOUT, 0);
+
+    return msg_len;
+}
+
+int send_cb(int clientfd) {
+    // 1. 发送 4 字节长度头（网络字节序）
+    uint32_t net_len = htonl(conn_list[clientfd].wlength);
+    ssize_t n = send(clientfd, &net_len, sizeof(net_len), 0);
+    if (n <= 0) {
+        printf("send header error: errno %d %s\n", errno, strerror(errno));
+        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
+        close(clientfd);
+        return -1;
+    }
+
+    // 2. 发送消息体
+    n = send(clientfd, conn_list[clientfd].wbuffer, conn_list[clientfd].wlength, 0);
+    if (n <= 0) {
+        printf("send body error: errno %d %s\n", errno, strerror(errno));
+        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
+        close(clientfd);
+        return -1;
+    }
+
+    // 发送完成，重新监听读事件
+    set_event(clientfd, EPOLLIN, 0);
+
+    return n;
+}
+
+#else
 int recv_cb(int clientfd) {
     memset(conn_list[clientfd].rbuffer, 0, BUFFER_LENGTH);
     int count = recv(clientfd, conn_list[clientfd].rbuffer, BUFFER_LENGTH, 0);
@@ -114,28 +221,8 @@ int recv_cb(int clientfd) {
         return 0;
     }
 
-#if USE_EPOLLET
-    // 此处读取BUFFER_LENGTH长度，存入rbuffer、rlength，并打印。然后清空rbuffer，再读取再打印。
-    // 数据是分段的，而且新数据覆盖旧数据，不同时存在。
-    // 最后rbuffer里所呈现的就是接收数据中最后的一小截，rlength是这一小截的长度
-    /*******需要做出修改，拼接在一起*******/
-
-    while (true) { //若管道中数据不为空，继续读取
-        conn_list[clientfd].rlength = count;
-        // printf("[%d]RECV: %s\n", conn_list[clientfd].rlength, conn_list[clientfd].rbuffer);
-        memset(conn_list[clientfd].rbuffer, 0, BUFFER_LENGTH);
-
-        count = recv(clientfd, conn_list[clientfd].rbuffer, BUFFER_LENGTH, 0);
-        if (count <= 0)
-            break;
-    }
-#else
     conn_list[clientfd].rlength = count;
     // printf("[%d]RECV: %s\n", conn_list[clientfd].rlength, conn_list[clientfd].rbuffer);
-#endif
-    // 原样回发
-    // memcpy(conn_list[clientfd].wbuffer, conn_list[clientfd].rbuffer, count);
-    // conn_list[clientfd].wlength = conn_list[clientfd].rlength;
 
     //封装kvs请求
     kvs_request(&conn_list[clientfd]);
@@ -157,6 +244,7 @@ int send_cb(int clientfd) {
 
     return count;
 }
+#endif
 
 int is_listenfd(int* sockfds, int fd) {
     for (int i = 0; i < PORT_NUMS; i++) {

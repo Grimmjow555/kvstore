@@ -1,13 +1,92 @@
 
 
 #include "nty_coroutine.h"
-
+#include <arpa/inet.h> // htonl, ntohl
 #include <arpa/inet.h>
+#include <stdint.h> // uint32_t
+#include <string.h> // memcpy, memset
+#include <unistd.h> // recv, send, close
+
 // extern int kvs_protocol(char* msg, int length, char* response);
 
 typedef int (*msg_handler)(char* msg, int length, char* response);
 static msg_handler kvs_handler;
 
+#if 1
+// 循环接收，直到读满指定字节数或出错
+int recv_full(int fd, void* buffer, size_t len) {
+    char* p = (char*)buffer;
+    size_t received = 0;
+    while (received < len) {
+        ssize_t n = recv(fd, p + received, len - received, 0);
+        if (n <= 0) {
+            return -1; // 连接关闭或错误
+        }
+        received += n;
+    }
+    return 0;
+}
+
+// 循环发送，直到全部数据发出或出错
+int send_full(int fd, const void* buffer, size_t len) {
+    const char* p = (const char*)buffer;
+    size_t sent = 0;
+    while (sent < len) {
+        ssize_t n = send(fd, p + sent, len - sent, 0);
+        if (n <= 0) {
+            return -1; // 连接关闭或错误
+        }
+        sent += n;
+    }
+    return 0;
+}
+
+void server_reader(void* arg) {
+    int fd = *(int*)arg;
+    int ret = 0;
+
+    while (1) {
+        // 1. 读取 4 字节长度头
+        uint32_t net_len;
+        if (recv_full(fd, &net_len, sizeof(net_len)) != 0) {
+            // 读取头部失败或对端关闭
+            close(fd);
+            break;
+        }
+        uint32_t msg_len = ntohl(net_len);
+
+        // 2. 检查消息长度是否合法（防止溢出，留一个字节给结束符）
+        if (msg_len >= 1024) {
+            close(fd);
+            break;
+        }
+
+        // 3. 读取消息体
+        char buf[1024] = {0};
+        if (recv_full(fd, buf, msg_len) != 0) {
+            close(fd);
+            break;
+        }
+        buf[msg_len] = '\0'; // 方便字符串处理
+
+        // 4. 处理请求，生成响应
+        char response[1024] = {0};
+        int slength = kvs_handler(buf, msg_len, response);
+        if (slength < 0) {
+            // 处理失败，可发送错误响应或直接关闭
+            slength = 0; // 或构造错误字符串
+        }
+
+        // 5. 发送响应：先发送长度头，再发送数据
+        uint32_t resp_net_len = htonl((uint32_t)slength);
+        if (send_full(fd, &resp_net_len, sizeof(resp_net_len)) != 0 ||
+            send_full(fd, response, slength) != 0) {
+            close(fd);
+            break;
+        }
+    }
+}
+#else
 void server_reader(void* arg) {
     int fd = *(int*)arg;
     int ret = 0;
@@ -37,6 +116,7 @@ void server_reader(void* arg) {
         }
     }
 }
+#endif
 
 static void server(void* arg) {
 
