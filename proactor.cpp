@@ -115,7 +115,6 @@ int set_event_recv(struct io_uring* ring, int clientfd, int flags) {
 
 #if 1
 int set_event_send(struct io_uring* ring, conn_ctx* ctx, int sendlen, int flags) {
-    printf("sendlen: %d\n", sendlen);
 
     // 参数检查：sendlen 必须为正数，且加上4字节头后不能超过缓冲区
     if (!ctx || sendlen <= 0 || sendlen + 4 > BUFFER_LENGTH) {
@@ -143,7 +142,6 @@ int set_event_send(struct io_uring* ring, conn_ctx* ctx, int sendlen, int flags)
     io_uring_prep_send(sqe, ctx->clientfd, ctx->wbuffer, total_len, flags);
     sqe->user_data = (__u64)(uintptr_t)ctx;
 
-    printf("sendlen_finished: %d\n", sendlen);
     return 0;
 }
 #elif 0
