@@ -67,6 +67,122 @@ char* build_resp_bulk(const Command* cmds, int num_cmds) {
     return buf;
 }
 
+/**
+ * 解析一条 RESP 响应，返回内容（动态分配），并记录消耗的字节数。
+ * 支持类型：+ (简单字符串), - (错误), : (整数), $ (批量字符串)
+ * 注意：数组类型 (*) 暂不支持，若遇到则返回 NULL。
+ */
+char* parse_resp(const char* buf, int* consumed) {
+    if (!buf || !buf[0])
+        return NULL;
+    *consumed = 0;
+    char type = buf[0];
+    const char* end = strstr(buf, "\r\n");
+    if (!end)
+        return NULL;
+    int line_len = end - buf + 2; // 包含 "\r\n"
+
+    if (type == '+' || type == '-') {
+        // 简单字符串 / 错误
+        int content_len = end - buf - 1;
+        char* content = (char*)malloc(content_len + 1);
+        if (!content)
+            return NULL;
+        strncpy(content, buf + 1, content_len);
+        content[content_len] = '\0';
+        *consumed = line_len;
+        return content;
+    } else if (type == ':') {
+        // 整数
+        int content_len = end - buf - 1;
+        char* content = (char*)malloc(content_len + 1);
+        if (!content)
+            return NULL;
+        strncpy(content, buf + 1, content_len);
+        content[content_len] = '\0';
+        *consumed = line_len;
+        return content;
+    } else if (type == '$') {
+        // 批量字符串
+        int len = atoi(buf + 1);
+        *consumed = line_len; // 已消耗 "$len\r\n"
+        if (len == -1) {
+            // NULL 批量字符串，内容视为空字符串（也可自定义为 "(nil)"）
+            char* content = (char*)malloc(1);
+            if (content)
+                content[0] = '\0';
+            return content;
+        }
+        // 数据在 line_len 偏移处开始
+        const char* data = buf + line_len;
+        char* content = (char*)malloc(len + 1);
+        if (!content)
+            return NULL;
+        if (len > 0) {
+            strncpy(content, data, len);
+        }
+        content[len] = '\0';
+        *consumed += len + 2; // 数据 + "\r\n"
+        return content;
+    }
+    // 暂不处理数组类型 (*)
+    return NULL;
+}
+
+/**
+ * 解析 result 中的所有 RESP 响应，将内容用 "\n----\n" 连接后打印。
+ */
+void print_responses_parsed(const char* result) {
+    if (!result || !result[0]) {
+        printf("(empty response)\n");
+        return;
+    }
+
+    char* combined = NULL;
+    int first = 1;
+    const char* p = result;
+    int total_len = strlen(result);
+    int offset = 0;
+
+    while (offset < total_len) {
+        int consumed = 0;
+        char* content = parse_resp(p + offset, &consumed);
+        if (!content)
+            break; // 解析失败则停止
+        offset += consumed;
+
+        // 构建组合字符串
+        int add_len = strlen(content);
+        int sep_len = first ? 0 : 5; // "\n----\n" 长度
+        int new_len = (combined ? strlen(combined) : 0) + sep_len + add_len + 1;
+        char* new_combined = (char*)malloc(new_len);
+        if (!new_combined) {
+            free(content);
+            free(combined);
+            return;
+        }
+        if (combined) {
+            strcpy(new_combined, combined);
+            if (!first)
+                strcat(new_combined, "\n----\n");
+            free(combined);
+        } else {
+            new_combined[0] = '\0';
+        }
+        strcat(new_combined, content);
+        combined = new_combined;
+        free(content);
+        first = 0;
+    }
+
+    if (combined) {
+        printf("%s\n", combined);
+        free(combined);
+    } else {
+        printf("(no valid responses)\n");
+    }
+}
+
 #define MAX_MSG_LENGTH 1024
 #define TIME_SUB_MS(tv1, tv2)                                                                      \
     ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
@@ -92,12 +208,19 @@ void testcase_bulk(int connfd, const Command* cmds, int num_cmds, const char* ex
     send_msg(connfd, bulk_req, strlen(bulk_req));
     free(bulk_req);
 
-    // 逐条接收响应并比对
-    for (int i = 0; i < num_cmds; i++) {
-        char result[MAX_MSG_LENGTH] = {0};
-        recv_msg(connfd, result, MAX_MSG_LENGTH);
-        printf("%s\n", result);
-    }
+    char result[MAX_MSG_LENGTH] = {0};
+    recv_msg(connfd, result, MAX_MSG_LENGTH);
+
+    // 打印解析后的内容
+    print_responses_parsed(result);
+
+    // // 逐条接收响应并比对
+    // for (int i = 0; i < num_cmds; i++) {
+    //     char result[MAX_MSG_LENGTH] = {0};
+    //     recv_msg(connfd, result, MAX_MSG_LENGTH);
+    //         // 打印解析后的内容
+    //     print_responses_parsed(result);
+    // }
 }
 
 int connect_tcpserver(const char* ip, unsigned short port) {

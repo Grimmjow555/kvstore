@@ -70,24 +70,24 @@ char** resp_parse_command(char* buffer, int* argc, int* consumed) {
     p += 2; // 跳过 \r\n
     *consumed = (int)(p - buffer);
 
-    char** argv = (char**)malloc((param_count + 1) * sizeof(char*));
+    char** argv = (char**)kvs_malloc((param_count + 1) * sizeof(char*));
     if (!argv)
         return NULL;
 
     for (int i = 0; i < param_count; i++) {
         if (*p != '$') {
-            free(argv);
+            kvs_free(argv);
             return NULL;
         }
         int len = atoi(p + 1);
         p = strstr(p, "\r\n") + 2; // 跳过 $len\r\n
         if (len < 0) {             // 不支持 null 批量字符串
-            free(argv);
+            kvs_free(argv);
             return NULL;
         }
-        char* data = (char*)malloc(len + 1);
+        char* data = (char*)kvs_malloc(len + 1);
         if (!data) {
-            free(argv);
+            kvs_free(argv);
             return NULL;
         }
         memcpy(data, p, len);
@@ -120,6 +120,9 @@ int kvs_split_token(char* msg, char* tokens[]) {
 // tokens[1]: Key
 // tokens[2]: Value
 #if 1
+
+// response: 存储相应信息（已包含RESP协议头）
+// return: response长度
 int kvs_filter_protocol(char* tokens[], int count, char* response) {
     if (tokens == nullptr || count == 0 || response == nullptr)
         return -1;
@@ -698,8 +701,8 @@ int kvs_protocol(char* msg, int length, char* response) {
         resp_offset += len;
 
         for (int i = 0; i < argc; i++)
-            free(argv[i]);
-        free(argv);
+            kvs_free(argv[i]);
+        kvs_free(argv);
         total_used += consumed;
     }
     return resp_offset;
