@@ -1,9 +1,17 @@
-kv存储
+kvstore
 -
 
 网络框架: reactor(epoll), proactor(io_uring) 以及协程框架(NtyCo)
 
-引擎: array, rbtree, hash 
+存储引擎: array, rbtree, hash, skiptable
+
+使用jemalloc分配内存
+
+使用RESP协议解析指令，允许key/value中存在特殊符号（如空格、回车），允许一次性接收批量指令
+
+
+
+----
 
 编译: 
 
