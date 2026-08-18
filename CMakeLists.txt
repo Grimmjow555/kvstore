@@ -33,4 +33,5 @@ target_link_directories(kvstore PRIVATE ${CMAKE_SOURCE_DIR}/NtyCo-master)
 target_link_libraries(kvstore
     uring
     ntyco
+    jemalloc
 )
