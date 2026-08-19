@@ -9,8 +9,6 @@
 
 #include "server.h"
 
-// extern int kvs_protocol(char* msg, int length, char* response);
-
 //定义了一个类型别名msg_handler
 //它代表的类型就是“返回值 int、参数 (char*, int, char*)的函数指针”。
 typedef int (*msg_handler)(char* msg, int length, char* response);
@@ -19,9 +17,7 @@ static msg_handler kvs_handler;
 int kvs_request(struct conn* c) {
     // printf("[kvs_request]recv %d: %s\n", c->rlength, c->rbuffer);
 
-    // c->wlength = kvs_protocol(c->rbuffer, c->rlength, c->wbuffer);
-
-    c->wlength = kvs_handler(c->rbuffer, c->rlength, c->wbuffer);
+    c->wlength = kvs_handler(c->rbuffer.data(), c->rlength, c->wbuffer.data());
 
     return 0;
 }
@@ -33,7 +29,8 @@ int kvs_response(struct conn* c) {
 
 int epfd = 0;
 
-struct conn conn_list[CONN_SIZE] = {0};
+// struct conn conn_list[CONN_SIZE] = {0};
+std::vector<conn> conn_list(CONN_SIZE);
 
 static int init_server(unsigned short port) {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -72,9 +69,14 @@ int event_register(int fd, int event) {
     conn_list[fd].r_action.recv_callback = recv_cb;
     conn_list[fd].send_callback = send_cb;
     conn_list[fd].rlength = 0;
-    memset(conn_list[fd].rbuffer, 0, BUFFER_LENGTH);
     conn_list[fd].wlength = 0;
-    memset(conn_list[fd].wbuffer, 0, BUFFER_LENGTH);
+#if 1
+    std::fill(conn_list[fd].rbuffer.begin(), conn_list[fd].rbuffer.end(), 0);
+    std::fill(conn_list[fd].wbuffer.begin(), conn_list[fd].wbuffer.end(), 0);
+#else
+    memset(conn_list[fd].rbuffer.data(), 0, BUFFER_LENGTH);
+    memset(conn_list[fd].wbuffer.data(), 0, BUFFER_LENGTH);
+#endif
 
     set_event(fd, event, 1);
     return 0;
@@ -138,15 +140,23 @@ int recv_cb(int clientfd) {
     uint32_t msg_len = ntohl(net_len);
 
     // 检查消息体长度是否超过缓冲区（留一个字节给 '\0'）
-    if (msg_len >= BUFFER_LENGTH) {
-        printf("message too long: %u\n", msg_len);
+    // 检查消息长度是否在允许范围内
+    if (msg_len > MAX_ALLOWED_LEN) {
+        printf("message too long: %u (max: %u)\n", msg_len, MAX_ALLOWED_LEN);
+        // 可选：发送错误响应并继续服务，或直接关闭连接
+        const char* err = "-ERR message too long\r\n";
+        send(clientfd, err, strlen(err), 0);
         epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
         close(clientfd);
         return 0;
     }
 
+    // 修改字符串容积以适配消息大小
+    conn_list[clientfd].rbuffer.resize(msg_len + 1);
+
     // 2. 读取消息体（循环读满 msg_len 字节）
-    char* buffer = conn_list[clientfd].rbuffer;
+    char* buffer = conn_list[clientfd].rbuffer.data();
+
     n = 0;
     while (n < (ssize_t)msg_len) {
         ssize_t ret = recv(clientfd, buffer + n, msg_len - n, 0);
@@ -191,7 +201,7 @@ int send_cb(int clientfd) {
     }
 
     // 2. 发送消息体
-    n = send(clientfd, conn_list[clientfd].wbuffer, conn_list[clientfd].wlength, 0);
+    n = send(clientfd, conn_list[clientfd].wbuffer.data(), conn_list[clientfd].wlength, 0);
     if (n <= 0) {
         printf("send body error: errno %d %s\n", errno, strerror(errno));
         epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);

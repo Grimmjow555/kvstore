@@ -7,12 +7,12 @@
 #include <string.h> // memcpy, memset
 #include <unistd.h> // recv, send, close
 
-// extern int kvs_protocol(char* msg, int length, char* response);
+#define MAX_ALLOWED_LEN 1024 * 1024 // 1MBS
+#define BUFFER_SIZE 1024
 
 typedef int (*msg_handler)(char* msg, int length, char* response);
 static msg_handler kvs_handler;
 
-#if 1
 // 循环接收，直到读满指定字节数或出错
 int recv_full(int fd, void* buffer, size_t len) {
     char* p = (char*)buffer;
@@ -41,6 +41,83 @@ int send_full(int fd, const void* buffer, size_t len) {
     return 0;
 }
 
+#if 1
+// 头部存储长度的协议，并且根据长度设置buffer大小
+void server_reader(void* arg) {
+    int fd = *(int*)arg;
+    int ret = 0;
+
+    while (1) {
+        // 1. 读取 4 字节长度头
+        uint32_t net_len;
+        if (recv_full(fd, &net_len, sizeof(net_len)) != 0) {
+            close(fd);
+            break;
+        }
+        uint32_t msg_len = ntohl(net_len);
+
+        // 2. 检查消息长度是否在允许范围内
+        if (msg_len == 0 || msg_len > MAX_ALLOWED_LEN) {
+            const char* err = "-ERR invalid message length\r\n";
+            send(fd, err, strlen(err), 0);
+            close(fd);
+            break;
+        }
+
+        // 3. 动态分配接收缓冲区
+        char* buf = (char*)malloc(msg_len + 1);
+        if (!buf) {
+            close(fd);
+            break;
+        }
+
+        // 4. 读取消息体
+        if (recv_full(fd, buf, msg_len) != 0) {
+            free(buf);
+            close(fd);
+            break;
+        }
+        buf[msg_len] = '\0'; // 确保字符串结束
+
+        // 5. 动态分配响应缓冲区（与最大允许长度相同，或使用更小的合理上限）
+        char* response = (char*)malloc(MAX_ALLOWED_LEN + 1);
+        if (!response) {
+            free(buf);
+            close(fd);
+            break;
+        }
+
+        // 6. 处理请求
+        int slength = kvs_handler(buf, (int)msg_len, response);
+        if (slength < 0) {
+            slength = 0; // 或发送错误响应
+        }
+
+        // 防止响应长度超过分配大小（理论上 kvs_handler 应保证不超）
+        if (slength > MAX_ALLOWED_LEN) {
+            slength = MAX_ALLOWED_LEN; // 截断或关闭连接，此处简单截断
+        }
+
+        // 7. 发送响应：先发长度头，再发数据
+        uint32_t resp_net_len = htonl((uint32_t)slength);
+        int send_ok = 1;
+        if (send_full(fd, &resp_net_len, sizeof(resp_net_len)) != 0 ||
+            send_full(fd, response, slength) != 0) {
+            send_ok = 0;
+        }
+
+        // 8. 释放内存
+        free(buf);
+        free(response);
+
+        if (!send_ok) {
+            close(fd);
+            break;
+        }
+    }
+}
+#elif 0
+// 以头部存储长度的协议读写
 void server_reader(void* arg) {
     int fd = *(int*)arg;
     int ret = 0;
@@ -86,7 +163,9 @@ void server_reader(void* arg) {
         }
     }
 }
+
 #else
+// 原始的读写
 void server_reader(void* arg) {
     int fd = *(int*)arg;
     int ret = 0;

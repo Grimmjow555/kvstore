@@ -15,6 +15,7 @@ static msg_handler kvs_handler;
 
 #define ENTRIES_LENGTH 1024 // 提交队列和完成队列的大小
 #define BUFFER_LENGTH 1024
+#define MAX_ALLOWED_LEN 1024 * 1024 // 1MB
 
 enum class EVENT { ACCEPT = 0, READ = 1, WRITE = 2 };
 // 新增读取状态枚举
@@ -25,8 +26,13 @@ struct conn_ctx {
     socklen_t len = sizeof(clientaddr);
 
     int clientfd;
+#if 1
+    std::vector<char> rbuffer; // 读取缓冲区
+    std::vector<char> wbuffer; // 写入缓冲区
+#else
     char rbuffer[BUFFER_LENGTH];
     char wbuffer[BUFFER_LENGTH];
+#endif
     // struct iovec send_iov[2]; // 发送用的 iovec，与 ctx 同生命周期
 
     EVENT event;
@@ -37,6 +43,11 @@ struct conn_ctx {
     int header_recv_len; // 头部已接收的字节数（处理半包）
     int msg_len;         // 解析出的消息体长度
     int data_recv_len;   // 消息体已接收的字节数
+
+    conn_ctx() {
+        rbuffer.resize(BUFFER_LENGTH);
+        wbuffer.resize(BUFFER_LENGTH);
+    }
 };
 
 static int init_server(unsigned short port) {
@@ -127,10 +138,10 @@ int set_event_send(struct io_uring* ring, conn_ctx* ctx, int sendlen, int flags)
     uint32_t net_len = htonl((uint32_t)sendlen);
 
     // 将原响应数据向后移动4字节（memmove 处理重叠区域）
-    memmove(ctx->wbuffer + 4, ctx->wbuffer, sendlen);
+    memmove(ctx->wbuffer.data() + 4, ctx->wbuffer.data(), sendlen);
 
     // 在开头写入4字节长度头
-    memcpy(ctx->wbuffer, &net_len, sizeof(net_len));
+    memcpy(ctx->wbuffer.data(), &net_len, sizeof(net_len));
 
     // 总发送长度 = 4字节头 + 实际数据长度
     size_t total_len = sizeof(net_len) + sendlen;
@@ -139,7 +150,7 @@ int set_event_send(struct io_uring* ring, conn_ctx* ctx, int sendlen, int flags)
     if (!sqe) {
         return -1;
     }
-    io_uring_prep_send(sqe, ctx->clientfd, ctx->wbuffer, total_len, flags);
+    io_uring_prep_send(sqe, ctx->clientfd, ctx->wbuffer.data(), total_len, flags);
     sqe->user_data = (__u64)(uintptr_t)ctx;
 
     return 0;
@@ -214,8 +225,8 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
             } else {
                 // 头部完整，解析长度
                 uint32_t msg_len = ntohl(ctx->header);
-                if (msg_len >= BUFFER_LENGTH) {
-                    printf("message too long: %u\n", msg_len);
+                if (msg_len > MAX_ALLOWED_LEN) {
+                    printf("message too long: %u (max: %u)\n", msg_len, MAX_ALLOWED_LEN);
                     close(ctx->clientfd);
                     delete ctx;
                     break;
@@ -223,10 +234,11 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
                 ctx->msg_len = msg_len;
                 ctx->data_recv_len = 0;
                 ctx->rstate = READ_STATE::DATA;
+                ctx->rbuffer.resize(msg_len + 1); // 调整缓冲区大小以适应消息体
 
                 // 提交读取消息体请求
                 struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-                io_uring_prep_recv(sqe, ctx->clientfd, ctx->rbuffer, msg_len, 0);
+                io_uring_prep_recv(sqe, ctx->clientfd, ctx->rbuffer.data(), msg_len, 0);
                 sqe->user_data = (__u64)(uintptr_t)ctx;
             }
         } else if (ctx->rstate == READ_STATE::DATA) {
@@ -235,13 +247,13 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
             if (ctx->data_recv_len < ctx->msg_len) {
                 // 半包：继续读取剩余数据
                 struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-                io_uring_prep_recv(sqe, ctx->clientfd, ctx->rbuffer + ctx->data_recv_len,
+                io_uring_prep_recv(sqe, ctx->clientfd, ctx->rbuffer.data() + ctx->data_recv_len,
                                    ctx->msg_len - ctx->data_recv_len, 0);
                 sqe->user_data = (__u64)(uintptr_t)ctx;
             } else {
                 // 数据完整，处理请求
                 ctx->rbuffer[ctx->msg_len] = '\0'; // 确保字符串结尾
-                int ret = kvs_handler(ctx->rbuffer, ctx->msg_len, ctx->wbuffer);
+                int ret = kvs_handler(ctx->rbuffer.data(), ctx->msg_len, ctx->wbuffer.data());
                 // 转入发送阶段，不要 delete ctx
                 set_event_send(ring, ctx, ret, 0);
             }
