@@ -13,7 +13,7 @@
 enum NETWORK_ARCHITECTURE { NETWORK_REACTOR = 0, NETWORK_NTYCO = 1, NETWORK_PROACTOR = 2 };
 
 // 协议解析函数
-typedef int (*msg_handler)(char* msg, int length, char* response);
+typedef int (*msg_handler)(char* msg, int length, char* response, int response_sizes);
 
 /*--------------------------------------------------------------------*/
 // reactor启动函数：监听的端口，解析协议

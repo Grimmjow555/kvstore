@@ -33,7 +33,7 @@ struct conn {
 
     conn() : fd(-1), rlength(0), wlength(0) {
         rbuffer.resize(BUFFER_LENGTH);
-        wbuffer.resize(BUFFER_LENGTH);
+        wbuffer.resize(MAX_ALLOWED_LEN);
     }
 };
 

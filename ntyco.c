@@ -10,7 +10,7 @@
 #define MAX_ALLOWED_LEN 1024 * 1024 // 1MBS
 #define BUFFER_SIZE 1024
 
-typedef int (*msg_handler)(char* msg, int length, char* response);
+typedef int (*msg_handler)(char* msg, int length, char* response, int response_size);
 static msg_handler kvs_handler;
 
 // 循环接收，直到读满指定字节数或出错
@@ -44,7 +44,8 @@ int send_full(int fd, const void* buffer, size_t len) {
 #if 1
 // 头部存储长度的协议，并且根据长度设置buffer大小
 void server_reader(void* arg) {
-    int fd = *(int*)arg;
+    // int fd = *(int*)arg;
+    int fd = (int)(intptr_t)arg; // 将 void* 转换为 int
     int ret = 0;
 
     while (1) {
@@ -80,7 +81,7 @@ void server_reader(void* arg) {
         buf[msg_len] = '\0'; // 确保字符串结束
 
         // 5. 动态分配响应缓冲区（与最大允许长度相同，或使用更小的合理上限）
-        char* response = (char*)malloc(MAX_ALLOWED_LEN + 1);
+        char* response = (char*)malloc(MAX_ALLOWED_LEN);
         if (!response) {
             free(buf);
             close(fd);
@@ -88,7 +89,7 @@ void server_reader(void* arg) {
         }
 
         // 6. 处理请求
-        int slength = kvs_handler(buf, (int)msg_len, response);
+        int slength = kvs_handler(buf, (int)msg_len, response, MAX_ALLOWED_LEN);
         if (slength < 0) {
             slength = 0; // 或发送错误响应
         }
@@ -219,7 +220,9 @@ static void server(void* arg) {
         int cli_fd = accept(fd, (struct sockaddr*)&remote, &len);
 
         nty_coroutine* read_co;
-        nty_coroutine_create(&read_co, server_reader, &cli_fd);
+
+        nty_coroutine_create(&read_co, server_reader, (void*)(intptr_t)cli_fd);
+        // nty_coroutine_create(&read_co, server_reader, &cli_fd);
     }
 }
 

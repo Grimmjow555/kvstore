@@ -10,7 +10,7 @@
 #include <unistd.h>
 #include <vector>
 
-typedef int (*msg_handler)(char* msg, int length, char* response);
+typedef int (*msg_handler)(char* msg, int length, char* response, int response_size);
 static msg_handler kvs_handler;
 
 #define ENTRIES_LENGTH 1024 // 提交队列和完成队列的大小
@@ -155,29 +155,6 @@ int set_event_send(struct io_uring* ring, conn_ctx* ctx, int sendlen, int flags)
 
     return 0;
 }
-#elif 0
-int set_event_send(struct io_uring* ring, conn_ctx* ctx, int sendlen, int flags) {
-    if (!ctx || sendlen <= 0 || sendlen > BUFFER_LENGTH)
-        return -1;
-
-    ctx->event = EVENT::WRITE;
-    ctx->header = htonl((uint32_t)sendlen);
-
-    // 填充 ctx 中的 iovec，而不是局部变量
-    ctx->send_iov[0].iov_base = &ctx->header;
-    ctx->send_iov[0].iov_len = sizeof(ctx->header);
-    ctx->send_iov[1].iov_base = ctx->wbuffer;
-    ctx->send_iov[1].iov_len = sendlen;
-
-    struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-    if (!sqe)
-        return -1;
-
-    io_uring_prep_writev(sqe, ctx->clientfd, ctx->send_iov, 2, 0);
-    sqe->user_data = (__u64)(uintptr_t)ctx;
-
-    return 0;
-}
 #else
 int set_event_send(struct io_uring* ring, conn_ctx* ctx, size_t sendlen, int flags) {
     ctx->event = EVENT::WRITE;
@@ -253,7 +230,8 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
             } else {
                 // 数据完整，处理请求
                 ctx->rbuffer[ctx->msg_len] = '\0'; // 确保字符串结尾
-                int ret = kvs_handler(ctx->rbuffer.data(), ctx->msg_len, ctx->wbuffer.data());
+                int ret = kvs_handler(ctx->rbuffer.data(), ctx->msg_len, ctx->wbuffer.data(),
+                                      ctx->wbuffer.size());
                 // 转入发送阶段，不要 delete ctx
                 set_event_send(ring, ctx, ret, 0);
             }

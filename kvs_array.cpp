@@ -71,8 +71,10 @@ int kvs_array_set(kvs_array_t* inst, char* key, char* value) {
     memcpy(kcopy, key, strlen(key) + 1);
 
     char* vcopy = (char*)kvs_malloc(strlen(value) + 1);
-    if (vcopy == nullptr)
+    if (vcopy == nullptr) {
+        kvs_free(kcopy);
         return -4;
+    }
     // memset(vcopy, 0, strlen(value) + 1);
     // strncpy(vcopy, value, strlen(value));
     memcpy(vcopy, value, strlen(value) + 1);
@@ -135,14 +137,13 @@ int kvs_array_mod(kvs_array_t* inst, char* key, char* value) {
         if (inst->table[i].key == nullptr)
             continue;
         if (strcmp(inst->table[i].key, key) == 0) {
-            kvs_free(inst->table[i].value);
-            char* kvalue = (char*)kvs_malloc(strlen(value) + 1);
-            if (kvalue == nullptr)
+            char* new_value = (char*)kvs_malloc(strlen(value) + 1);
+            if (new_value == nullptr)
                 return -2;
-            memset(kvalue, 0, strlen(value) + 1);
-            strncpy(kvalue, value, strlen(value));
+            memcpy(new_value, value, strlen(value) + 1);
 
-            inst->table[i].value = kvalue;
+            kvs_free(inst->table[i].value);
+            inst->table[i].value = new_value;
             return 0;
         }
     }

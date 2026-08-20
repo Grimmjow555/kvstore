@@ -9,15 +9,15 @@
 
 #include "server.h"
 
-//定义了一个类型别名msg_handler
-//它代表的类型就是“返回值 int、参数 (char*, int, char*)的函数指针”。
-typedef int (*msg_handler)(char* msg, int length, char* response);
+//定义了一个类型别s名msg_handler
+//它代表的类型就是“返回值 int、参数 (char*, int, char*, int)的函数指针”。
+typedef int (*msg_handler)(char* msg, int length, char* response, int response_size);
 static msg_handler kvs_handler;
 
 int kvs_request(struct conn* c) {
     // printf("[kvs_request]recv %d: %s\n", c->rlength, c->rbuffer);
 
-    c->wlength = kvs_handler(c->rbuffer.data(), c->rlength, c->wbuffer.data());
+    c->wlength = kvs_handler(c->rbuffer.data(), c->rlength, c->wbuffer.data(), c->wbuffer.size());
 
     return 0;
 }
