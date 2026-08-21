@@ -23,9 +23,28 @@ int kvs_array_create(kvs_array_t* inst) {
 void kvs_array_destroy(kvs_array_t* inst) {
     if (inst == nullptr)
         return;
+
     if (inst->table) {
+        // 先释放每个有效项的 key 和 value
+        for (int i = 0; i < inst->max_idx; ++i) {
+            if (inst->table[i].key != nullptr) {
+                kvs_free(inst->table[i].key);
+                inst->table[i].key = nullptr; // 可选，防止悬空
+            }
+            if (inst->table[i].value != nullptr) {
+                kvs_free(inst->table[i].value);
+                inst->table[i].value = nullptr;
+            }
+        }
+
+        // 再释放 table 数组本身
         kvs_free(inst->table);
+        inst->table = nullptr; // 避免悬空指针
     }
+
+    // 重置统计信息
+    inst->max_idx = 0;
+    inst->total = 0;
 }
 
 /*

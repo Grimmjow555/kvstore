@@ -129,6 +129,30 @@ kvstore/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/build
 .PHONY : kvstore/fast
 
+aof.o: aof.cpp.o
+.PHONY : aof.o
+
+# target to build an object file
+aof.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/aof.cpp.o
+.PHONY : aof.cpp.o
+
+aof.i: aof.cpp.i
+.PHONY : aof.i
+
+# target to preprocess a source file
+aof.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/aof.cpp.i
+.PHONY : aof.cpp.i
+
+aof.s: aof.cpp.s
+.PHONY : aof.s
+
+# target to generate assembly for a file
+aof.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/aof.cpp.s
+.PHONY : aof.cpp.s
+
 kvs_array.o: kvs_array.cpp.o
 .PHONY : kvs_array.o
 
@@ -273,6 +297,30 @@ ntyco.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/ntyco.c.s
 .PHONY : ntyco.c.s
 
+persistence.o: persistence.cpp.o
+.PHONY : persistence.o
+
+# target to build an object file
+persistence.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/persistence.cpp.o
+.PHONY : persistence.cpp.o
+
+persistence.i: persistence.cpp.i
+.PHONY : persistence.i
+
+# target to preprocess a source file
+persistence.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/persistence.cpp.i
+.PHONY : persistence.cpp.i
+
+persistence.s: persistence.cpp.s
+.PHONY : persistence.s
+
+# target to generate assembly for a file
+persistence.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/persistence.cpp.s
+.PHONY : persistence.cpp.s
+
 proactor.o: proactor.cpp.o
 .PHONY : proactor.o
 
@@ -330,6 +378,9 @@ help:
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
 	@echo "... kvstore"
+	@echo "... aof.o"
+	@echo "... aof.i"
+	@echo "... aof.s"
 	@echo "... kvs_array.o"
 	@echo "... kvs_array.i"
 	@echo "... kvs_array.s"
@@ -348,6 +399,9 @@ help:
 	@echo "... ntyco.o"
 	@echo "... ntyco.i"
 	@echo "... ntyco.s"
+	@echo "... persistence.o"
+	@echo "... persistence.i"
+	@echo "... persistence.s"
 	@echo "... proactor.o"
 	@echo "... proactor.i"
 	@echo "... proactor.s"

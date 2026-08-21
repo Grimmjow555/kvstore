@@ -1,4 +1,5 @@
 #include "kvstore.h"
+#include "network.h"
 
 #if ENABLE_ARRAY
 extern kvs_array_t global_array;
@@ -16,13 +17,20 @@ extern kvs_hash_t global_hash;
 extern kvs_skiptable_t global_skiptable;
 #endif
 
+#define AOF_ENABLE 1
+
+#if AOF_ENABLE
+static FILE* aof_fp = nullptr;
+static int aof_replaying = 0;
+#endif
+
 void* kvs_malloc(size_t size) { return malloc(size); }
 
 void kvs_free(void* ptr) { return free(ptr); }
 
-const char* command[] = {"SET",    "GET",  "DEL",    "MOD",  "EXIST", "RSET",  "RGET",
-                         "RDEL",   "RMOD", "REXIST", "HSET", "HGET",  "HDEL",  "HMOD",
-                         "HEXIST", "SSET", "SGET",   "SDEL", "SMOD",  "SEXIST"};
+const char* command[] = {"SET",  "GET",    "DEL",  "MOD",    "EXIST", "RSET", "RGET",   "RDEL",
+                         "RMOD", "REXIST", "HSET", "HGET",   "HDEL",  "HMOD", "HEXIST", "SSET",
+                         "SGET", "SDEL",   "SMOD", "SEXIST", "SAVE",  "LOAD"};
 
 enum KVS_CMD {
     KVS_CMD_START = 0,
@@ -53,6 +61,9 @@ enum KVS_CMD {
     KVS_CMD_SDEL,
     KVS_CMD_SMOD,
     KVS_CMD_SEXIST,
+
+    KVS_CMD_SAVE,
+    KVS_CMD_LOAD,
 
     KVS_CMD_COUNT,
 };
@@ -152,26 +163,10 @@ char** resp_parse_command(char* buffer, int* argc, int* consumed) {
     return argv;
 }
 
-int kvs_split_token(char* msg, char* tokens[]) {
-
-    if (msg == nullptr || tokens == nullptr)
-        return -1;
-    char* token = strtok(msg, " ");
-    int idx = 0;
-    while (token != nullptr) {
-        // printf("idx: %d, %s\n", idx, token); // idx为子串的索引
-        tokens[idx++] = token;
-        token = strtok(nullptr, " ");
-    }
-    return idx; // idx为子串的数量
-}
-
 // SET Key Value
 // tokens[0]: SET
 // tokens[1]: Key
 // tokens[2]: Value
-#if 1
-
 // response: 存储相应信息（已包含RESP协议头）
 // return: response长度
 int kvs_filter_protocol(char* tokens[], int count, char* response, int response_size) {
@@ -193,6 +188,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_SET: {
         int ret = kvs_array_set(&global_array, tokens[1], tokens[2]);
         if (ret == 0) {
+            if (!aof_replaying)
+                kvs_aof_append(3, tokens); // 修改成功之后记录增量日志
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
             length = snprintf(response, response_size, "+EXIST\r\n"); // 键已存在（仍视为成功）
@@ -216,6 +213,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_DEL: {
         int ret = kvs_array_del(&global_array, tokens[1]);
         if (ret == 0) {
+            if (!aof_replaying)
+                kvs_aof_append(2, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
             length = snprintf(response, response_size,
@@ -228,6 +227,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_MOD: {
         int ret = kvs_array_mod(&global_array, tokens[1], tokens[2]);
         if (ret == 0) {
+            if (!aof_replaying)
+                kvs_aof_append(3, tokens);
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
             length = snprintf(response, response_size, "$8\r\nNO EXIST\r\n");
@@ -254,6 +255,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_RSET: {
         int ret = kvs_rbtree_set(&global_rbtree, tokens[1], tokens[2]);
         if (ret == 0) {
+            if (!aof_replaying)
+                kvs_aof_append(3, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
             length = snprintf(response, response_size, "+EXIST\r\n"); // 键已存在（仍视为成功）
@@ -277,6 +280,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_RDEL: {
         int ret = kvs_rbtree_del(&global_rbtree, tokens[1]);
         if (ret == 0) {
+            if (!aof_replaying)
+                kvs_aof_append(2, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
             length = snprintf(response, response_size,
@@ -289,6 +294,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_RMOD: {
         int ret = kvs_rbtree_mod(&global_rbtree, tokens[1], tokens[2]);
         if (ret == 0) {
+            if (!aof_replaying)
+                kvs_aof_append(3, tokens);
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
             length = snprintf(response, response_size, "$8\r\nNO EXIST\r\n");
@@ -315,6 +322,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_HSET: {
         int ret = kvs_hash_set(&global_hash, tokens[1], tokens[2]);
         if (ret == 0) {
+            if (!aof_replaying)
+                kvs_aof_append(3, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
             length = snprintf(response, response_size, "+EXIST\r\n"); // 键已存在（仍视为成功）
@@ -338,6 +347,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_HDEL: {
         int ret = kvs_hash_del(&global_hash, tokens[1]);
         if (ret == 0) {
+            if (!aof_replaying)
+                kvs_aof_append(2, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
             length = snprintf(response, response_size,
@@ -350,6 +361,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_HMOD: {
         int ret = kvs_hash_mod(&global_hash, tokens[1], tokens[2]);
         if (ret == 0) {
+            if (!aof_replaying)
+                kvs_aof_append(3, tokens);
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
             length = snprintf(response, response_size, "$8\r\nNO EXIST\r\n");
@@ -377,6 +390,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_SSET: {
         int ret = kvs_skiptable_set(&global_skiptable, tokens[1], tokens[2]);
         if (ret == 0) {
+            if (!aof_replaying)
+                kvs_aof_append(3, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
             length = snprintf(response, response_size, "+EXIST\r\n"); // 键已存在（仍视为成功）
@@ -400,6 +415,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_SDEL: {
         int ret = kvs_skiptable_del(&global_skiptable, tokens[1]);
         if (ret == 0) {
+            if (!aof_replaying)
+                kvs_aof_append(2, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
             length = snprintf(response, response_size,
@@ -412,6 +429,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_SMOD: {
         int ret = kvs_skiptable_mod(&global_skiptable, tokens[1], tokens[2]);
         if (ret == 0) {
+            if (!aof_replaying)
+                kvs_aof_append(3, tokens);
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
             length = snprintf(response, response_size, "$8\r\nNO EXIST\r\n");
@@ -434,6 +453,22 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
 
 #endif
 
+    case (KVS_CMD_SAVE): {
+        kvs_array_save(&global_array, "data/array.data");
+        kvs_rbtree_save(&global_rbtree, "data/rbtree.data");
+        kvs_hash_save(&global_hash, "data/hash.data");
+        kvs_skiptable_save(&global_skiptable, "data/skiptable.data");
+        break;
+    }
+
+    case (KVS_CMD_LOAD): {
+        kvs_array_load(&global_array, "data/array.data");
+        kvs_rbtree_load(&global_rbtree, "data/rbtree.data");
+        kvs_hash_load(&global_hash, "data/hash.data");
+        kvs_skiptable_load(&global_skiptable, "data/skiptable.data");
+        break;
+    }
+
     default: {
         break;
     }
@@ -442,297 +477,6 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     return length;
 }
 
-#else
-int kvs_filter_protocol(char* tokens[], int count, char* response) {
-    if (tokens == nullptr || count == 0 || response == nullptr)
-        return -1;
-    int cmd = KVS_CMD_START;
-    for (cmd = KVS_CMD_START; cmd < KVS_CMD_COUNT; ++cmd) {
-        if (strcmp(tokens[0], command[cmd]) == 0) {
-            break;
-        }
-    }
-
-    int length = 0;
-
-    // char* key = tokens[1];
-    // char* value = tokens[2];
-
-    switch (cmd) {
-// array
-#if ENABLE_ARRAY
-    case KVS_CMD_SET: {
-
-        int ret = kvs_array_set(&global_array, tokens[1], tokens[2]);
-        if (ret == 0) {
-            length = sprintf(response, "OK\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-    case KVS_CMD_GET: {
-        char* value = kvs_array_get(&global_array, tokens[1]);
-        if (value == nullptr) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else {
-            length = sprintf(response, "%s\r\n", value);
-        }
-
-        break;
-    }
-    case KVS_CMD_DEL: {
-        int ret = kvs_array_del(&global_array, tokens[1]);
-        if (ret == 0) {
-            length = sprintf(response, "OK\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-    case KVS_CMD_MOD: {
-
-        int ret = kvs_array_mod(&global_array, tokens[1], tokens[2]);
-        if (ret == 0) {
-            length = sprintf(response, "OK\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-    case KVS_CMD_EXIST: {
-        int ret = kvs_array_exist(&global_array, tokens[1]);
-        if (ret == 0) {
-            length = sprintf(response, "EXIST\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-#endif
-
-// rbtree
-#if ENABLE_RBTREE
-    case KVS_CMD_RSET: {
-        int ret = kvs_rbtree_set(&global_rbtree, tokens[1], tokens[2]);
-
-        if (ret == 0) {
-            length = sprintf(response, "OK\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-    case KVS_CMD_RGET: {
-        char* value = kvs_rbtree_get(&global_rbtree, tokens[1]);
-
-        if (value == nullptr) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else {
-            length = sprintf(response, "%s\r\n", value);
-        }
-
-        break;
-    }
-    case KVS_CMD_RDEL: {
-        int ret = kvs_rbtree_del(&global_rbtree, tokens[1]);
-
-        if (ret == 0) {
-            length = sprintf(response, "OK\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-    case KVS_CMD_RMOD: {
-        int ret = kvs_rbtree_mod(&global_rbtree, tokens[1], tokens[2]);
-
-        if (ret == 0) {
-            length = sprintf(response, "OK\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-    case KVS_CMD_REXIST: {
-        int ret = kvs_rbtree_exist(&global_rbtree, tokens[1]);
-
-        if (ret == 0) {
-            length = sprintf(response, "EXIST\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-#endif
-
-// hash
-#if ENABLE_HASH
-    case KVS_CMD_HSET: {
-        int ret = kvs_hash_set(&global_hash, tokens[1], tokens[2]);
-
-        if (ret == 0) {
-            length = sprintf(response, "OK\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-    case KVS_CMD_HGET: {
-        char* value = kvs_hash_get(&global_hash, tokens[1]);
-
-        if (value == nullptr) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else {
-            length = sprintf(response, "%s\r\n", value);
-        }
-
-        break;
-    }
-    case KVS_CMD_HDEL: {
-        int ret = kvs_hash_del(&global_hash, tokens[1]);
-
-        if (ret == 0) {
-            length = sprintf(response, "OK\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-    case KVS_CMD_HMOD: {
-        int ret = kvs_hash_mod(&global_hash, tokens[1], tokens[2]);
-
-        if (ret == 0) {
-            length = sprintf(response, "OK\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-    case KVS_CMD_HEXIST: {
-        int ret = kvs_hash_exist(&global_hash, tokens[1]);
-
-        if (ret == 0) {
-            length = sprintf(response, "EXIST\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-#endif
-
-// skiptable
-#if ENABLE_SKIPTABLE
-
-    case KVS_CMD_SSET: {
-        int ret = kvs_skiptable_set(&global_skiptable, tokens[1], tokens[2]);
-        if (ret == 0) {
-            length = sprintf(response, "OK\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-    case KVS_CMD_SGET: {
-        char* value = kvs_skiptable_get(&global_skiptable, tokens[1]);
-        if (value == nullptr) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else {
-            length = sprintf(response, "%s\r\n", value);
-        }
-        break;
-    }
-    case KVS_CMD_SDEL: {
-        int ret = kvs_skiptable_del(&global_skiptable, tokens[1]);
-
-        if (ret == 0) {
-            length = sprintf(response, "OK\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-    case KVS_CMD_SMOD: {
-        int ret = kvs_skiptable_mod(&global_skiptable, tokens[1], tokens[2]);
-
-        if (ret == 0) {
-            length = sprintf(response, "OK\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-    case KVS_CMD_SEXIST: {
-        int ret = kvs_skiptable_exist(&global_skiptable, tokens[1]);
-
-        if (ret == 0) {
-            length = sprintf(response, "EXIST\r\n");
-        } else if (ret > 0) {
-            length = sprintf(response, "NO EXIST\r\n");
-        } else if (ret < 0) {
-            length = sprintf(response, "ERROR\r\n");
-        }
-
-        break;
-    }
-
-#endif
-
-    default: {
-        break;
-    }
-    }
-
-    return length;
-}
-#endif
-
-#if 1
 /*
  *msg: request message
  *length: length of request message
@@ -782,29 +526,6 @@ int kvs_protocol(char* msg, int length, char* response, int response_size) {
     }
     return resp_offset;
 }
-#else
-int kvs_protocol(char* msg, int length, char* response) {
-    int total_used = 0;
-    int resp_offset = 0;
-    while (total_used < length) {
-        int argc, consumed;
-        char** argv = resp_parse_command(msg + total_used, &argc, &consumed);
-        if (!argv)
-            break;
-
-        char tmp_resp[512];
-        int len = kvs_filter_protocol(argv, argc, tmp_resp);
-        memcpy(response + resp_offset, tmp_resp, len);
-        resp_offset += len;
-
-        for (int i = 0; i < argc; i++)
-            kvs_free(argv[i]);
-        kvs_free(argv);
-        total_used += consumed;
-    }
-    return resp_offset;
-}
-#endif
 
 int init_kvengine() {
 #if ENABLE_ARRAY
@@ -863,6 +584,14 @@ int main(int argc, char* argv[]) {
 
     init_kvengine();
 
+    // 初始化 AOF
+    if (kvs_aof_init("data/append.aof") != 0) {
+        fprintf(stderr, "Failed to initialize AOF\n");
+
+        destroy_kvengine();
+        return -1;
+    }
+
     switch (select_network_architecture) { //
     case NETWORK_REACTOR: {
         printf("**********USE reactor**********\n");
@@ -887,5 +616,7 @@ int main(int argc, char* argv[]) {
         break;
     }
     }
+
+    kvs_aof_close();
     destroy_kvengine();
 }

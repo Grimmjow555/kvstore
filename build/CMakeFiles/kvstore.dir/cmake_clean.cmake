@@ -1,4 +1,6 @@
 file(REMOVE_RECURSE
+  "CMakeFiles/kvstore.dir/aof.cpp.o"
+  "CMakeFiles/kvstore.dir/aof.cpp.o.d"
   "CMakeFiles/kvstore.dir/kvs_array.cpp.o"
   "CMakeFiles/kvstore.dir/kvs_array.cpp.o.d"
   "CMakeFiles/kvstore.dir/kvs_hash.cpp.o"
@@ -11,6 +13,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/kvstore.dir/kvstore.cpp.o.d"
   "CMakeFiles/kvstore.dir/ntyco.c.o"
   "CMakeFiles/kvstore.dir/ntyco.c.o.d"
+  "CMakeFiles/kvstore.dir/persistence.cpp.o"
+  "CMakeFiles/kvstore.dir/persistence.cpp.o.d"
   "CMakeFiles/kvstore.dir/proactor.cpp.o"
   "CMakeFiles/kvstore.dir/proactor.cpp.o.d"
   "CMakeFiles/kvstore.dir/reactor.cpp.o"

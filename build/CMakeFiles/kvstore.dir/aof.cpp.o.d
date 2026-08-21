@@ -1,6 +1,6 @@
-CMakeFiles/kvstore.dir/kvstore.cpp.o: \
- /home/Share/VScode/12.kvstore/kvstore.cpp /usr/include/stdc-predef.h \
- /home/Share/VScode/12.kvstore/kvstore.h /usr/include/c++/11/cstring \
+CMakeFiles/kvstore.dir/aof.cpp.o: /home/Share/VScode/12.kvstore/aof.cpp \
+ /usr/include/stdc-predef.h /home/Share/VScode/12.kvstore/kvstore.h \
+ /usr/include/c++/11/cstring \
  /usr/include/x86_64-linux-gnu/c++/11/bits/c++config.h \
  /usr/include/x86_64-linux-gnu/c++/11/bits/os_defines.h \
  /usr/include/features.h /usr/include/features-time64.h \
@@ -149,5 +149,4 @@ CMakeFiles/kvstore.dir/kvstore.cpp.o: \
  /usr/include/c++/11/bits/stl_uninitialized.h \
  /usr/include/c++/11/bits/stl_vector.h \
  /usr/include/c++/11/bits/stl_bvector.h \
- /usr/include/c++/11/bits/vector.tcc \
- /home/Share/VScode/12.kvstore/network.h
+ /usr/include/c++/11/bits/vector.tcc

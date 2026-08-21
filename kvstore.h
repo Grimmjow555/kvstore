@@ -9,31 +9,6 @@
 #define ENABLE_HASH 1
 #define ENABLE_SKIPTABLE 1
 
-// 选择网络框架
-enum NETWORK_ARCHITECTURE { NETWORK_REACTOR = 0, NETWORK_NTYCO = 1, NETWORK_PROACTOR = 2 };
-
-// 协议解析函数
-typedef int (*msg_handler)(char* msg, int length, char* response, int response_sizes);
-
-/*--------------------------------------------------------------------*/
-// reactor启动函数：监听的端口，解析协议
-extern int reactor_start(unsigned short port, msg_handler handler);
-
-#ifdef __cplusplus // ntyco_start是纯C编写的，用C++编译时需要以兼容C的模式处理
-extern "C" {
-#endif
-
-// ntyco启动函数：监听的端口，解析协议
-extern int ntyco_start(unsigned short port, msg_handler handler);
-
-#ifdef __cplusplus
-}
-#endif
-
-// uring启动函数：监听的端口，解析协议
-extern int proactor_start(unsigned short port, msg_handler handler);
-/*--------------------------------------------------------------------*/
-
 void* kvs_malloc(size_t size);
 
 void kvs_free(void* ptr);
@@ -178,3 +153,19 @@ int kvs_skiptable_mod(kvs_skiptable_t* skiptable, char* key, char* value);
 int kvs_skiptable_del(kvs_skiptable_t* skiptable, char* key);
 int kvs_skiptable_exist(kvs_skiptable_t* skiptable, char* key);
 #endif
+
+int kvs_array_save(kvs_array_t* array, const char* filename);
+int kvs_array_load(kvs_array_t* array, const char* filename);
+
+int kvs_rbtree_save(kvs_rbtree_t* tree, const char* filename);
+int kvs_rbtree_load(kvs_rbtree_t* tree, const char* filename);
+
+int kvs_hash_save(kvs_hash_t* hash, const char* filename);
+int kvs_hash_load(kvs_hash_t* hash, const char* filename);
+
+int kvs_skiptable_save(kvs_skiptable_t* skiptable, const char* filename);
+int kvs_skiptable_load(kvs_skiptable_t* skiptable, const char* filename);
+
+int kvs_aof_init(const char* filename);
+int kvs_aof_append(int argc, char* argv[]);
+int kvs_aof_close();
