@@ -28,9 +28,10 @@ void* kvs_malloc(size_t size) { return malloc(size); }
 
 void kvs_free(void* ptr) { return free(ptr); }
 
-const char* command[] = {"SET",  "GET",    "DEL",  "MOD",    "EXIST", "RSET", "RGET",   "RDEL",
-                         "RMOD", "REXIST", "HSET", "HGET",   "HDEL",  "HMOD", "HEXIST", "SSET",
-                         "SGET", "SDEL",   "SMOD", "SEXIST", "SAVE",  "LOAD"};
+const char* command[] = {"SET",  "GET",  "DEL",  "MOD",  "EXIST",  "SAVE",  "LOAD",
+                         "RSET", "RGET", "RDEL", "RMOD", "REXIST", "RSAVE", "RLOAD",
+                         "HSET", "HGET", "HDEL", "HMOD", "HEXIST", "HSAVE", "HLOAD",
+                         "SSET", "SGET", "SDEL", "SMOD", "SEXIST", "SSAVE", "SLOAD"};
 
 enum KVS_CMD {
     KVS_CMD_START = 0,
@@ -40,6 +41,8 @@ enum KVS_CMD {
     KVS_CMD_DEL,
     KVS_CMD_MOD,
     KVS_CMD_EXIST,
+    KVS_CMD_SAVE,
+    KVS_CMD_LOAD,
 
     // rbtree
     KVS_CMD_RSET,
@@ -47,6 +50,8 @@ enum KVS_CMD {
     KVS_CMD_RDEL,
     KVS_CMD_RMOD,
     KVS_CMD_REXIST,
+    KVS_CMD_RSAVE,
+    KVS_CMD_RLOAD,
 
     // hash
     KVS_CMD_HSET,
@@ -54,6 +59,8 @@ enum KVS_CMD {
     KVS_CMD_HDEL,
     KVS_CMD_HMOD,
     KVS_CMD_HEXIST,
+    KVS_CMD_HSAVE,
+    KVS_CMD_HLOAD,
 
     // skiptable
     KVS_CMD_SSET,
@@ -61,9 +68,8 @@ enum KVS_CMD {
     KVS_CMD_SDEL,
     KVS_CMD_SMOD,
     KVS_CMD_SEXIST,
-
-    KVS_CMD_SAVE,
-    KVS_CMD_LOAD,
+    KVS_CMD_SSAVE,
+    KVS_CMD_SLOAD,
 
     KVS_CMD_COUNT,
 };
@@ -248,6 +254,25 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         }
         break;
     }
+    case (KVS_CMD_SAVE): {
+        int ret = kvs_array_save(&global_array, "data/array.data");
+        if (ret == 0) {
+            length = snprintf(response, response_size, "+OK\r\n");
+        } else {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+        }
+        break;
+    }
+
+    case (KVS_CMD_LOAD): {
+        int ret = kvs_array_load(&global_array, "data/array.data");
+        if (ret == 0) {
+            length = snprintf(response, response_size, "+OK\r\n");
+        } else {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+        }
+        break;
+    }
 #endif
 
 // rbtree
@@ -315,6 +340,24 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         }
         break;
     }
+    case (KVS_CMD_RSAVE): {
+        int ret = kvs_rbtree_save(&global_rbtree, "data/rbtree.data");
+        if (ret == 0) {
+            length = snprintf(response, response_size, "+OK\r\n");
+        } else {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+        }
+        break;
+    }
+    case (KVS_CMD_RLOAD): {
+        int ret = kvs_rbtree_load(&global_rbtree, "data/rbtree.data");
+        if (ret == 0) {
+            length = snprintf(response, response_size, "+OK\r\n");
+        } else {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+        }
+        break;
+    }
 #endif
 
 // hash
@@ -378,6 +421,25 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         } else if (ret > 0) {
             length = snprintf(response, response_size, "$8\r\nNO EXIST\r\n"); // 不存在
         } else if (ret < 0) {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+        }
+        break;
+    }
+    case (KVS_CMD_HSAVE): {
+        int ret = kvs_hash_save(&global_hash, "data/hash.data");
+        if (ret == 0) {
+            length = snprintf(response, response_size, "+OK\r\n");
+        } else {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+        }
+        break;
+    }
+
+    case (KVS_CMD_HLOAD): {
+        int ret = kvs_hash_load(&global_hash, "data/hash.data");
+        if (ret == 0) {
+            length = snprintf(response, response_size, "+OK\r\n");
+        } else {
             length = snprintf(response, response_size, "-ERROR\r\n");
         }
         break;
@@ -450,24 +512,26 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         }
         break;
     }
+    case (KVS_CMD_SSAVE): {
+        int ret = kvs_skiptable_save(&global_skiptable, "data/skiptable.data");
+        if (ret == 0) {
+            length = snprintf(response, response_size, "+OK\r\n");
+        } else {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+        }
+        break;
+    }
+    case (KVS_CMD_SLOAD): {
+        int ret = kvs_skiptable_load(&global_skiptable, "data/skiptable.data");
+        if (ret == 0) {
+            length = snprintf(response, response_size, "+OK\r\n");
+        } else {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+        }
+        break;
+    }
 
 #endif
-
-    case (KVS_CMD_SAVE): {
-        kvs_array_save(&global_array, "data/array.data");
-        kvs_rbtree_save(&global_rbtree, "data/rbtree.data");
-        kvs_hash_save(&global_hash, "data/hash.data");
-        kvs_skiptable_save(&global_skiptable, "data/skiptable.data");
-        break;
-    }
-
-    case (KVS_CMD_LOAD): {
-        kvs_array_load(&global_array, "data/array.data");
-        kvs_rbtree_load(&global_rbtree, "data/rbtree.data");
-        kvs_hash_load(&global_hash, "data/hash.data");
-        kvs_skiptable_load(&global_skiptable, "data/skiptable.data");
-        break;
-    }
 
     default: {
         break;
@@ -584,13 +648,13 @@ int main(int argc, char* argv[]) {
 
     init_kvengine();
 
-    // 初始化 AOF
-    if (kvs_aof_init("data/append.aof") != 0) {
-        fprintf(stderr, "Failed to initialize AOF\n");
+    // // 初始化 AOF
+    // if (kvs_aof_init("data/append.aof") != 0) {
+    //     fprintf(stderr, "Failed to initialize AOF\n");
 
-        destroy_kvengine();
-        return -1;
-    }
+    //     destroy_kvengine();
+    //     return -1;
+    // }
 
     switch (select_network_architecture) { //
     case NETWORK_REACTOR: {
@@ -617,6 +681,6 @@ int main(int argc, char* argv[]) {
     }
     }
 
-    kvs_aof_close();
+    // kvs_aof_close();
     destroy_kvengine();
 }

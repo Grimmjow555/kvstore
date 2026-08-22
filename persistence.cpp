@@ -69,6 +69,19 @@ int kvs_array_save(kvs_array_t* array, const char* filename) {
     return 0;
 }
 int kvs_array_load(kvs_array_t* array, const char* filename) {
+    if (array == NULL || filename == NULL) {
+
+        return -1;
+    }
+    /*
+     * 重新初始化 Array
+     */
+    if (array->table != NULL) {
+        kvs_array_destroy(array);
+    }
+    memset(array, 0, sizeof(*array));
+    kvs_array_create(array);
+
     FILE* fp;
     kvs_file_header_t header;
 
@@ -93,15 +106,6 @@ int kvs_array_load(kvs_array_t* array, const char* filename) {
         fclose(fp);
         return -1;
     }
-
-    /*
-     * 重新初始化 Array
-     */
-    kvs_array_destroy(array);
-
-    memset(array, 0, sizeof(*array));
-
-    kvs_array_create(array);
 
     for (uint32_t i = 0; i < header.count; i++) {
 
@@ -292,6 +296,12 @@ int kvs_rbtree_load(kvs_rbtree_t* tree, const char* filename) {
         return -1;
     }
 
+    if (tree->root != NULL && tree->root != tree->nil) {
+        kvs_rbtree_destroy(tree);
+    }
+    memset(tree, 0, sizeof(*tree));
+    kvs_rbtree_create(tree);
+
     FILE* fp = fopen(filename, "rb");
 
     if (fp == NULL) {
@@ -422,14 +432,14 @@ int kvs_rbtree_load(kvs_rbtree_t* tree, const char* filename) {
         /*
          * 分配 key/value
          */
-        char* key = (char*)malloc(record.key_len + 1);
+        char* key = (char*)kvs_malloc(record.key_len + 1);
 
-        char* value = (char*)malloc(record.value_len + 1);
+        char* value = (char*)kvs_malloc(record.value_len + 1);
 
         if (key == NULL || value == NULL) {
 
-            free(key);
-            free(value);
+            kvs_free(key);
+            kvs_free(value);
 
             fclose(fp);
 
@@ -441,8 +451,8 @@ int kvs_rbtree_load(kvs_rbtree_t* tree, const char* filename) {
          */
         if (fread(key, record.key_len, 1, fp) != 1) {
 
-            free(key);
-            free(value);
+            kvs_free(key);
+            kvs_free(value);
 
             fclose(fp);
 
@@ -456,8 +466,8 @@ int kvs_rbtree_load(kvs_rbtree_t* tree, const char* filename) {
          */
         if (fread(value, record.value_len, 1, fp) != 1) {
 
-            free(key);
-            free(value);
+            kvs_free(key);
+            kvs_free(value);
 
             fclose(fp);
 
@@ -478,8 +488,8 @@ int kvs_rbtree_load(kvs_rbtree_t* tree, const char* filename) {
 
             fprintf(stderr, "rbtree set failed: key=%s\n", key);
 
-            free(key);
-            free(value);
+            kvs_free(key);
+            kvs_free(value);
 
             fclose(fp);
 
@@ -493,8 +503,8 @@ int kvs_rbtree_load(kvs_rbtree_t* tree, const char* filename) {
          * 如果你的 set() 直接保存传入指针，
          * 这里就不能 free。
          */
-        free(key);
-        free(value);
+        kvs_free(key);
+        kvs_free(value);
     }
 
     fclose(fp);
@@ -653,6 +663,12 @@ int kvs_hash_load(kvs_hash_t* hash, const char* filename) {
 
         return -1;
     }
+
+    if (hash->nodes != NULL) {
+        kvs_hash_destroy(hash);
+    }
+    memset(hash, 0, sizeof(*hash));
+    kvs_hash_create(hash);
 
     FILE* fp = fopen(filename, "rb");
 
@@ -1013,6 +1029,12 @@ int kvs_skiptable_load(kvs_skiptable_t* table, const char* filename) {
 
         return -1;
     }
+
+    if (table->header != NULL) {
+        kvs_skiptable_destroy(table);
+    }
+    memset(table, 0, sizeof(*table));
+    kvs_skiptable_create(table);
 
     FILE* fp = fopen(filename, "rb");
 
