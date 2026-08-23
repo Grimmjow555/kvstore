@@ -1,5 +1,6 @@
+#include "aof.h"
 #include "kvstore.h"
-#include "network.h"
+#include "network/network.h"
 
 #if ENABLE_ARRAY
 extern kvs_array_t global_array;
@@ -20,18 +21,19 @@ extern kvs_skiptable_t global_skiptable;
 #define AOF_ENABLE 1
 
 #if AOF_ENABLE
-static FILE* aof_fp = nullptr;
-static int aof_replaying = 0;
+
 #endif
 
 void* kvs_malloc(size_t size) { return malloc(size); }
 
 void kvs_free(void* ptr) { return free(ptr); }
 
-const char* command[] = {"SET",  "GET",  "DEL",  "MOD",  "EXIST",  "SAVE",  "LOAD",
-                         "RSET", "RGET", "RDEL", "RMOD", "REXIST", "RSAVE", "RLOAD",
-                         "HSET", "HGET", "HDEL", "HMOD", "HEXIST", "HSAVE", "HLOAD",
-                         "SSET", "SGET", "SDEL", "SMOD", "SEXIST", "SSAVE", "SLOAD"};
+const char* command[] = {"SET",      "GET",      "DEL",  "MOD",  "EXIST",  "SAVE",  "LOAD",
+                         "RSET",     "RGET",     "RDEL", "RMOD", "REXIST", "RSAVE", "RLOAD",
+                         "HSET",     "HGET",     "HDEL", "HMOD", "HEXIST", "HSAVE", "HLOAD",
+                         "SSET",     "SGET",     "SDEL", "SMOD", "SEXIST", "SSAVE", "SLOAD",
+
+                         "LOAD_AOF", "CLEAR_AOF"};
 
 enum KVS_CMD {
     KVS_CMD_START = 0,
@@ -70,6 +72,9 @@ enum KVS_CMD {
     KVS_CMD_SEXIST,
     KVS_CMD_SSAVE,
     KVS_CMD_SLOAD,
+
+    KVS_CMD_LOAD_AOF,
+    KVS_CMD_CLEAR_AOF,
 
     KVS_CMD_COUNT,
 };
@@ -194,7 +199,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_SET: {
         int ret = kvs_array_set(&global_array, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!aof_replaying)
+            if (!kvs_aof_is_replaying())
                 kvs_aof_append(3, tokens); // 修改成功之后记录增量日志
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
@@ -219,7 +224,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_DEL: {
         int ret = kvs_array_del(&global_array, tokens[1]);
         if (ret == 0) {
-            if (!aof_replaying)
+            if (!kvs_aof_is_replaying())
                 kvs_aof_append(2, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
@@ -233,7 +238,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_MOD: {
         int ret = kvs_array_mod(&global_array, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!aof_replaying)
+            if (!kvs_aof_is_replaying())
                 kvs_aof_append(3, tokens);
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
@@ -280,7 +285,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_RSET: {
         int ret = kvs_rbtree_set(&global_rbtree, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!aof_replaying)
+            if (!kvs_aof_is_replaying())
                 kvs_aof_append(3, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
@@ -305,7 +310,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_RDEL: {
         int ret = kvs_rbtree_del(&global_rbtree, tokens[1]);
         if (ret == 0) {
-            if (!aof_replaying)
+            if (!kvs_aof_is_replaying())
                 kvs_aof_append(2, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
@@ -319,7 +324,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_RMOD: {
         int ret = kvs_rbtree_mod(&global_rbtree, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!aof_replaying)
+            if (!kvs_aof_is_replaying())
                 kvs_aof_append(3, tokens);
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
@@ -365,7 +370,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_HSET: {
         int ret = kvs_hash_set(&global_hash, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!aof_replaying)
+            if (!kvs_aof_is_replaying())
                 kvs_aof_append(3, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
@@ -390,7 +395,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_HDEL: {
         int ret = kvs_hash_del(&global_hash, tokens[1]);
         if (ret == 0) {
-            if (!aof_replaying)
+            if (!kvs_aof_is_replaying())
                 kvs_aof_append(2, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
@@ -404,7 +409,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_HMOD: {
         int ret = kvs_hash_mod(&global_hash, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!aof_replaying)
+            if (!kvs_aof_is_replaying())
                 kvs_aof_append(3, tokens);
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
@@ -452,7 +457,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_SSET: {
         int ret = kvs_skiptable_set(&global_skiptable, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!aof_replaying)
+            if (!kvs_aof_is_replaying())
                 kvs_aof_append(3, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
@@ -477,7 +482,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_SDEL: {
         int ret = kvs_skiptable_del(&global_skiptable, tokens[1]);
         if (ret == 0) {
-            if (!aof_replaying)
+            if (!kvs_aof_is_replaying())
                 kvs_aof_append(2, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
@@ -491,7 +496,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_SMOD: {
         int ret = kvs_skiptable_mod(&global_skiptable, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!aof_replaying)
+            if (!kvs_aof_is_replaying())
                 kvs_aof_append(3, tokens);
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
@@ -532,6 +537,26 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     }
 
 #endif
+
+    case KVS_CMD_LOAD_AOF: {
+        int ret = kvs_aof_replay("data/append.aof");
+        if (ret == 0) {
+            length = snprintf(response, response_size, "+OK\r\n");
+        } else {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+        }
+        break;
+    }
+
+    case KVS_CMD_CLEAR_AOF: {
+        int ret = kvs_aof_clear();
+        if (ret == 0) {
+            length = snprintf(response, response_size, "+OK\r\n");
+        } else {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+        }
+        break;
+    }
 
     default: {
         break;
@@ -648,13 +673,13 @@ int main(int argc, char* argv[]) {
 
     init_kvengine();
 
-    // // 初始化 AOF
-    // if (kvs_aof_init("data/append.aof") != 0) {
-    //     fprintf(stderr, "Failed to initialize AOF\n");
+    // 初始化 AOF
+    if (kvs_aof_init("data/append.aof") != 0) {
+        fprintf(stderr, "Failed to initialize AOF\n");
 
-    //     destroy_kvengine();
-    //     return -1;
-    // }
+        destroy_kvengine();
+        return -1;
+    }
 
     switch (select_network_architecture) { //
     case NETWORK_REACTOR: {
@@ -681,6 +706,6 @@ int main(int argc, char* argv[]) {
     }
     }
 
-    // kvs_aof_close();
+    kvs_aof_close();
     destroy_kvengine();
 }

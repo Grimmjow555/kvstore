@@ -15,9 +15,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(kvstore
     kvstore.cpp
 
-    proactor.cpp
-    reactor.cpp
-    ntyco.c          # 纯 C 源文件
+    network/proactor.cpp
+    network/reactor.cpp
+    network/ntyco.c          # 纯 C 源文件
 
     kvs_array.cpp
     kvs_rbtree.cpp

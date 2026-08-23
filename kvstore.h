@@ -41,6 +41,9 @@ int kvs_array_del(kvs_array_t* inst, char* key);
 int kvs_array_mod(kvs_array_t* inst, char* key, char* value);
 int kvs_array_exist(kvs_array_t* inst, char* key);
 
+int kvs_array_save(kvs_array_t* array, const char* filename);
+int kvs_array_load(kvs_array_t* array, const char* filename);
+
 #endif
 
 #if ENABLE_RBTREE
@@ -73,11 +76,15 @@ typedef struct _rbtree kvs_rbtree_t;
 
 int kvs_rbtree_create(kvs_rbtree_t* inst);
 void kvs_rbtree_destroy(kvs_rbtree_t* inst);
+
 char* kvs_rbtree_get(kvs_rbtree_t* inst, char* key);
 int kvs_rbtree_set(kvs_rbtree_t* inst, char* key, char* value);
 int kvs_rbtree_del(kvs_rbtree_t* inst, char* key);
 int kvs_rbtree_mod(kvs_rbtree_t* inst, char* key, char* value);
 int kvs_rbtree_exist(kvs_rbtree_t* inst, char* key);
+
+int kvs_rbtree_save(kvs_rbtree_t* tree, const char* filename);
+int kvs_rbtree_load(kvs_rbtree_t* tree, const char* filename);
 
 #endif
 
@@ -114,11 +121,15 @@ typedef struct hashtable_s kvs_hash_t;
 
 int kvs_hash_create(kvs_hash_t* hash);
 void kvs_hash_destroy(kvs_hash_t* hash);
+
 int kvs_hash_set(hashtable_t* hash, char* key, char* value);
 char* kvs_hash_get(kvs_hash_t* hash, char* key);
 int kvs_hash_mod(kvs_hash_t* hash, char* key, char* value);
 int kvs_hash_del(kvs_hash_t* hash, char* key);
 int kvs_hash_exist(kvs_hash_t* hash, char* key);
+
+int kvs_hash_save(kvs_hash_t* hash, const char* filename);
+int kvs_hash_load(kvs_hash_t* hash, const char* filename);
 
 #endif
 
@@ -152,20 +163,8 @@ char* kvs_skiptable_get(kvs_skiptable_t* skiptable, char* key);
 int kvs_skiptable_mod(kvs_skiptable_t* skiptable, char* key, char* value);
 int kvs_skiptable_del(kvs_skiptable_t* skiptable, char* key);
 int kvs_skiptable_exist(kvs_skiptable_t* skiptable, char* key);
-#endif
-
-int kvs_array_save(kvs_array_t* array, const char* filename);
-int kvs_array_load(kvs_array_t* array, const char* filename);
-
-int kvs_rbtree_save(kvs_rbtree_t* tree, const char* filename);
-int kvs_rbtree_load(kvs_rbtree_t* tree, const char* filename);
-
-int kvs_hash_save(kvs_hash_t* hash, const char* filename);
-int kvs_hash_load(kvs_hash_t* hash, const char* filename);
 
 int kvs_skiptable_save(kvs_skiptable_t* skiptable, const char* filename);
 int kvs_skiptable_load(kvs_skiptable_t* skiptable, const char* filename);
 
-int kvs_aof_init(const char* filename);
-int kvs_aof_append(int argc, char* argv[]);
-int kvs_aof_close();
+#endif

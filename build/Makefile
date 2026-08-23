@@ -273,29 +273,77 @@ kvstore.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvstore.cpp.s
 .PHONY : kvstore.cpp.s
 
-ntyco.o: ntyco.c.o
-.PHONY : ntyco.o
+network/ntyco.o: network/ntyco.c.o
+.PHONY : network/ntyco.o
 
 # target to build an object file
-ntyco.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/ntyco.c.o
-.PHONY : ntyco.c.o
+network/ntyco.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/network/ntyco.c.o
+.PHONY : network/ntyco.c.o
 
-ntyco.i: ntyco.c.i
-.PHONY : ntyco.i
+network/ntyco.i: network/ntyco.c.i
+.PHONY : network/ntyco.i
 
 # target to preprocess a source file
-ntyco.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/ntyco.c.i
-.PHONY : ntyco.c.i
+network/ntyco.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/network/ntyco.c.i
+.PHONY : network/ntyco.c.i
 
-ntyco.s: ntyco.c.s
-.PHONY : ntyco.s
+network/ntyco.s: network/ntyco.c.s
+.PHONY : network/ntyco.s
 
 # target to generate assembly for a file
-ntyco.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/ntyco.c.s
-.PHONY : ntyco.c.s
+network/ntyco.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/network/ntyco.c.s
+.PHONY : network/ntyco.c.s
+
+network/proactor.o: network/proactor.cpp.o
+.PHONY : network/proactor.o
+
+# target to build an object file
+network/proactor.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/network/proactor.cpp.o
+.PHONY : network/proactor.cpp.o
+
+network/proactor.i: network/proactor.cpp.i
+.PHONY : network/proactor.i
+
+# target to preprocess a source file
+network/proactor.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/network/proactor.cpp.i
+.PHONY : network/proactor.cpp.i
+
+network/proactor.s: network/proactor.cpp.s
+.PHONY : network/proactor.s
+
+# target to generate assembly for a file
+network/proactor.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/network/proactor.cpp.s
+.PHONY : network/proactor.cpp.s
+
+network/reactor.o: network/reactor.cpp.o
+.PHONY : network/reactor.o
+
+# target to build an object file
+network/reactor.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/network/reactor.cpp.o
+.PHONY : network/reactor.cpp.o
+
+network/reactor.i: network/reactor.cpp.i
+.PHONY : network/reactor.i
+
+# target to preprocess a source file
+network/reactor.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/network/reactor.cpp.i
+.PHONY : network/reactor.cpp.i
+
+network/reactor.s: network/reactor.cpp.s
+.PHONY : network/reactor.s
+
+# target to generate assembly for a file
+network/reactor.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/network/reactor.cpp.s
+.PHONY : network/reactor.cpp.s
 
 persistence.o: persistence.cpp.o
 .PHONY : persistence.o
@@ -320,54 +368,6 @@ persistence.s: persistence.cpp.s
 persistence.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/persistence.cpp.s
 .PHONY : persistence.cpp.s
-
-proactor.o: proactor.cpp.o
-.PHONY : proactor.o
-
-# target to build an object file
-proactor.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/proactor.cpp.o
-.PHONY : proactor.cpp.o
-
-proactor.i: proactor.cpp.i
-.PHONY : proactor.i
-
-# target to preprocess a source file
-proactor.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/proactor.cpp.i
-.PHONY : proactor.cpp.i
-
-proactor.s: proactor.cpp.s
-.PHONY : proactor.s
-
-# target to generate assembly for a file
-proactor.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/proactor.cpp.s
-.PHONY : proactor.cpp.s
-
-reactor.o: reactor.cpp.o
-.PHONY : reactor.o
-
-# target to build an object file
-reactor.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/reactor.cpp.o
-.PHONY : reactor.cpp.o
-
-reactor.i: reactor.cpp.i
-.PHONY : reactor.i
-
-# target to preprocess a source file
-reactor.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/reactor.cpp.i
-.PHONY : reactor.cpp.i
-
-reactor.s: reactor.cpp.s
-.PHONY : reactor.s
-
-# target to generate assembly for a file
-reactor.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/reactor.cpp.s
-.PHONY : reactor.cpp.s
 
 # Help Target
 help:
@@ -396,18 +396,18 @@ help:
 	@echo "... kvstore.o"
 	@echo "... kvstore.i"
 	@echo "... kvstore.s"
-	@echo "... ntyco.o"
-	@echo "... ntyco.i"
-	@echo "... ntyco.s"
+	@echo "... network/ntyco.o"
+	@echo "... network/ntyco.i"
+	@echo "... network/ntyco.s"
+	@echo "... network/proactor.o"
+	@echo "... network/proactor.i"
+	@echo "... network/proactor.s"
+	@echo "... network/reactor.o"
+	@echo "... network/reactor.i"
+	@echo "... network/reactor.s"
 	@echo "... persistence.o"
 	@echo "... persistence.i"
 	@echo "... persistence.s"
-	@echo "... proactor.o"
-	@echo "... proactor.i"
-	@echo "... proactor.s"
-	@echo "... reactor.o"
-	@echo "... reactor.i"
-	@echo "... reactor.s"
 .PHONY : help
 
 

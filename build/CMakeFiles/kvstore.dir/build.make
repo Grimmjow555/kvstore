@@ -83,47 +83,47 @@ CMakeFiles/kvstore.dir/kvstore.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/kvstore.cpp.s"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/kvstore.cpp -o CMakeFiles/kvstore.dir/kvstore.cpp.s
 
-CMakeFiles/kvstore.dir/proactor.cpp.o: CMakeFiles/kvstore.dir/flags.make
-CMakeFiles/kvstore.dir/proactor.cpp.o: ../proactor.cpp
-CMakeFiles/kvstore.dir/proactor.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building CXX object CMakeFiles/kvstore.dir/proactor.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/proactor.cpp.o -MF CMakeFiles/kvstore.dir/proactor.cpp.o.d -o CMakeFiles/kvstore.dir/proactor.cpp.o -c /home/Share/VScode/12.kvstore/proactor.cpp
+CMakeFiles/kvstore.dir/network/proactor.cpp.o: CMakeFiles/kvstore.dir/flags.make
+CMakeFiles/kvstore.dir/network/proactor.cpp.o: ../network/proactor.cpp
+CMakeFiles/kvstore.dir/network/proactor.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building CXX object CMakeFiles/kvstore.dir/network/proactor.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/network/proactor.cpp.o -MF CMakeFiles/kvstore.dir/network/proactor.cpp.o.d -o CMakeFiles/kvstore.dir/network/proactor.cpp.o -c /home/Share/VScode/12.kvstore/network/proactor.cpp
 
-CMakeFiles/kvstore.dir/proactor.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/proactor.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/proactor.cpp > CMakeFiles/kvstore.dir/proactor.cpp.i
+CMakeFiles/kvstore.dir/network/proactor.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/network/proactor.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/network/proactor.cpp > CMakeFiles/kvstore.dir/network/proactor.cpp.i
 
-CMakeFiles/kvstore.dir/proactor.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/proactor.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/proactor.cpp -o CMakeFiles/kvstore.dir/proactor.cpp.s
+CMakeFiles/kvstore.dir/network/proactor.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/network/proactor.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/network/proactor.cpp -o CMakeFiles/kvstore.dir/network/proactor.cpp.s
 
-CMakeFiles/kvstore.dir/reactor.cpp.o: CMakeFiles/kvstore.dir/flags.make
-CMakeFiles/kvstore.dir/reactor.cpp.o: ../reactor.cpp
-CMakeFiles/kvstore.dir/reactor.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building CXX object CMakeFiles/kvstore.dir/reactor.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/reactor.cpp.o -MF CMakeFiles/kvstore.dir/reactor.cpp.o.d -o CMakeFiles/kvstore.dir/reactor.cpp.o -c /home/Share/VScode/12.kvstore/reactor.cpp
+CMakeFiles/kvstore.dir/network/reactor.cpp.o: CMakeFiles/kvstore.dir/flags.make
+CMakeFiles/kvstore.dir/network/reactor.cpp.o: ../network/reactor.cpp
+CMakeFiles/kvstore.dir/network/reactor.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building CXX object CMakeFiles/kvstore.dir/network/reactor.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/network/reactor.cpp.o -MF CMakeFiles/kvstore.dir/network/reactor.cpp.o.d -o CMakeFiles/kvstore.dir/network/reactor.cpp.o -c /home/Share/VScode/12.kvstore/network/reactor.cpp
 
-CMakeFiles/kvstore.dir/reactor.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/reactor.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/reactor.cpp > CMakeFiles/kvstore.dir/reactor.cpp.i
+CMakeFiles/kvstore.dir/network/reactor.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/network/reactor.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/network/reactor.cpp > CMakeFiles/kvstore.dir/network/reactor.cpp.i
 
-CMakeFiles/kvstore.dir/reactor.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/reactor.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/reactor.cpp -o CMakeFiles/kvstore.dir/reactor.cpp.s
+CMakeFiles/kvstore.dir/network/reactor.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/network/reactor.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/network/reactor.cpp -o CMakeFiles/kvstore.dir/network/reactor.cpp.s
 
-CMakeFiles/kvstore.dir/ntyco.c.o: CMakeFiles/kvstore.dir/flags.make
-CMakeFiles/kvstore.dir/ntyco.c.o: ../ntyco.c
-CMakeFiles/kvstore.dir/ntyco.c.o: CMakeFiles/kvstore.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building C object CMakeFiles/kvstore.dir/ntyco.c.o"
-	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/kvstore.dir/ntyco.c.o -MF CMakeFiles/kvstore.dir/ntyco.c.o.d -o CMakeFiles/kvstore.dir/ntyco.c.o -c /home/Share/VScode/12.kvstore/ntyco.c
+CMakeFiles/kvstore.dir/network/ntyco.c.o: CMakeFiles/kvstore.dir/flags.make
+CMakeFiles/kvstore.dir/network/ntyco.c.o: ../network/ntyco.c
+CMakeFiles/kvstore.dir/network/ntyco.c.o: CMakeFiles/kvstore.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building C object CMakeFiles/kvstore.dir/network/ntyco.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/kvstore.dir/network/ntyco.c.o -MF CMakeFiles/kvstore.dir/network/ntyco.c.o.d -o CMakeFiles/kvstore.dir/network/ntyco.c.o -c /home/Share/VScode/12.kvstore/network/ntyco.c
 
-CMakeFiles/kvstore.dir/ntyco.c.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing C source to CMakeFiles/kvstore.dir/ntyco.c.i"
-	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/Share/VScode/12.kvstore/ntyco.c > CMakeFiles/kvstore.dir/ntyco.c.i
+CMakeFiles/kvstore.dir/network/ntyco.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing C source to CMakeFiles/kvstore.dir/network/ntyco.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/Share/VScode/12.kvstore/network/ntyco.c > CMakeFiles/kvstore.dir/network/ntyco.c.i
 
-CMakeFiles/kvstore.dir/ntyco.c.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling C source to assembly CMakeFiles/kvstore.dir/ntyco.c.s"
-	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/Share/VScode/12.kvstore/ntyco.c -o CMakeFiles/kvstore.dir/ntyco.c.s
+CMakeFiles/kvstore.dir/network/ntyco.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling C source to assembly CMakeFiles/kvstore.dir/network/ntyco.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/Share/VScode/12.kvstore/network/ntyco.c -o CMakeFiles/kvstore.dir/network/ntyco.c.s
 
 CMakeFiles/kvstore.dir/kvs_array.cpp.o: CMakeFiles/kvstore.dir/flags.make
 CMakeFiles/kvstore.dir/kvs_array.cpp.o: ../kvs_array.cpp
@@ -212,9 +212,9 @@ CMakeFiles/kvstore.dir/aof.cpp.s: cmake_force
 # Object files for target kvstore
 kvstore_OBJECTS = \
 "CMakeFiles/kvstore.dir/kvstore.cpp.o" \
-"CMakeFiles/kvstore.dir/proactor.cpp.o" \
-"CMakeFiles/kvstore.dir/reactor.cpp.o" \
-"CMakeFiles/kvstore.dir/ntyco.c.o" \
+"CMakeFiles/kvstore.dir/network/proactor.cpp.o" \
+"CMakeFiles/kvstore.dir/network/reactor.cpp.o" \
+"CMakeFiles/kvstore.dir/network/ntyco.c.o" \
 "CMakeFiles/kvstore.dir/kvs_array.cpp.o" \
 "CMakeFiles/kvstore.dir/kvs_rbtree.cpp.o" \
 "CMakeFiles/kvstore.dir/kvs_hash.cpp.o" \
@@ -226,9 +226,9 @@ kvstore_OBJECTS = \
 kvstore_EXTERNAL_OBJECTS =
 
 kvstore: CMakeFiles/kvstore.dir/kvstore.cpp.o
-kvstore: CMakeFiles/kvstore.dir/proactor.cpp.o
-kvstore: CMakeFiles/kvstore.dir/reactor.cpp.o
-kvstore: CMakeFiles/kvstore.dir/ntyco.c.o
+kvstore: CMakeFiles/kvstore.dir/network/proactor.cpp.o
+kvstore: CMakeFiles/kvstore.dir/network/reactor.cpp.o
+kvstore: CMakeFiles/kvstore.dir/network/ntyco.c.o
 kvstore: CMakeFiles/kvstore.dir/kvs_array.cpp.o
 kvstore: CMakeFiles/kvstore.dir/kvs_rbtree.cpp.o
 kvstore: CMakeFiles/kvstore.dir/kvs_hash.cpp.o
