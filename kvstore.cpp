@@ -18,12 +18,6 @@ extern kvs_hash_t global_hash;
 extern kvs_skiptable_t global_skiptable;
 #endif
 
-#define AOF_ENABLE 1
-
-#if AOF_ENABLE
-
-#endif
-
 void* kvs_malloc(size_t size) { return malloc(size); }
 
 void kvs_free(void* ptr) { return free(ptr); }
@@ -538,6 +532,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
 
 #endif
 
+#if AOF_ENABLE
     case KVS_CMD_LOAD_AOF: {
         int ret = kvs_aof_replay("data/append.aof");
         if (ret == 0) {
@@ -557,6 +552,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         }
         break;
     }
+#endif
 
     default: {
         break;
@@ -673,6 +669,7 @@ int main(int argc, char* argv[]) {
 
     init_kvengine();
 
+#if AOF_ENABLE
     // 初始化 AOF
     if (kvs_aof_init("data/append.aof") != 0) {
         fprintf(stderr, "Failed to initialize AOF\n");
@@ -680,6 +677,7 @@ int main(int argc, char* argv[]) {
         destroy_kvengine();
         return -1;
     }
+#endif
 
     switch (select_network_architecture) { //
     case NETWORK_REACTOR: {
@@ -705,7 +703,8 @@ int main(int argc, char* argv[]) {
         break;
     }
     }
-
+#if AOF_ENABLE
     kvs_aof_close();
+#endif
     destroy_kvengine();
 }

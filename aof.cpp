@@ -1,6 +1,5 @@
+#include "aof.h"
 #include "kvstore.h"
-
-#define AOF_ENABLE 1
 
 extern int kvs_filter_protocol(char* tokens[], int count, char* response, int response_size);
 extern char** resp_parse_command(char* buffer, int* argc, int* consumed);
