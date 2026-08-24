@@ -1,4 +1,5 @@
 #pragma once
+
 #include <vector>
 
 #define MAX_ALLOWED_LEN 1024 * 1024 // 1MB

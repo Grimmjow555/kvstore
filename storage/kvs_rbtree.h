@@ -1,3 +1,5 @@
+#pragma once
+
 #define ENABLE_RBTREE 1
 
 #if ENABLE_RBTREE

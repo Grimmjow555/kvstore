@@ -1,3 +1,5 @@
+#pragma once
+
 #define ENABLE_HASH 1
 
 #if ENABLE_HASH

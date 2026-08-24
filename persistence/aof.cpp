@@ -56,6 +56,7 @@ int kvs_aof_close() {
     return 0;
 }
 
+//读取增量文件，执行命令
 int kvs_aof_replay(const char* filename) {
 
     FILE* fp = fopen(filename, "r");
@@ -117,6 +118,7 @@ int kvs_aof_replay(const char* filename) {
 
 int kvs_aof_is_replaying() { return aof_replaying; }
 
+//清除aof文件
 int kvs_aof_clear() {
     if (aof_fp == NULL || aof_filename[0] == '\0') {
         return -1;

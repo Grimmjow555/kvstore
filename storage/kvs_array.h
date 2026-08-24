@@ -1,3 +1,5 @@
+#pragma once
+
 #define ENABLE_ARRAY 1
 
 #if ENABLE_ARRAY

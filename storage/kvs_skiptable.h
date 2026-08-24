@@ -1,3 +1,5 @@
+#pragma once
+
 #define ENABLE_SKIPTABLE 1
 
 #if ENABLE_SKIPTABLE

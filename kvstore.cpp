@@ -259,7 +259,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         break;
     }
     case (KVS_CMD_SAVE): {
-        int ret = kvs_array_save(&global_array, "data/array.data");
+        int ret = kvs_array_save(&global_array, "../data/array.data");
         if (ret == 0) {
             length = snprintf(response, response_size, "+OK\r\n");
         } else {
@@ -269,7 +269,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     }
 
     case (KVS_CMD_LOAD): {
-        int ret = kvs_array_load(&global_array, "data/array.data");
+        int ret = kvs_array_load(&global_array, "../data/array.data");
         if (ret == 0) {
             length = snprintf(response, response_size, "+OK\r\n");
         } else {
@@ -345,7 +345,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         break;
     }
     case (KVS_CMD_RSAVE): {
-        int ret = kvs_rbtree_save(&global_rbtree, "data/rbtree.data");
+        int ret = kvs_rbtree_save(&global_rbtree, "../data/rbtree.data");
         if (ret == 0) {
             length = snprintf(response, response_size, "+OK\r\n");
         } else {
@@ -354,7 +354,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         break;
     }
     case (KVS_CMD_RLOAD): {
-        int ret = kvs_rbtree_load(&global_rbtree, "data/rbtree.data");
+        int ret = kvs_rbtree_load(&global_rbtree, "../data/rbtree.data");
         if (ret == 0) {
             length = snprintf(response, response_size, "+OK\r\n");
         } else {
@@ -430,7 +430,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         break;
     }
     case (KVS_CMD_HSAVE): {
-        int ret = kvs_hash_save(&global_hash, "data/hash.data");
+        int ret = kvs_hash_save(&global_hash, "../data/hash.data");
         if (ret == 0) {
             length = snprintf(response, response_size, "+OK\r\n");
         } else {
@@ -440,7 +440,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     }
 
     case (KVS_CMD_HLOAD): {
-        int ret = kvs_hash_load(&global_hash, "data/hash.data");
+        int ret = kvs_hash_load(&global_hash, "../data/hash.data");
         if (ret == 0) {
             length = snprintf(response, response_size, "+OK\r\n");
         } else {
@@ -517,7 +517,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         break;
     }
     case (KVS_CMD_SSAVE): {
-        int ret = kvs_skiptable_save(&global_skiptable, "data/skiptable.data");
+        int ret = kvs_skiptable_save(&global_skiptable, "../data/skiptable.data");
         if (ret == 0) {
             length = snprintf(response, response_size, "+OK\r\n");
         } else {
@@ -526,7 +526,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         break;
     }
     case (KVS_CMD_SLOAD): {
-        int ret = kvs_skiptable_load(&global_skiptable, "data/skiptable.data");
+        int ret = kvs_skiptable_load(&global_skiptable, "../data/skiptable.data");
         if (ret == 0) {
             length = snprintf(response, response_size, "+OK\r\n");
         } else {
@@ -539,7 +539,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
 
 #if AOF_ENABLE
     case KVS_CMD_LOAD_AOF: {
-        int ret = kvs_aof_replay("data/append.aof");
+        int ret = kvs_aof_replay("../data/append.aof");
         if (ret == 0) {
             length = snprintf(response, response_size, "+OK\r\n");
         } else {
@@ -676,7 +676,7 @@ int main(int argc, char* argv[]) {
 
 #if AOF_ENABLE
     // 初始化 AOF
-    if (kvs_aof_init("data/append.aof") != 0) {
+    if (kvs_aof_init("../data/append.aof") != 0) {
         fprintf(stderr, "Failed to initialize AOF\n");
 
         destroy_kvengine();

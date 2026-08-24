@@ -1,3 +1,5 @@
+#pragma once
+
 #define AOF_ENABLE 1
 
 int kvs_aof_init(const char* filename);

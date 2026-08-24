@@ -37,4 +37,5 @@ target_link_libraries(kvstore
     uring
     ntyco
     jemalloc
+    ${CMAKE_DL_LIBS}
 )
