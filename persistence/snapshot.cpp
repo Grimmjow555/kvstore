@@ -1,4 +1,9 @@
-#include "kvstore.h"
+#include "../kvstore.h"
+#include "../storage/kvs_array.h"
+#include "../storage/kvs_hash.h"
+#include "../storage/kvs_rbtree.h"
+#include "../storage/kvs_skiptable.h"
+#include <cstring>
 
 #define KVS_FILE_MAGIC "KVSDB01"
 #define KVS_FILE_VERSION 1
@@ -863,6 +868,7 @@ int kvs_hash_load(kvs_hash_t* hash, const char* filename) {
     return 0;
 }
 #endif
+
 #if ENABLE_SKIPTABLE
 static int kvs_skiptable_save_node(FILE* fp, Node* node) {
     if (node == NULL) {

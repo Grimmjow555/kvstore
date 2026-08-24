@@ -1,6 +1,11 @@
-#include "aof.h"
 #include "kvstore.h"
 #include "network/network.h"
+#include "persistence/aof.h"
+#include "storage/kvs_array.h"
+#include "storage/kvs_hash.h"
+#include "storage/kvs_rbtree.h"
+#include "storage/kvs_skiptable.h"
+#include <cstring>
 
 #if ENABLE_ARRAY
 extern kvs_array_t global_array;

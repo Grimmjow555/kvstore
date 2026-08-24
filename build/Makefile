@@ -129,126 +129,6 @@ kvstore/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/build
 .PHONY : kvstore/fast
 
-aof.o: aof.cpp.o
-.PHONY : aof.o
-
-# target to build an object file
-aof.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/aof.cpp.o
-.PHONY : aof.cpp.o
-
-aof.i: aof.cpp.i
-.PHONY : aof.i
-
-# target to preprocess a source file
-aof.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/aof.cpp.i
-.PHONY : aof.cpp.i
-
-aof.s: aof.cpp.s
-.PHONY : aof.s
-
-# target to generate assembly for a file
-aof.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/aof.cpp.s
-.PHONY : aof.cpp.s
-
-kvs_array.o: kvs_array.cpp.o
-.PHONY : kvs_array.o
-
-# target to build an object file
-kvs_array.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_array.cpp.o
-.PHONY : kvs_array.cpp.o
-
-kvs_array.i: kvs_array.cpp.i
-.PHONY : kvs_array.i
-
-# target to preprocess a source file
-kvs_array.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_array.cpp.i
-.PHONY : kvs_array.cpp.i
-
-kvs_array.s: kvs_array.cpp.s
-.PHONY : kvs_array.s
-
-# target to generate assembly for a file
-kvs_array.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_array.cpp.s
-.PHONY : kvs_array.cpp.s
-
-kvs_hash.o: kvs_hash.cpp.o
-.PHONY : kvs_hash.o
-
-# target to build an object file
-kvs_hash.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_hash.cpp.o
-.PHONY : kvs_hash.cpp.o
-
-kvs_hash.i: kvs_hash.cpp.i
-.PHONY : kvs_hash.i
-
-# target to preprocess a source file
-kvs_hash.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_hash.cpp.i
-.PHONY : kvs_hash.cpp.i
-
-kvs_hash.s: kvs_hash.cpp.s
-.PHONY : kvs_hash.s
-
-# target to generate assembly for a file
-kvs_hash.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_hash.cpp.s
-.PHONY : kvs_hash.cpp.s
-
-kvs_rbtree.o: kvs_rbtree.cpp.o
-.PHONY : kvs_rbtree.o
-
-# target to build an object file
-kvs_rbtree.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_rbtree.cpp.o
-.PHONY : kvs_rbtree.cpp.o
-
-kvs_rbtree.i: kvs_rbtree.cpp.i
-.PHONY : kvs_rbtree.i
-
-# target to preprocess a source file
-kvs_rbtree.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_rbtree.cpp.i
-.PHONY : kvs_rbtree.cpp.i
-
-kvs_rbtree.s: kvs_rbtree.cpp.s
-.PHONY : kvs_rbtree.s
-
-# target to generate assembly for a file
-kvs_rbtree.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_rbtree.cpp.s
-.PHONY : kvs_rbtree.cpp.s
-
-kvs_skiptable.o: kvs_skiptable.cpp.o
-.PHONY : kvs_skiptable.o
-
-# target to build an object file
-kvs_skiptable.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_skiptable.cpp.o
-.PHONY : kvs_skiptable.cpp.o
-
-kvs_skiptable.i: kvs_skiptable.cpp.i
-.PHONY : kvs_skiptable.i
-
-# target to preprocess a source file
-kvs_skiptable.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_skiptable.cpp.i
-.PHONY : kvs_skiptable.cpp.i
-
-kvs_skiptable.s: kvs_skiptable.cpp.s
-.PHONY : kvs_skiptable.s
-
-# target to generate assembly for a file
-kvs_skiptable.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/kvs_skiptable.cpp.s
-.PHONY : kvs_skiptable.cpp.s
-
 kvstore.o: kvstore.cpp.o
 .PHONY : kvstore.o
 
@@ -345,29 +225,149 @@ network/reactor.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/network/reactor.cpp.s
 .PHONY : network/reactor.cpp.s
 
-persistence.o: persistence.cpp.o
-.PHONY : persistence.o
+persistence/aof.o: persistence/aof.cpp.o
+.PHONY : persistence/aof.o
 
 # target to build an object file
-persistence.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/persistence.cpp.o
-.PHONY : persistence.cpp.o
+persistence/aof.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/persistence/aof.cpp.o
+.PHONY : persistence/aof.cpp.o
 
-persistence.i: persistence.cpp.i
-.PHONY : persistence.i
+persistence/aof.i: persistence/aof.cpp.i
+.PHONY : persistence/aof.i
 
 # target to preprocess a source file
-persistence.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/persistence.cpp.i
-.PHONY : persistence.cpp.i
+persistence/aof.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/persistence/aof.cpp.i
+.PHONY : persistence/aof.cpp.i
 
-persistence.s: persistence.cpp.s
-.PHONY : persistence.s
+persistence/aof.s: persistence/aof.cpp.s
+.PHONY : persistence/aof.s
 
 # target to generate assembly for a file
-persistence.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/persistence.cpp.s
-.PHONY : persistence.cpp.s
+persistence/aof.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/persistence/aof.cpp.s
+.PHONY : persistence/aof.cpp.s
+
+persistence/snapshot.o: persistence/snapshot.cpp.o
+.PHONY : persistence/snapshot.o
+
+# target to build an object file
+persistence/snapshot.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o
+.PHONY : persistence/snapshot.cpp.o
+
+persistence/snapshot.i: persistence/snapshot.cpp.i
+.PHONY : persistence/snapshot.i
+
+# target to preprocess a source file
+persistence/snapshot.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/persistence/snapshot.cpp.i
+.PHONY : persistence/snapshot.cpp.i
+
+persistence/snapshot.s: persistence/snapshot.cpp.s
+.PHONY : persistence/snapshot.s
+
+# target to generate assembly for a file
+persistence/snapshot.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/persistence/snapshot.cpp.s
+.PHONY : persistence/snapshot.cpp.s
+
+storage/kvs_array.o: storage/kvs_array.cpp.o
+.PHONY : storage/kvs_array.o
+
+# target to build an object file
+storage/kvs_array.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o
+.PHONY : storage/kvs_array.cpp.o
+
+storage/kvs_array.i: storage/kvs_array.cpp.i
+.PHONY : storage/kvs_array.i
+
+# target to preprocess a source file
+storage/kvs_array.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/storage/kvs_array.cpp.i
+.PHONY : storage/kvs_array.cpp.i
+
+storage/kvs_array.s: storage/kvs_array.cpp.s
+.PHONY : storage/kvs_array.s
+
+# target to generate assembly for a file
+storage/kvs_array.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/storage/kvs_array.cpp.s
+.PHONY : storage/kvs_array.cpp.s
+
+storage/kvs_hash.o: storage/kvs_hash.cpp.o
+.PHONY : storage/kvs_hash.o
+
+# target to build an object file
+storage/kvs_hash.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.o
+.PHONY : storage/kvs_hash.cpp.o
+
+storage/kvs_hash.i: storage/kvs_hash.cpp.i
+.PHONY : storage/kvs_hash.i
+
+# target to preprocess a source file
+storage/kvs_hash.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.i
+.PHONY : storage/kvs_hash.cpp.i
+
+storage/kvs_hash.s: storage/kvs_hash.cpp.s
+.PHONY : storage/kvs_hash.s
+
+# target to generate assembly for a file
+storage/kvs_hash.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.s
+.PHONY : storage/kvs_hash.cpp.s
+
+storage/kvs_rbtree.o: storage/kvs_rbtree.cpp.o
+.PHONY : storage/kvs_rbtree.o
+
+# target to build an object file
+storage/kvs_rbtree.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.o
+.PHONY : storage/kvs_rbtree.cpp.o
+
+storage/kvs_rbtree.i: storage/kvs_rbtree.cpp.i
+.PHONY : storage/kvs_rbtree.i
+
+# target to preprocess a source file
+storage/kvs_rbtree.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.i
+.PHONY : storage/kvs_rbtree.cpp.i
+
+storage/kvs_rbtree.s: storage/kvs_rbtree.cpp.s
+.PHONY : storage/kvs_rbtree.s
+
+# target to generate assembly for a file
+storage/kvs_rbtree.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.s
+.PHONY : storage/kvs_rbtree.cpp.s
+
+storage/kvs_skiptable.o: storage/kvs_skiptable.cpp.o
+.PHONY : storage/kvs_skiptable.o
+
+# target to build an object file
+storage/kvs_skiptable.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.o
+.PHONY : storage/kvs_skiptable.cpp.o
+
+storage/kvs_skiptable.i: storage/kvs_skiptable.cpp.i
+.PHONY : storage/kvs_skiptable.i
+
+# target to preprocess a source file
+storage/kvs_skiptable.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.i
+.PHONY : storage/kvs_skiptable.cpp.i
+
+storage/kvs_skiptable.s: storage/kvs_skiptable.cpp.s
+.PHONY : storage/kvs_skiptable.s
+
+# target to generate assembly for a file
+storage/kvs_skiptable.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.s
+.PHONY : storage/kvs_skiptable.cpp.s
 
 # Help Target
 help:
@@ -378,21 +378,6 @@ help:
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
 	@echo "... kvstore"
-	@echo "... aof.o"
-	@echo "... aof.i"
-	@echo "... aof.s"
-	@echo "... kvs_array.o"
-	@echo "... kvs_array.i"
-	@echo "... kvs_array.s"
-	@echo "... kvs_hash.o"
-	@echo "... kvs_hash.i"
-	@echo "... kvs_hash.s"
-	@echo "... kvs_rbtree.o"
-	@echo "... kvs_rbtree.i"
-	@echo "... kvs_rbtree.s"
-	@echo "... kvs_skiptable.o"
-	@echo "... kvs_skiptable.i"
-	@echo "... kvs_skiptable.s"
 	@echo "... kvstore.o"
 	@echo "... kvstore.i"
 	@echo "... kvstore.s"
@@ -405,9 +390,24 @@ help:
 	@echo "... network/reactor.o"
 	@echo "... network/reactor.i"
 	@echo "... network/reactor.s"
-	@echo "... persistence.o"
-	@echo "... persistence.i"
-	@echo "... persistence.s"
+	@echo "... persistence/aof.o"
+	@echo "... persistence/aof.i"
+	@echo "... persistence/aof.s"
+	@echo "... persistence/snapshot.o"
+	@echo "... persistence/snapshot.i"
+	@echo "... persistence/snapshot.s"
+	@echo "... storage/kvs_array.o"
+	@echo "... storage/kvs_array.i"
+	@echo "... storage/kvs_array.s"
+	@echo "... storage/kvs_hash.o"
+	@echo "... storage/kvs_hash.i"
+	@echo "... storage/kvs_hash.s"
+	@echo "... storage/kvs_rbtree.o"
+	@echo "... storage/kvs_rbtree.i"
+	@echo "... storage/kvs_rbtree.s"
+	@echo "... storage/kvs_skiptable.o"
+	@echo "... storage/kvs_skiptable.i"
+	@echo "... storage/kvs_skiptable.s"
 .PHONY : help
 
 

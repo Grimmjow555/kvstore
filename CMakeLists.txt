@@ -19,13 +19,13 @@ add_executable(kvstore
     network/reactor.cpp
     network/ntyco.c          # 纯 C 源文件
 
-    kvs_array.cpp
-    kvs_rbtree.cpp
-    kvs_hash.cpp
-    kvs_skiptable.cpp
+    storage/kvs_array.cpp
+    storage/kvs_rbtree.cpp
+    storage/kvs_hash.cpp
+    storage/kvs_skiptable.cpp
 
-    persistence.cpp
-    aof.cpp
+    persistence/snapshot.cpp
+    persistence/aof.cpp
 )
 
 # 指定头文件搜索路径（相当于之前的 -I NtyCo-master/core/）

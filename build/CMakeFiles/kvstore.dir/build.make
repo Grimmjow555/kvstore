@@ -125,89 +125,89 @@ CMakeFiles/kvstore.dir/network/ntyco.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling C source to assembly CMakeFiles/kvstore.dir/network/ntyco.c.s"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/Share/VScode/12.kvstore/network/ntyco.c -o CMakeFiles/kvstore.dir/network/ntyco.c.s
 
-CMakeFiles/kvstore.dir/kvs_array.cpp.o: CMakeFiles/kvstore.dir/flags.make
-CMakeFiles/kvstore.dir/kvs_array.cpp.o: ../kvs_array.cpp
-CMakeFiles/kvstore.dir/kvs_array.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/kvstore.dir/kvs_array.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/kvs_array.cpp.o -MF CMakeFiles/kvstore.dir/kvs_array.cpp.o.d -o CMakeFiles/kvstore.dir/kvs_array.cpp.o -c /home/Share/VScode/12.kvstore/kvs_array.cpp
+CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o: CMakeFiles/kvstore.dir/flags.make
+CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o: ../storage/kvs_array.cpp
+CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o -MF CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o.d -o CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o -c /home/Share/VScode/12.kvstore/storage/kvs_array.cpp
 
-CMakeFiles/kvstore.dir/kvs_array.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/kvs_array.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/kvs_array.cpp > CMakeFiles/kvstore.dir/kvs_array.cpp.i
+CMakeFiles/kvstore.dir/storage/kvs_array.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/storage/kvs_array.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/storage/kvs_array.cpp > CMakeFiles/kvstore.dir/storage/kvs_array.cpp.i
 
-CMakeFiles/kvstore.dir/kvs_array.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/kvs_array.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/kvs_array.cpp -o CMakeFiles/kvstore.dir/kvs_array.cpp.s
+CMakeFiles/kvstore.dir/storage/kvs_array.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/storage/kvs_array.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/storage/kvs_array.cpp -o CMakeFiles/kvstore.dir/storage/kvs_array.cpp.s
 
-CMakeFiles/kvstore.dir/kvs_rbtree.cpp.o: CMakeFiles/kvstore.dir/flags.make
-CMakeFiles/kvstore.dir/kvs_rbtree.cpp.o: ../kvs_rbtree.cpp
-CMakeFiles/kvstore.dir/kvs_rbtree.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building CXX object CMakeFiles/kvstore.dir/kvs_rbtree.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/kvs_rbtree.cpp.o -MF CMakeFiles/kvstore.dir/kvs_rbtree.cpp.o.d -o CMakeFiles/kvstore.dir/kvs_rbtree.cpp.o -c /home/Share/VScode/12.kvstore/kvs_rbtree.cpp
+CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.o: CMakeFiles/kvstore.dir/flags.make
+CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.o: ../storage/kvs_rbtree.cpp
+CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building CXX object CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.o -MF CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.o.d -o CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.o -c /home/Share/VScode/12.kvstore/storage/kvs_rbtree.cpp
 
-CMakeFiles/kvstore.dir/kvs_rbtree.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/kvs_rbtree.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/kvs_rbtree.cpp > CMakeFiles/kvstore.dir/kvs_rbtree.cpp.i
+CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/storage/kvs_rbtree.cpp > CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.i
 
-CMakeFiles/kvstore.dir/kvs_rbtree.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/kvs_rbtree.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/kvs_rbtree.cpp -o CMakeFiles/kvstore.dir/kvs_rbtree.cpp.s
+CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/storage/kvs_rbtree.cpp -o CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.s
 
-CMakeFiles/kvstore.dir/kvs_hash.cpp.o: CMakeFiles/kvstore.dir/flags.make
-CMakeFiles/kvstore.dir/kvs_hash.cpp.o: ../kvs_hash.cpp
-CMakeFiles/kvstore.dir/kvs_hash.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building CXX object CMakeFiles/kvstore.dir/kvs_hash.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/kvs_hash.cpp.o -MF CMakeFiles/kvstore.dir/kvs_hash.cpp.o.d -o CMakeFiles/kvstore.dir/kvs_hash.cpp.o -c /home/Share/VScode/12.kvstore/kvs_hash.cpp
+CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.o: CMakeFiles/kvstore.dir/flags.make
+CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.o: ../storage/kvs_hash.cpp
+CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building CXX object CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.o -MF CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.o.d -o CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.o -c /home/Share/VScode/12.kvstore/storage/kvs_hash.cpp
 
-CMakeFiles/kvstore.dir/kvs_hash.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/kvs_hash.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/kvs_hash.cpp > CMakeFiles/kvstore.dir/kvs_hash.cpp.i
+CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/storage/kvs_hash.cpp > CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.i
 
-CMakeFiles/kvstore.dir/kvs_hash.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/kvs_hash.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/kvs_hash.cpp -o CMakeFiles/kvstore.dir/kvs_hash.cpp.s
+CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/storage/kvs_hash.cpp -o CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.s
 
-CMakeFiles/kvstore.dir/kvs_skiptable.cpp.o: CMakeFiles/kvstore.dir/flags.make
-CMakeFiles/kvstore.dir/kvs_skiptable.cpp.o: ../kvs_skiptable.cpp
-CMakeFiles/kvstore.dir/kvs_skiptable.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building CXX object CMakeFiles/kvstore.dir/kvs_skiptable.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/kvs_skiptable.cpp.o -MF CMakeFiles/kvstore.dir/kvs_skiptable.cpp.o.d -o CMakeFiles/kvstore.dir/kvs_skiptable.cpp.o -c /home/Share/VScode/12.kvstore/kvs_skiptable.cpp
+CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.o: CMakeFiles/kvstore.dir/flags.make
+CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.o: ../storage/kvs_skiptable.cpp
+CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building CXX object CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.o -MF CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.o.d -o CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.o -c /home/Share/VScode/12.kvstore/storage/kvs_skiptable.cpp
 
-CMakeFiles/kvstore.dir/kvs_skiptable.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/kvs_skiptable.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/kvs_skiptable.cpp > CMakeFiles/kvstore.dir/kvs_skiptable.cpp.i
+CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/storage/kvs_skiptable.cpp > CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.i
 
-CMakeFiles/kvstore.dir/kvs_skiptable.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/kvs_skiptable.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/kvs_skiptable.cpp -o CMakeFiles/kvstore.dir/kvs_skiptable.cpp.s
+CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/storage/kvs_skiptable.cpp -o CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.s
 
-CMakeFiles/kvstore.dir/persistence.cpp.o: CMakeFiles/kvstore.dir/flags.make
-CMakeFiles/kvstore.dir/persistence.cpp.o: ../persistence.cpp
-CMakeFiles/kvstore.dir/persistence.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building CXX object CMakeFiles/kvstore.dir/persistence.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/persistence.cpp.o -MF CMakeFiles/kvstore.dir/persistence.cpp.o.d -o CMakeFiles/kvstore.dir/persistence.cpp.o -c /home/Share/VScode/12.kvstore/persistence.cpp
+CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o: CMakeFiles/kvstore.dir/flags.make
+CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o: ../persistence/snapshot.cpp
+CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building CXX object CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o -MF CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o.d -o CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o -c /home/Share/VScode/12.kvstore/persistence/snapshot.cpp
 
-CMakeFiles/kvstore.dir/persistence.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/persistence.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/persistence.cpp > CMakeFiles/kvstore.dir/persistence.cpp.i
+CMakeFiles/kvstore.dir/persistence/snapshot.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/persistence/snapshot.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/persistence/snapshot.cpp > CMakeFiles/kvstore.dir/persistence/snapshot.cpp.i
 
-CMakeFiles/kvstore.dir/persistence.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/persistence.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/persistence.cpp -o CMakeFiles/kvstore.dir/persistence.cpp.s
+CMakeFiles/kvstore.dir/persistence/snapshot.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/persistence/snapshot.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/persistence/snapshot.cpp -o CMakeFiles/kvstore.dir/persistence/snapshot.cpp.s
 
-CMakeFiles/kvstore.dir/aof.cpp.o: CMakeFiles/kvstore.dir/flags.make
-CMakeFiles/kvstore.dir/aof.cpp.o: ../aof.cpp
-CMakeFiles/kvstore.dir/aof.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Building CXX object CMakeFiles/kvstore.dir/aof.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/aof.cpp.o -MF CMakeFiles/kvstore.dir/aof.cpp.o.d -o CMakeFiles/kvstore.dir/aof.cpp.o -c /home/Share/VScode/12.kvstore/aof.cpp
+CMakeFiles/kvstore.dir/persistence/aof.cpp.o: CMakeFiles/kvstore.dir/flags.make
+CMakeFiles/kvstore.dir/persistence/aof.cpp.o: ../persistence/aof.cpp
+CMakeFiles/kvstore.dir/persistence/aof.cpp.o: CMakeFiles/kvstore.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Building CXX object CMakeFiles/kvstore.dir/persistence/aof.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kvstore.dir/persistence/aof.cpp.o -MF CMakeFiles/kvstore.dir/persistence/aof.cpp.o.d -o CMakeFiles/kvstore.dir/persistence/aof.cpp.o -c /home/Share/VScode/12.kvstore/persistence/aof.cpp
 
-CMakeFiles/kvstore.dir/aof.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/aof.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/aof.cpp > CMakeFiles/kvstore.dir/aof.cpp.i
+CMakeFiles/kvstore.dir/persistence/aof.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kvstore.dir/persistence/aof.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/Share/VScode/12.kvstore/persistence/aof.cpp > CMakeFiles/kvstore.dir/persistence/aof.cpp.i
 
-CMakeFiles/kvstore.dir/aof.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/aof.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/aof.cpp -o CMakeFiles/kvstore.dir/aof.cpp.s
+CMakeFiles/kvstore.dir/persistence/aof.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kvstore.dir/persistence/aof.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/Share/VScode/12.kvstore/persistence/aof.cpp -o CMakeFiles/kvstore.dir/persistence/aof.cpp.s
 
 # Object files for target kvstore
 kvstore_OBJECTS = \
@@ -215,12 +215,12 @@ kvstore_OBJECTS = \
 "CMakeFiles/kvstore.dir/network/proactor.cpp.o" \
 "CMakeFiles/kvstore.dir/network/reactor.cpp.o" \
 "CMakeFiles/kvstore.dir/network/ntyco.c.o" \
-"CMakeFiles/kvstore.dir/kvs_array.cpp.o" \
-"CMakeFiles/kvstore.dir/kvs_rbtree.cpp.o" \
-"CMakeFiles/kvstore.dir/kvs_hash.cpp.o" \
-"CMakeFiles/kvstore.dir/kvs_skiptable.cpp.o" \
-"CMakeFiles/kvstore.dir/persistence.cpp.o" \
-"CMakeFiles/kvstore.dir/aof.cpp.o"
+"CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o" \
+"CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.o" \
+"CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.o" \
+"CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.o" \
+"CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o" \
+"CMakeFiles/kvstore.dir/persistence/aof.cpp.o"
 
 # External object files for target kvstore
 kvstore_EXTERNAL_OBJECTS =
@@ -229,12 +229,12 @@ kvstore: CMakeFiles/kvstore.dir/kvstore.cpp.o
 kvstore: CMakeFiles/kvstore.dir/network/proactor.cpp.o
 kvstore: CMakeFiles/kvstore.dir/network/reactor.cpp.o
 kvstore: CMakeFiles/kvstore.dir/network/ntyco.c.o
-kvstore: CMakeFiles/kvstore.dir/kvs_array.cpp.o
-kvstore: CMakeFiles/kvstore.dir/kvs_rbtree.cpp.o
-kvstore: CMakeFiles/kvstore.dir/kvs_hash.cpp.o
-kvstore: CMakeFiles/kvstore.dir/kvs_skiptable.cpp.o
-kvstore: CMakeFiles/kvstore.dir/persistence.cpp.o
-kvstore: CMakeFiles/kvstore.dir/aof.cpp.o
+kvstore: CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o
+kvstore: CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.o
+kvstore: CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.o
+kvstore: CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.o
+kvstore: CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o
+kvstore: CMakeFiles/kvstore.dir/persistence/aof.cpp.o
 kvstore: CMakeFiles/kvstore.dir/build.make
 kvstore: CMakeFiles/kvstore.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/home/Share/VScode/12.kvstore/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Linking CXX executable kvstore"
