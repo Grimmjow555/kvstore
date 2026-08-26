@@ -1,3 +1,4 @@
+#include "kvs_replication.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <iostream>
@@ -230,8 +231,14 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
             } else {
                 // 数据完整，处理请求
                 ctx->rbuffer[ctx->msg_len] = '\0'; // 确保字符串结尾
-                int ret = kvs_handler(ctx->rbuffer.data(), ctx->msg_len, ctx->wbuffer.data(),
+                int ret;
+                if (kvs_replication_accept_handshake(ctx->clientfd, ctx->rbuffer.data(),
+                                                     ctx->msg_len) == 1) {
+                    ret = snprintf(ctx->wbuffer.data(), ctx->wbuffer.size(), "+OK\r\n");
+                } else {
+                    ret = kvs_handler(ctx->rbuffer.data(), ctx->msg_len, ctx->wbuffer.data(),
                                       ctx->wbuffer.size());
+                }
                 // 转入发送阶段，不要 delete ctx
                 set_event_send(ring, ctx, ret, 0);
             }

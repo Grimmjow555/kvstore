@@ -11,6 +11,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/kvstore.dir/persistence/aof.cpp.o.d"
   "CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o"
   "CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o.d"
+  "CMakeFiles/kvstore.dir/replication/kvs_replication.cpp.o"
+  "CMakeFiles/kvstore.dir/replication/kvs_replication.cpp.o.d"
   "CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o"
   "CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o.d"
   "CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.o"

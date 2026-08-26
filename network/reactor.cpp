@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "kvs_replication.h"
 #include "server.h"
 
 //定义了一个类型别s名msg_handler
@@ -179,10 +180,15 @@ int recv_cb(int clientfd) {
     buffer[msg_len] = '\0'; // 方便字符串处理
     conn_list[clientfd].rlength = msg_len;
 
-    // printf("[%d]RECV: %s\n", conn_list[clientfd].rlength, conn_list[clientfd].rbuffer);
+    if (kvs_replication_accept_handshake(clientfd, buffer, msg_len) == 1) {
+        conn_list[clientfd].wlength = snprintf(conn_list[clientfd].wbuffer.data(),
+                                               conn_list[clientfd].wbuffer.size(), "+OK\r\n");
+    } else {
+        // printf("[%d]RECV: %s\n", conn_list[clientfd].rlength, conn_list[clientfd].rbuffer);
 
-    // 封装 kvs 请求
-    kvs_request(&conn_list[clientfd]);
+        // 封装 kvs 请求
+        kvs_request(&conn_list[clientfd]);
+    }
 
     set_event(clientfd, EPOLLOUT, 0);
 

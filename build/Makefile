@@ -273,6 +273,30 @@ persistence/snapshot.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/persistence/snapshot.cpp.s
 .PHONY : persistence/snapshot.cpp.s
 
+replication/kvs_replication.o: replication/kvs_replication.cpp.o
+.PHONY : replication/kvs_replication.o
+
+# target to build an object file
+replication/kvs_replication.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/replication/kvs_replication.cpp.o
+.PHONY : replication/kvs_replication.cpp.o
+
+replication/kvs_replication.i: replication/kvs_replication.cpp.i
+.PHONY : replication/kvs_replication.i
+
+# target to preprocess a source file
+replication/kvs_replication.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/replication/kvs_replication.cpp.i
+.PHONY : replication/kvs_replication.cpp.i
+
+replication/kvs_replication.s: replication/kvs_replication.cpp.s
+.PHONY : replication/kvs_replication.s
+
+# target to generate assembly for a file
+replication/kvs_replication.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kvstore.dir/build.make CMakeFiles/kvstore.dir/replication/kvs_replication.cpp.s
+.PHONY : replication/kvs_replication.cpp.s
+
 storage/kvs_array.o: storage/kvs_array.cpp.o
 .PHONY : storage/kvs_array.o
 
@@ -396,6 +420,9 @@ help:
 	@echo "... persistence/snapshot.o"
 	@echo "... persistence/snapshot.i"
 	@echo "... persistence/snapshot.s"
+	@echo "... replication/kvs_replication.o"
+	@echo "... replication/kvs_replication.i"
+	@echo "... replication/kvs_replication.s"
 	@echo "... storage/kvs_array.o"
 	@echo "... storage/kvs_array.i"
 	@echo "... storage/kvs_array.s"

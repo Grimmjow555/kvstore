@@ -1,5 +1,6 @@
 CMakeFiles/kvstore.dir/network/ntyco.c.o: \
  /home/Share/VScode/12.kvstore/network/ntyco.c /usr/include/stdc-predef.h \
+ /home/Share/VScode/12.kvstore/include/kvs_replication.h \
  /home/Share/VScode/12.kvstore/NtyCo-master/core/nty_coroutine.h \
  /usr/include/dlfcn.h /usr/include/features.h \
  /usr/include/features-time64.h \

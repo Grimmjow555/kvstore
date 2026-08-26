@@ -1,7 +1,8 @@
 CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o: \
  /home/Share/VScode/12.kvstore/storage/kvs_array.cpp \
  /usr/include/stdc-predef.h \
- /home/Share/VScode/12.kvstore/storage/../kvstore.h \
+ /home/Share/VScode/12.kvstore/include/kvs_array.h \
+ /home/Share/VScode/12.kvstore/include/kvstore.h \
  /usr/include/c++/11/iostream \
  /usr/include/x86_64-linux-gnu/c++/11/bits/c++config.h \
  /usr/include/x86_64-linux-gnu/c++/11/bits/os_defines.h \
@@ -145,6 +146,5 @@ CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o: \
  /usr/include/c++/11/bits/locale_facets.tcc \
  /usr/include/c++/11/bits/basic_ios.tcc \
  /usr/include/c++/11/bits/ostream.tcc /usr/include/c++/11/istream \
- /usr/include/c++/11/bits/istream.tcc \
- /home/Share/VScode/12.kvstore/storage/kvs_array.h \
- /usr/include/c++/11/cstring /usr/include/string.h /usr/include/strings.h
+ /usr/include/c++/11/bits/istream.tcc /usr/include/c++/11/cstring \
+ /usr/include/string.h /usr/include/strings.h

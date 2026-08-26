@@ -1,10 +1,11 @@
+#include "aof.h"
+#include "kvs_array.h"
+#include "kvs_hash.h"
+#include "kvs_rbtree.h"
+#include "kvs_replication.h"
+#include "kvs_skiptable.h"
 #include "kvstore.h"
-#include "network/network.h"
-#include "persistence/aof.h"
-#include "storage/kvs_array.h"
-#include "storage/kvs_hash.h"
-#include "storage/kvs_rbtree.h"
-#include "storage/kvs_skiptable.h"
+#include "network.h"
 #include <cstring>
 
 #if ENABLE_ARRAY
@@ -198,8 +199,11 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_SET: {
         int ret = kvs_array_set(&global_array, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!kvs_aof_is_replaying())
-                kvs_aof_append(3, tokens); // 修改成功之后记录增量日志
+            // 非 AOF 恢复 且 非从节点复制回放时
+            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
+                kvs_aof_append(3, tokens);         // 修改成功之后记录增量日志
+                kvs_replication_append(3, tokens); // 同步给 Replica
+            }
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
             length = snprintf(response, response_size, "+EXIST\r\n"); // 键已存在（仍视为成功）
@@ -223,8 +227,10 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_DEL: {
         int ret = kvs_array_del(&global_array, tokens[1]);
         if (ret == 0) {
-            if (!kvs_aof_is_replaying())
+            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
                 kvs_aof_append(2, tokens);
+                kvs_replication_append(2, tokens);
+            }
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
             length = snprintf(response, response_size,
@@ -237,8 +243,10 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_MOD: {
         int ret = kvs_array_mod(&global_array, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!kvs_aof_is_replaying())
+            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);
+                kvs_replication_append(3, tokens);
+            }
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
             length = snprintf(response, response_size, "$8\r\nNO EXIST\r\n");
@@ -284,8 +292,10 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_RSET: {
         int ret = kvs_rbtree_set(&global_rbtree, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!kvs_aof_is_replaying())
+            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);
+                kvs_replication_append(3, tokens);
+            }
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
             length = snprintf(response, response_size, "+EXIST\r\n"); // 键已存在（仍视为成功）
@@ -309,8 +319,10 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_RDEL: {
         int ret = kvs_rbtree_del(&global_rbtree, tokens[1]);
         if (ret == 0) {
-            if (!kvs_aof_is_replaying())
+            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
                 kvs_aof_append(2, tokens);
+                kvs_replication_append(2, tokens);
+            }
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
             length = snprintf(response, response_size,
@@ -323,8 +335,10 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_RMOD: {
         int ret = kvs_rbtree_mod(&global_rbtree, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!kvs_aof_is_replaying())
+            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);
+                kvs_replication_append(3, tokens);
+            }
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
             length = snprintf(response, response_size, "$8\r\nNO EXIST\r\n");
@@ -369,8 +383,10 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_HSET: {
         int ret = kvs_hash_set(&global_hash, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!kvs_aof_is_replaying())
+            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);
+                kvs_replication_append(3, tokens);
+            }
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
             length = snprintf(response, response_size, "+EXIST\r\n"); // 键已存在（仍视为成功）
@@ -394,8 +410,10 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_HDEL: {
         int ret = kvs_hash_del(&global_hash, tokens[1]);
         if (ret == 0) {
-            if (!kvs_aof_is_replaying())
+            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
                 kvs_aof_append(2, tokens);
+                kvs_replication_append(2, tokens);
+            }
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
             length = snprintf(response, response_size,
@@ -408,8 +426,10 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_HMOD: {
         int ret = kvs_hash_mod(&global_hash, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!kvs_aof_is_replaying())
+            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);
+                kvs_replication_append(3, tokens);
+            }
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
             length = snprintf(response, response_size, "$8\r\nNO EXIST\r\n");
@@ -456,8 +476,10 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_SSET: {
         int ret = kvs_skiptable_set(&global_skiptable, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!kvs_aof_is_replaying())
+            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);
+                kvs_replication_append(3, tokens);
+            }
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
             length = snprintf(response, response_size, "+EXIST\r\n"); // 键已存在（仍视为成功）
@@ -481,8 +503,10 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_SDEL: {
         int ret = kvs_skiptable_del(&global_skiptable, tokens[1]);
         if (ret == 0) {
-            if (!kvs_aof_is_replaying())
+            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
                 kvs_aof_append(2, tokens);
+                kvs_replication_append(2, tokens);
+            }
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
             length = snprintf(response, response_size,
@@ -495,8 +519,10 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_SMOD: {
         int ret = kvs_skiptable_mod(&global_skiptable, tokens[1], tokens[2]);
         if (ret == 0) {
-            if (!kvs_aof_is_replaying())
+            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);
+                kvs_replication_append(3, tokens);
+            }
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
             length = snprintf(response, response_size, "$8\r\nNO EXIST\r\n");
@@ -659,20 +685,44 @@ int destroy_kvengine() {
     return 0;
 }
 
-// ./kvstore 2000 select
-// select 1: reactor
-// select 2: NtyCo
-// select 3: proactor
-
+// ./kvstore <port> <network> <role> <master_ip> <master_port>
+// network: 1(reactor) 2(NtyCo) 3(proactor)
+// role: 0(Master) 1(Replica)
+// ./kvstore 9999 0 0
+// ./kvstore 2000 0 1 39.97.42.225 9999
 int main(int argc, char* argv[]) {
-    if (argc != 3) {
+
+    if (argc < 4) {
+        printf("Usage:\n"
+               "  Master : %s <port> <network> 0\n"
+               "  Replica: %s <port> <network> 1 <master_ip> <master_port>\n",
+               argv[0], argv[0]);
+
         return -1;
     }
-    unsigned short port = atoi(argv[1]); //命令行传入的是字符串，这里需要转化为整数
+
+    unsigned short port = atoi(argv[1]);
 
     int select_network_architecture = atoi(argv[2]);
 
+    int role = atoi(argv[3]);
+
+    /*
+     * 初始化 KV Engine
+     */
     init_kvengine();
+
+    /*
+     * 初始化复制模块
+     */
+    if (role == 0) {
+
+        kvs_replication_init(KVS_ROLE_MASTER);
+
+    } else {
+
+        kvs_replication_init(KVS_ROLE_REPLICA);
+    }
 
 #if AOF_ENABLE
     // 初始化 AOF
@@ -684,6 +734,40 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
+    /*
+     * Replica 连接 Master
+     */
+    if (role == KVS_ROLE_REPLICA) {
+
+        if (argc != 6) {
+
+            fprintf(stderr, "Replica requires master ip and port\n");
+
+            return -1;
+        }
+
+        const char* master_ip = argv[4];
+
+        int master_port = atoi(argv[5]);
+
+        int fd = kvs_replication_connect_master(master_ip, master_port);
+
+        if (fd < 0) {
+
+            fprintf(stderr, "Failed to connect master\n");
+
+            return -1;
+        }
+
+        if (kvs_replication_start() != 0) {
+            fprintf(stderr, "Failed to start replication\n");
+            return -1;
+        }
+    }
+
+    /*
+     * 启动网络服务
+     */
     switch (select_network_architecture) { //
     case NETWORK_REACTOR: {
         printf("**********USE reactor**********\n");
@@ -711,5 +795,6 @@ int main(int argc, char* argv[]) {
 #if AOF_ENABLE
     kvs_aof_close();
 #endif
+    kvs_replication_destroy();
     destroy_kvengine();
 }

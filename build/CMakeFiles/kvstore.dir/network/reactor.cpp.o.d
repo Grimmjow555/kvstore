@@ -171,7 +171,8 @@ CMakeFiles/kvstore.dir/network/reactor.cpp.o: \
  /usr/include/x86_64-linux-gnu/bits/getopt_core.h \
  /usr/include/x86_64-linux-gnu/bits/unistd_ext.h \
  /usr/include/linux/close_range.h \
- /home/Share/VScode/12.kvstore/network/server.h \
+ /home/Share/VScode/12.kvstore/include/kvs_replication.h \
+ /home/Share/VScode/12.kvstore/include/server.h \
  /usr/include/c++/11/vector /usr/include/c++/11/bits/stl_uninitialized.h \
  /usr/include/c++/11/bits/stl_vector.h \
  /usr/include/c++/11/bits/stl_bvector.h \

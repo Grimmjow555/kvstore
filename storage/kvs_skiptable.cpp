@@ -1,8 +1,6 @@
-
-#include "../kvstore.h"
 #include "kvs_skiptable.h"
+#include "kvstore.h"
 #include <cstring>
-
 
 kvs_skiptable_t global_skiptable;
 

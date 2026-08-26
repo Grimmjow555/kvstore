@@ -1,11 +1,13 @@
 
 
+#include "kvs_replication.h"
 #include "nty_coroutine.h"
 #include <arpa/inet.h> // htonl, ntohl
 #include <arpa/inet.h>
 #include <stdint.h> // uint32_t
 #include <string.h> // memcpy, memset
 #include <unistd.h> // recv, send, close
+
 
 #define MAX_ALLOWED_LEN 1024 * 1024 // 1MBS
 #define BUFFER_SIZE 1024
@@ -89,7 +91,12 @@ void server_reader(void* arg) {
         }
 
         // 6. 处理请求
-        int slength = kvs_handler(buf, (int)msg_len, response, MAX_ALLOWED_LEN);
+        int slength;
+        if (kvs_replication_accept_handshake(fd, buf, (int)msg_len) == 1) {
+            slength = snprintf(response, MAX_ALLOWED_LEN, "+OK\r\n");
+        } else {
+            slength = kvs_handler(buf, (int)msg_len, response, MAX_ALLOWED_LEN);
+        }
         if (slength < 0) {
             slength = 0; // 或发送错误响应
         }

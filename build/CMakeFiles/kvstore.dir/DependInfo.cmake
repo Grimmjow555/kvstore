@@ -14,6 +14,7 @@ set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/home/Share/VScode/12.kvstore/network/reactor.cpp" "CMakeFiles/kvstore.dir/network/reactor.cpp.o" "gcc" "CMakeFiles/kvstore.dir/network/reactor.cpp.o.d"
   "/home/Share/VScode/12.kvstore/persistence/aof.cpp" "CMakeFiles/kvstore.dir/persistence/aof.cpp.o" "gcc" "CMakeFiles/kvstore.dir/persistence/aof.cpp.o.d"
   "/home/Share/VScode/12.kvstore/persistence/snapshot.cpp" "CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o" "gcc" "CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o.d"
+  "/home/Share/VScode/12.kvstore/replication/kvs_replication.cpp" "CMakeFiles/kvstore.dir/replication/kvs_replication.cpp.o" "gcc" "CMakeFiles/kvstore.dir/replication/kvs_replication.cpp.o.d"
   "/home/Share/VScode/12.kvstore/storage/kvs_array.cpp" "CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o" "gcc" "CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o.d"
   "/home/Share/VScode/12.kvstore/storage/kvs_hash.cpp" "CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.o" "gcc" "CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.o.d"
   "/home/Share/VScode/12.kvstore/storage/kvs_rbtree.cpp" "CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.o" "gcc" "CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.o.d"

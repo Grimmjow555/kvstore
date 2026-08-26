@@ -1,8 +1,8 @@
-#include "../kvstore.h"
-#include "../storage/kvs_array.h"
-#include "../storage/kvs_hash.h"
-#include "../storage/kvs_rbtree.h"
-#include "../storage/kvs_skiptable.h"
+#include "kvs_array.h"
+#include "kvs_hash.h"
+#include "kvs_rbtree.h"
+#include "kvs_skiptable.h"
+#include "kvstore.h"
 #include <cstring>
 
 #define KVS_FILE_MAGIC "KVSDB01"

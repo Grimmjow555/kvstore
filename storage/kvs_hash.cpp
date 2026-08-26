@@ -1,6 +1,5 @@
-
-#include "../kvstore.h"
 #include "kvs_hash.h"
+#include "kvstore.h"
 #include <cstring>
 
 // Key, Value -->
@@ -234,7 +233,6 @@ int kvs_hash_del(kvs_hash_t* hash, char* key) {
 }
 
 int kvs_hash_exist(kvs_hash_t* hash, char* key) {
-
     char* value = kvs_hash_get(hash, key);
     if (!value)
         return 1;

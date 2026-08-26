@@ -26,10 +26,15 @@ add_executable(kvstore
 
     persistence/snapshot.cpp
     persistence/aof.cpp
+
+    replication/kvs_replication.cpp
 )
 
 # 指定头文件搜索路径（相当于之前的 -I NtyCo-master/core/）
-target_include_directories(kvstore PRIVATE ${CMAKE_SOURCE_DIR}/NtyCo-master/core/)
+target_include_directories(kvstore PRIVATE 
+    ${CMAKE_SOURCE_DIR}/NtyCo-master/core/
+    ${CMAKE_SOURCE_DIR}/include
+)
 
 
 target_link_directories(kvstore PRIVATE ${CMAKE_SOURCE_DIR}/NtyCo-master)

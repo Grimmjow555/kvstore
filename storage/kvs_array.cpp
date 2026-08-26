@@ -1,5 +1,5 @@
-#include "../kvstore.h"
 #include "kvs_array.h"
+#include "kvstore.h"
 #include <cstring>
 
 // singleton
