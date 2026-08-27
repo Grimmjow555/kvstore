@@ -1209,10 +1209,10 @@ CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o: ../persistence/snapshot.cpp \
 
 CMakeFiles/kvstore.dir/replication/kvs_replication.cpp.o: ../replication/kvs_replication.cpp \
   /usr/include/stdc-predef.h \
-  ../include/kvs_replication.h \
   ../include/kvs_array.h \
   ../include/kvs_hash.h \
   ../include/kvs_rbtree.h \
+  ../include/kvs_replication.h \
   ../include/kvs_skiptable.h \
   ../include/kvstore.h \
   /usr/include/c++/11/iostream \
@@ -1410,6 +1410,15 @@ CMakeFiles/kvstore.dir/replication/kvs_replication.cpp.o: ../replication/kvs_rep
   /usr/include/asm-generic/sockios.h \
   /usr/include/x86_64-linux-gnu/bits/types/struct_osockaddr.h \
   /usr/include/x86_64-linux-gnu/bits/in.h \
+  /usr/lib/gcc/x86_64-linux-gnu/11/include/limits.h \
+  /usr/lib/gcc/x86_64-linux-gnu/11/include/syslimits.h \
+  /usr/include/limits.h \
+  /usr/include/x86_64-linux-gnu/bits/posix1_lim.h \
+  /usr/include/x86_64-linux-gnu/bits/local_lim.h \
+  /usr/include/linux/limits.h \
+  /usr/include/x86_64-linux-gnu/bits/posix2_lim.h \
+  /usr/include/x86_64-linux-gnu/bits/xopen_lim.h \
+  /usr/include/x86_64-linux-gnu/bits/uio_lim.h \
   /usr/include/string.h \
   /usr/include/strings.h \
   /usr/include/unistd.h \

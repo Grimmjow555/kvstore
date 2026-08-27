@@ -6,6 +6,7 @@
 #include "kvstore.h"
 #include <arpa/inet.h>
 #include <errno.h>
+#include <limits.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -153,6 +154,10 @@ static int send_all(int fd, const char* data, size_t len) {
 
 // 发送自定义复制帧：4 字节网络字节序长度 + RESP 负载。
 static int send_frame(int fd, const char* data, size_t len) {
+    if (len > UINT32_MAX) {
+        return -1;
+    }
+
     uint32_t net_len = htonl((uint32_t)len);
     if (send_all(fd, (const char*)&net_len, sizeof(net_len)) < 0) {
         return -1;
@@ -314,8 +319,7 @@ static int send_snapshot_file(int fd, const char* filename, const char* command)
 
     for (uint32_t i = 0; i < header.count; ++i) {
         snapshot_record_t record;
-        if (fread(&record, sizeof(record), 1, fp) != 1 || record.key_len > 1024 * 1024 ||
-            record.value_len > 1024 * 1024) {
+        if (fread(&record, sizeof(record), 1, fp) != 1) {
             fclose(fp);
             return -1;
         }
@@ -332,7 +336,15 @@ static int send_snapshot_file(int fd, const char* filename, const char* command)
         key[record.key_len] = '\0';
         value[record.value_len] = '\0';
 
-        size_t size = strlen(command) + record.key_len + record.value_len + 64;
+        size_t command_len = strlen(command);
+        if (record.key_len > SIZE_MAX - record.value_len - command_len - 64) {
+            kvs_free(key);
+            kvs_free(value);
+            fclose(fp);
+            return -1;
+        }
+
+        size_t size = command_len + record.key_len + record.value_len + 64;
         char* buffer = (char*)kvs_malloc(size);
         if (buffer == NULL) {
             kvs_free(key);
@@ -340,9 +352,9 @@ static int send_snapshot_file(int fd, const char* filename, const char* command)
             fclose(fp);
             return -1;
         }
-        int length = snprintf(buffer, size, "*3\r\n$%zu\r\n%s\r\n$%zu\r\n%s\r\n$%zu\r\n%s\r\n",
-                              strlen(command), command, (size_t)record.key_len, key,
-                              (size_t)record.value_len, value);
+        int length =
+            snprintf(buffer, size, "*3\r\n$%zu\r\n%s\r\n$%zu\r\n%s\r\n$%zu\r\n%s\r\n", command_len,
+                     command, (size_t)record.key_len, key, (size_t)record.value_len, value);
         int result = send_frame(fd, buffer, (size_t)length);
         kvs_free(buffer);
         kvs_free(key);
@@ -472,8 +484,6 @@ void kvs_replication_destroy() {
 void* replication_thread(void* arg) {
     int fd = *(int*)arg;
 
-    char buffer[1024 * 1024 + 1];
-
     // Ignore the framed response to the handshake.
     uint32_t net_len;
     if (recv_all(fd, (char*)&net_len, sizeof(net_len)) < 0) {
@@ -481,35 +491,47 @@ void* replication_thread(void* arg) {
         return NULL;
     }
     uint32_t response_len = ntohl(net_len);
-    if (response_len > sizeof(buffer) - 1 || recv_all(fd, buffer, response_len) < 0) {
+    char* buffer = (char*)kvs_malloc((size_t)response_len + 1);
+    if (buffer == NULL || recv_all(fd, buffer, response_len) < 0) {
+        kvs_free(buffer);
         replication_running = 0;
         return NULL;
     }
+    kvs_free(buffer);
 
     while (replication_running) {
         if (recv_all(fd, (char*)&net_len, sizeof(net_len)) < 0) {
             break;
         }
         uint32_t command_len = ntohl(net_len);
-        if (command_len == 0 || command_len > sizeof(buffer) - 1 ||
-            recv_all(fd, buffer, command_len) < 0) {
+        if (command_len == 0 || command_len > INT_MAX) {
+            break;
+        }
+
+        buffer = (char*)kvs_malloc((size_t)command_len + 1);
+        if (buffer == NULL || recv_all(fd, buffer, command_len) < 0) {
+            kvs_free(buffer);
             break;
         }
         buffer[command_len] = '\0';
 
         if (strcmp(buffer, replication_reset) == 0) {
             kvs_reset_data();
+            kvs_free(buffer);
             continue;
         }
 
         kvs_replication_set_replaying(1);
 
-        /*
-         * 直接执行 Master 发来的 RESP 命令
-         */
-        char response[1024];
+        // 响应也使用动态内存，避免长 value 被固定响应缓冲区截断。
+        size_t response_size = (size_t)command_len + 1;
+        char* response = (char*)kvs_malloc(response_size);
+        if (response != NULL && response_size <= INT_MAX) {
+            kvs_protocol(buffer, (int)command_len, response, (int)response_size);
+        }
+        kvs_free(response);
 
-        kvs_protocol(buffer, (int)command_len, response, sizeof(response));
+        kvs_free(buffer);
 
         kvs_replication_set_replaying(0);
     }

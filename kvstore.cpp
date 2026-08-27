@@ -200,7 +200,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_SET: {
         int ret = kvs_array_set(&global_array, tokens[1], tokens[2]);
         if (ret == 0) {
-            // 非 AOF 恢复 且 非Replica进行同步时
+            // 非 AOF 恢复 且 为Master时
             if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);         // 修改成功之后记录增量日志
                 kvs_replication_append(3, tokens); // 同步给 Replica
