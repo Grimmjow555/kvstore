@@ -180,7 +180,8 @@ int recv_cb(int clientfd) {
     buffer[msg_len] = '\0'; // 方便字符串处理
     conn_list[clientfd].rlength = msg_len;
 
-    if (kvs_replication_accept_handshake(clientfd, buffer, msg_len) == 1) {
+    int is_replica = kvs_replication_accept_handshake(clientfd, buffer, msg_len) == 1;
+    if (is_replica) {
         conn_list[clientfd].wlength = snprintf(conn_list[clientfd].wbuffer.data(),
                                                conn_list[clientfd].wbuffer.size(), "+OK\r\n");
     } else {
@@ -214,6 +215,8 @@ int send_cb(int clientfd) {
         close(clientfd);
         return -1;
     }
+
+    kvs_replication_finish_handshake(clientfd);
 
     // 发送完成，重新监听读事件
     set_event(clientfd, EPOLLIN, 0);

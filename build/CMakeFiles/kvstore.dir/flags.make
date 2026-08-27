@@ -13,5 +13,5 @@ CXX_DEFINES =
 
 CXX_INCLUDES = -I/home/Share/VScode/12.kvstore/NtyCo-master/core -I/home/Share/VScode/12.kvstore/include
 
-CXX_FLAGS = -std=gnu++11
+CXX_FLAGS = -std=c++11
 

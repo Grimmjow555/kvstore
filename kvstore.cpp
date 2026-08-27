@@ -7,6 +7,7 @@
 #include "kvstore.h"
 #include "network.h"
 #include <cstring>
+#include <unistd.h>
 
 #if ENABLE_ARRAY
 extern kvs_array_t global_array;
@@ -199,7 +200,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_SET: {
         int ret = kvs_array_set(&global_array, tokens[1], tokens[2]);
         if (ret == 0) {
-            // 非 AOF 恢复 且 非从节点复制回放时
+            // 非 AOF 恢复 且 非Replica进行同步时
             if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);         // 修改成功之后记录增量日志
                 kvs_replication_append(3, tokens); // 同步给 Replica
@@ -275,10 +276,10 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         }
         break;
     }
-
     case (KVS_CMD_LOAD): {
         int ret = kvs_array_load(&global_array, "../data/array.data");
         if (ret == 0) {
+            kvs_replication_resync();
             length = snprintf(response, response_size, "+OK\r\n");
         } else {
             length = snprintf(response, response_size, "-ERROR\r\n");
@@ -370,6 +371,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case (KVS_CMD_RLOAD): {
         int ret = kvs_rbtree_load(&global_rbtree, "../data/rbtree.data");
         if (ret == 0) {
+            kvs_replication_resync();
             length = snprintf(response, response_size, "+OK\r\n");
         } else {
             length = snprintf(response, response_size, "-ERROR\r\n");
@@ -462,6 +464,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case (KVS_CMD_HLOAD): {
         int ret = kvs_hash_load(&global_hash, "../data/hash.data");
         if (ret == 0) {
+            kvs_replication_resync();
             length = snprintf(response, response_size, "+OK\r\n");
         } else {
             length = snprintf(response, response_size, "-ERROR\r\n");
@@ -554,6 +557,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case (KVS_CMD_SLOAD): {
         int ret = kvs_skiptable_load(&global_skiptable, "../data/skiptable.data");
         if (ret == 0) {
+            kvs_replication_resync();
             length = snprintf(response, response_size, "+OK\r\n");
         } else {
             length = snprintf(response, response_size, "-ERROR\r\n");
@@ -685,6 +689,11 @@ int destroy_kvengine() {
     return 0;
 }
 
+int kvs_reset_data() {
+    destroy_kvengine();
+    return init_kvengine();
+}
+
 // ./kvstore <port> <network> <role> <master_ip> <master_port>
 // network: 1(reactor) 2(NtyCo) 3(proactor)
 // role: 0(Master) 1(Replica)
@@ -732,6 +741,7 @@ int main(int argc, char* argv[]) {
         destroy_kvengine();
         return -1;
     }
+
 #endif
 
     /*

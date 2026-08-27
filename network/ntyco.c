@@ -8,7 +8,6 @@
 #include <string.h> // memcpy, memset
 #include <unistd.h> // recv, send, close
 
-
 #define MAX_ALLOWED_LEN 1024 * 1024 // 1MBS
 #define BUFFER_SIZE 1024
 
@@ -91,8 +90,9 @@ void server_reader(void* arg) {
         }
 
         // 6. 处理请求
+        int is_replica = kvs_replication_accept_handshake(fd, buf, (int)msg_len) == 1;
         int slength;
-        if (kvs_replication_accept_handshake(fd, buf, (int)msg_len) == 1) {
+        if (is_replica) {
             slength = snprintf(response, MAX_ALLOWED_LEN, "+OK\r\n");
         } else {
             slength = kvs_handler(buf, (int)msg_len, response, MAX_ALLOWED_LEN);
@@ -121,6 +121,9 @@ void server_reader(void* arg) {
         if (!send_ok) {
             close(fd);
             break;
+        }
+        if (is_replica) {
+            kvs_replication_finish_handshake(fd);
         }
     }
 }

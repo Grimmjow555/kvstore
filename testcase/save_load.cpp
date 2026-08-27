@@ -16,7 +16,7 @@
     ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
 
 #define PRINT_PASS 1
-#define SAVE 0 // 测试保存功能
+#define SAVE 1 // 测试保存功能
 
 #define LEVEL1 1 //使用最基础的9条测试样例，测试一次
 

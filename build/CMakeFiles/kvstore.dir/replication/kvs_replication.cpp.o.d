@@ -1,7 +1,11 @@
 CMakeFiles/kvstore.dir/replication/kvs_replication.cpp.o: \
  /home/Share/VScode/12.kvstore/replication/kvs_replication.cpp \
  /usr/include/stdc-predef.h \
+ /home/Share/VScode/12.kvstore/include/kvs_array.h \
+ /home/Share/VScode/12.kvstore/include/kvs_hash.h \
+ /home/Share/VScode/12.kvstore/include/kvs_rbtree.h \
  /home/Share/VScode/12.kvstore/include/kvs_replication.h \
+ /home/Share/VScode/12.kvstore/include/kvs_skiptable.h \
  /home/Share/VScode/12.kvstore/include/kvstore.h \
  /usr/include/c++/11/iostream \
  /usr/include/x86_64-linux-gnu/c++/11/bits/c++config.h \

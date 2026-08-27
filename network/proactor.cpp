@@ -283,6 +283,7 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
     case EVENT::WRITE: {
         int sendlen = entries->res - 4;
 
+        kvs_replication_finish_handshake(ctx->clientfd);
         set_event_recv(ring, ctx->clientfd, 0);
         // printf("sendback to connection --> %d: [%d]%s\n", ctx->clientfd, sendlen, ctx->wbuffer);
 

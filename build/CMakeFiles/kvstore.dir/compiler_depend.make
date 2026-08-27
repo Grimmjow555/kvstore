@@ -188,10 +188,19 @@ CMakeFiles/kvstore.dir/kvstore.cpp.o: ../kvstore.cpp \
   ../include/network.h \
   /usr/include/c++/11/cstring \
   /usr/include/string.h \
-  /usr/include/strings.h
+  /usr/include/strings.h \
+  /usr/include/unistd.h \
+  /usr/include/x86_64-linux-gnu/bits/posix_opt.h \
+  /usr/include/x86_64-linux-gnu/bits/environments.h \
+  /usr/include/x86_64-linux-gnu/bits/confname.h \
+  /usr/include/x86_64-linux-gnu/bits/getopt_posix.h \
+  /usr/include/x86_64-linux-gnu/bits/getopt_core.h \
+  /usr/include/x86_64-linux-gnu/bits/unistd_ext.h \
+  /usr/include/linux/close_range.h
 
 CMakeFiles/kvstore.dir/network/ntyco.c.o: ../network/ntyco.c \
   /usr/include/stdc-predef.h \
+  ../include/kvs_replication.h \
   ../NtyCo-master/core/nty_coroutine.h \
   /usr/include/dlfcn.h \
   /usr/include/features.h \
@@ -336,13 +345,13 @@ CMakeFiles/kvstore.dir/network/ntyco.c.o: ../network/ntyco.c \
   /usr/include/x86_64-linux-gnu/bits/types/error_t.h \
   ../NtyCo-master/core/nty_queue.h \
   ../NtyCo-master/core/nty_tree.h \
-  ../include/kvs_replication.h \
   /usr/include/arpa/inet.h \
   /usr/include/netinet/in.h \
   /usr/include/x86_64-linux-gnu/bits/in.h
 
 CMakeFiles/kvstore.dir/network/proactor.cpp.o: ../network/proactor.cpp \
   /usr/include/stdc-predef.h \
+  ../include/kvs_replication.h \
   /usr/include/arpa/inet.h \
   /usr/include/features.h \
   /usr/include/features-time64.h \
@@ -610,8 +619,7 @@ CMakeFiles/kvstore.dir/network/proactor.cpp.o: ../network/proactor.cpp \
   /usr/include/c++/11/bits/stl_uninitialized.h \
   /usr/include/c++/11/bits/stl_vector.h \
   /usr/include/c++/11/bits/stl_bvector.h \
-  /usr/include/c++/11/bits/vector.tcc \
-  ../include/kvs_replication.h
+  /usr/include/c++/11/bits/vector.tcc
 
 CMakeFiles/kvstore.dir/network/reactor.cpp.o: ../network/reactor.cpp \
   /usr/include/stdc-predef.h \
@@ -1202,6 +1210,10 @@ CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o: ../persistence/snapshot.cpp \
 CMakeFiles/kvstore.dir/replication/kvs_replication.cpp.o: ../replication/kvs_replication.cpp \
   /usr/include/stdc-predef.h \
   ../include/kvs_replication.h \
+  ../include/kvs_array.h \
+  ../include/kvs_hash.h \
+  ../include/kvs_rbtree.h \
+  ../include/kvs_skiptable.h \
   ../include/kvstore.h \
   /usr/include/c++/11/iostream \
   /usr/include/x86_64-linux-gnu/c++/11/bits/c++config.h \
@@ -2678,6 +2690,22 @@ CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.o: ../storage/kvs_skiptable.cpp
 
 /usr/include/string.h:
 
+/usr/include/x86_64-linux-gnu/c++/11/bits/os_defines.h:
+
+/usr/include/c++/11/bits/exception_defines.h:
+
+/usr/include/x86_64-linux-gnu/bits/environments.h:
+
+/usr/include/x86_64-linux-gnu/bits/setjmp.h:
+
+/usr/include/time.h:
+
+/usr/include/x86_64-linux-gnu/bits/getopt_posix.h:
+
+/usr/include/x86_64-linux-gnu/bits/getopt_core.h:
+
+/usr/include/x86_64-linux-gnu/bits/unistd_ext.h:
+
 /usr/include/dlfcn.h:
 
 /usr/include/x86_64-linux-gnu/bits/dl_find_object.h:
@@ -2749,22 +2777,6 @@ CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.o: ../storage/kvs_skiptable.cpp
 /usr/include/x86_64-linux-gnu/sys/mman.h:
 
 /usr/include/x86_64-linux-gnu/sys/time.h:
-
-/usr/include/x86_64-linux-gnu/c++/11/bits/os_defines.h:
-
-/usr/include/c++/11/bits/exception_defines.h:
-
-/usr/include/x86_64-linux-gnu/bits/environments.h:
-
-/usr/include/x86_64-linux-gnu/bits/setjmp.h:
-
-/usr/include/time.h:
-
-/usr/include/x86_64-linux-gnu/bits/getopt_posix.h:
-
-/usr/include/x86_64-linux-gnu/bits/getopt_core.h:
-
-/usr/include/x86_64-linux-gnu/bits/unistd_ext.h:
 
 /usr/include/x86_64-linux-gnu/sys/ucontext.h:
 
