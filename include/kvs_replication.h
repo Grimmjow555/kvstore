@@ -4,64 +4,49 @@
 extern "C" {
 #endif
 
+// 当前进程在复制拓扑中的角色。
 typedef enum { KVS_ROLE_MASTER = 0, KVS_ROLE_REPLICA = 1 } kvs_role_t;
 
-// 功能：初始化主从复制模块
-// 作用：
-// 1. 设置当前服务器角色：Master 或 Replica
-// 2. 初始化 Master 保存 Replica socket fd 的数组
-// 3. 初始化 Replica 的 pending 状态
+// ==================== 公共接口 ====================
+
+// 设置角色并初始化复制模块状态。
 int kvs_replication_init(kvs_role_t role);
 
-// 功能：将一个已经连接的 Replica 加入 Master 的 Replica 列表
-//
-// 参数：
-// fd：Replica 与 Master 建立 TCP 连接后的 socket fd
-//
-// pending = 1 表示：
-// Replica 已经连接，但还没有完成初始数据同步
+// ==================== Master 端接口 ====================
+
+// 注册一个已建立连接的 Replica，等待初始全量同步。
 int kvs_replication_add_replica(int fd);
 
-// 功能：从 Master 的 Replica 列表中删除一个 Replica
-//
-// 使用场景：
-// 1. Replica 断开连接
-// 2. send() 失败
-// 3. Replica 主动退出
-//
-// 同时关闭对应 socket。
+// 移除 Replica 连接并关闭对应 socket。
 void kvs_replication_remove_replica(int fd);
 
-/*
- * Master：
- * 将成功执行的写命令发送给所有 Replica
- */
+// 将成功执行的写命令发送给所有已完成全量同步的 Replica。
 int kvs_replication_append(int argc, char* argv[]);
 
-/*
- * Replica：
- * 连接 Master
- */
-int kvs_replication_connect_master(const char* ip, int port);
-
-/* Master: identify and register a replica handshake. */
+// 判断是否为 Replica 发来的握手请求。
 int kvs_replication_is_handshake(const char* data, int length);
+
+// 校验并注册 Replica 发来的握手请求。
 int kvs_replication_accept_handshake(int fd, const char* data, int length);
+
+// 发送握手响应并开始向 Replica 发送全量快照。
 void kvs_replication_finish_handshake(int fd);
+
+// 要求所有已连接 Replica 重新执行全量同步。
 int kvs_replication_resync();
 
-/*
- * Replica：
- * 启动同步线程
- */
+// ==================== Replica 端接口 ====================
+
+// 连接 Master。
+int kvs_replication_connect_master(const char* ip, int port);
+
+// 启动、停止和销毁 Replica 同步线程及连接。
 int kvs_replication_start();
-
 void kvs_replication_stop();
-
 void kvs_replication_destroy();
 
+// 查询和设置 Replica 的复制回放状态。
 int kvs_replication_is_replaying();
-
 void kvs_replication_set_replaying(int value);
 
 #ifdef __cplusplus

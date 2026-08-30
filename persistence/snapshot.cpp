@@ -1336,7 +1336,6 @@ typedef struct SkipList {
 typedef struct SkipList kvs_skiptable_t;
 kvs_skiptable_t global_skiptable;
 
-kvs_skiptable_t global_skiptable;
 memset(&global_skiptable, 0, sizeof(kvs_skiptable_t));
 kvs_skiptable_create(&global_skiptable);
 #endif

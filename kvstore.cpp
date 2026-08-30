@@ -107,7 +107,7 @@ char** resp_parse_command(char* buffer, int* argc, int* consumed) {
         return NULL;
 
     // 2. 提取数组元素个数（参数个数）
-    int param_count = atoi(buffer + 1); // 跳过 '*' 读取数字
+    int param_count = atoi(buffer + 1);
 
     // 3. 查找第一个 \r\n（数组头部结束）
     char* p = strstr(buffer, "\r\n");
@@ -605,11 +605,11 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
  *@return: length of response
  */
 int kvs_protocol(char* msg, int length, char* response, int response_size) {
-    int total_used = 0;
+    int msg_used = 0;
     int resp_offset = 0;
-    while (total_used < length && resp_offset < response_size) {
+    while (msg_used < length && resp_offset < response_size) {
         int argc, consumed;
-        char** argv = resp_parse_command(msg + total_used, &argc, &consumed);
+        char** argv = resp_parse_command(msg + msg_used, &argc, &consumed);
         if (!argv)
             break;
 
@@ -642,7 +642,7 @@ int kvs_protocol(char* msg, int length, char* response, int response_size) {
         for (int i = 0; i < argc; i++)
             kvs_free(argv[i]);
         kvs_free(argv);
-        total_used += consumed;
+        msg_used += consumed;
     }
     return resp_offset;
 }
@@ -725,11 +725,8 @@ int main(int argc, char* argv[]) {
      * 初始化复制模块
      */
     if (role == 0) {
-
         kvs_replication_init(KVS_ROLE_MASTER);
-
     } else {
-
         kvs_replication_init(KVS_ROLE_REPLICA);
     }
 
