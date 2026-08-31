@@ -73,89 +73,102 @@ int kvs_array_save(kvs_array_t* array, const char* filename) {
 
     return 0;
 }
+
 int kvs_array_load(kvs_array_t* array, const char* filename) {
     if (array == NULL || filename == NULL) {
-
         return -1;
     }
-    /*
-     * 重新初始化 Array
-     */
-    if (array->table != NULL) {
-        kvs_array_destroy(array);
-    }
-    memset(array, 0, sizeof(*array));
-    kvs_array_create(array);
 
-    FILE* fp;
-    kvs_file_header_t header;
-
-    fp = fopen(filename, "rb");
-
+    FILE* fp = fopen(filename, "rb");
     if (fp == NULL) {
+        if (errno == ENOENT) {
+            return 0; // 首次启动，无文件
+        }
         perror("fopen");
         return -1;
     }
 
+    kvs_file_header_t header;
     if (fread(&header, sizeof(header), 1, fp) != 1) {
-
         fclose(fp);
         return -1;
     }
 
-    /*
-     * 检查 magic
-     */
     if (memcmp(header.magic, KVS_FILE_MAGIC, strlen(KVS_FILE_MAGIC)) != 0) {
+        fprintf(stderr, "invalid array file magic\n");
+        fclose(fp);
+        return -1;
+    }
 
+    if (header.version != KVS_FILE_VERSION) {
+        fprintf(stderr, "unsupported array file version: %u\n", header.version);
+        fclose(fp);
+        return -1;
+    }
+
+    // 使用临时数组，全部加载成功后再替换旧数组
+    kvs_array_t tmp_array;
+    memset(&tmp_array, 0, sizeof(tmp_array));
+    if (kvs_array_create(&tmp_array) != 0) { // 假设 create 返回 0 表示成功
         fclose(fp);
         return -1;
     }
 
     for (uint32_t i = 0; i < header.count; i++) {
-
         kvs_record_header_t record;
-
         if (fread(&record, sizeof(record), 1, fp) != 1) {
-
+            kvs_array_destroy(&tmp_array);
             fclose(fp);
             return -1;
         }
 
+        // 分配并读取 key
         char* key = (char*)kvs_malloc(record.key_len + 1);
-
         char* value = (char*)kvs_malloc(record.value_len + 1);
-
         if (key == NULL || value == NULL) {
-
             kvs_free(key);
             kvs_free(value);
-
+            kvs_array_destroy(&tmp_array);
             fclose(fp);
-
             return -1;
         }
 
-        fread(key, record.key_len, 1, fp);
-
-        fread(value, record.value_len, 1, fp);
+        if (fread(key, record.key_len, 1, fp) != 1 || fread(value, record.value_len, 1, fp) != 1) {
+            kvs_free(key);
+            kvs_free(value);
+            kvs_array_destroy(&tmp_array);
+            fclose(fp);
+            return -1;
+        }
 
         key[record.key_len] = '\0';
         value[record.value_len] = '\0';
 
-        /*
-         * 重新插入 Array
-         */
-        kvs_array_set(array, key, value);
+        int ret = kvs_array_set(&tmp_array, key, value);
 
+        if (ret != 0) {
+            fprintf(stderr, "kvs_array_set failed during load (key=%s)\n", key);
+            kvs_free(key);
+            kvs_free(value);
+            kvs_array_destroy(&tmp_array);
+            fclose(fp);
+            return -1;
+        }
         kvs_free(key);
         kvs_free(value);
     }
 
     fclose(fp);
 
+    // 成功：替换旧数组
+    if (array->table != NULL) {
+        kvs_array_destroy(array);
+    }
+    *array = tmp_array; // 结构体赋值，转移指针所有权
+
     return 0;
 }
+
 #endif
 
 #if ENABLE_RBTREE
@@ -295,227 +308,111 @@ int kvs_rbtree_save(kvs_rbtree_t* tree, const char* filename) {
 
     return 0;
 }
+
 int kvs_rbtree_load(kvs_rbtree_t* tree, const char* filename) {
-    if (tree == NULL || filename == NULL) {
-
+    if (tree == NULL || filename == NULL)
         return -1;
-    }
-
-    if (tree->root != NULL && tree->root != tree->nil) {
-        kvs_rbtree_destroy(tree);
-    }
-    memset(tree, 0, sizeof(*tree));
-    kvs_rbtree_create(tree);
 
     FILE* fp = fopen(filename, "rb");
-
     if (fp == NULL) {
-
-        /*
-         * 文件不存在：
-         *
-         * 可以认为第一次启动，
-         * 不属于错误。
-         */
-        if (errno == ENOENT) {
+        if (errno == ENOENT)
             return 0;
-        }
-
         fprintf(stderr, "open %s failed: %s\n", filename, strerror(errno));
-
         return -1;
     }
-
-    /*
-     * ========================================
-     * 读取 header
-     * ========================================
-     */
 
     kvs_file_header_t header;
-
     if (fread(&header, sizeof(header), 1, fp) != 1) {
-
         fclose(fp);
-
         return -1;
     }
 
-    /*
-     * 检查 magic
-     */
     if (memcmp(header.magic, KVS_FILE_MAGIC, strlen(KVS_FILE_MAGIC)) != 0) {
-
         fprintf(stderr, "invalid rbtree file magic\n");
-
         fclose(fp);
-
         return -1;
     }
 
-    /*
-     * 检查版本
-     */
     if (header.version != KVS_FILE_VERSION) {
-
         fprintf(stderr, "unsupported rbtree file version: %u\n", header.version);
-
         fclose(fp);
-
         return -1;
     }
 
-    /*
-     * ========================================
-     * 先清空当前 RBTree
-     * ========================================
-     *
-     * 如果你的 load 一定是在
-     *
-     * kvs_rbtree_create()
-     *
-     * 后面执行的，并且 tree 是空的，
-     * 那么这里可以不 destroy。
-     */
-
-    /*
-     * 推荐：
-     *
-     * kvs_rbtree_destroy(tree);
-     *
-     * memset(tree, 0, sizeof(*tree));
-     *
-     * kvs_rbtree_create(tree);
-     *
-     * 但如果 destroy/create 的实现还没有完全稳定，
-     * 可以暂时保证 load 只针对空树。
-     */
-
-    /*
-     * ========================================
-     * 逐条读取
-     * ========================================
-     */
+    // 创建临时树，全部成功后替换
+    kvs_rbtree_t tmp_tree;
+    memset(&tmp_tree, 0, sizeof(tmp_tree));
+    if (kvs_rbtree_create(&tmp_tree) != 0) {
+        fclose(fp);
+        return -1;
+    }
 
     for (uint32_t i = 0; i < header.count; i++) {
-
         kvs_record_header_t record;
-
-        /*
-         * 读取 record header
-         */
         if (fread(&record, sizeof(record), 1, fp) != 1) {
-
             fprintf(stderr, "read record header failed\n");
-
+            kvs_rbtree_destroy(&tmp_tree);
             fclose(fp);
-
             return -1;
         }
 
-        /*
-         * 基本检查
-         */
         if (record.key_len == 0 || record.key_len > MAX_KEY_LEN) {
-
             fprintf(stderr, "invalid key length: %u\n", record.key_len);
-
+            kvs_rbtree_destroy(&tmp_tree);
             fclose(fp);
-
             return -1;
         }
-
         if (record.value_len > MAX_VALUE_LEN) {
-
             fprintf(stderr, "invalid value length: %u\n", record.value_len);
-
+            kvs_rbtree_destroy(&tmp_tree);
             fclose(fp);
-
             return -1;
         }
 
-        /*
-         * 分配 key/value
-         */
         char* key = (char*)kvs_malloc(record.key_len + 1);
-
         char* value = (char*)kvs_malloc(record.value_len + 1);
-
         if (key == NULL || value == NULL) {
-
             kvs_free(key);
             kvs_free(value);
-
+            kvs_rbtree_destroy(&tmp_tree);
             fclose(fp);
-
             return -1;
         }
 
-        /*
-         * 读取 key
-         */
-        if (fread(key, record.key_len, 1, fp) != 1) {
-
+        if (fread(key, record.key_len, 1, fp) != 1 || fread(value, record.value_len, 1, fp) != 1) {
             kvs_free(key);
             kvs_free(value);
-
+            kvs_rbtree_destroy(&tmp_tree);
             fclose(fp);
-
             return -1;
         }
-
         key[record.key_len] = '\0';
-
-        /*
-         * 读取 value
-         */
-        if (fread(value, record.value_len, 1, fp) != 1) {
-
-            kvs_free(key);
-            kvs_free(value);
-
-            fclose(fp);
-
-            return -1;
-        }
-
         value[record.value_len] = '\0';
 
-        /*
-         * ====================================
-         * 重新插入 RBTree
-         * ====================================
-         */
-
-        int ret = kvs_rbtree_set(tree, key, value);
-
-        if (ret < 0) {
-
-            fprintf(stderr, "rbtree set failed: key=%s\n", key);
-
+        int ret = kvs_rbtree_set(&tmp_tree, key, value);
+        if (ret != 0) { // 包括 >0 和 <0
+            fprintf(stderr, "rbtree set failed (ret=%d) key=%s\n", ret, key);
             kvs_free(key);
             kvs_free(value);
-
+            kvs_rbtree_destroy(&tmp_tree);
             fclose(fp);
-
             return -1;
         }
-
-        /*
-         * 假设 kvs_rbtree_set()
-         * 内部会复制 key/value。
-         *
-         * 如果你的 set() 直接保存传入指针，
-         * 这里就不能 free。
-         */
         kvs_free(key);
         kvs_free(value);
     }
 
     fclose(fp);
 
+    // 成功：替换旧树
+    if (tree->root != NULL && tree->root != tree->nil) {
+        kvs_rbtree_destroy(tree);
+    }
+    *tree = tmp_tree; // 结构体赋值，转移指针所有权
+
     return 0;
 }
+
 #endif
 
 #if ENABLE_HASH
@@ -663,210 +560,111 @@ int kvs_hash_save(kvs_hash_t* hash, const char* filename) {
 
     return 0;
 }
+
 int kvs_hash_load(kvs_hash_t* hash, const char* filename) {
-    if (hash == NULL || filename == NULL) {
-
+    if (hash == NULL || filename == NULL)
         return -1;
-    }
-
-    if (hash->nodes != NULL) {
-        kvs_hash_destroy(hash);
-    }
-    memset(hash, 0, sizeof(*hash));
-    kvs_hash_create(hash);
 
     FILE* fp = fopen(filename, "rb");
-
     if (fp == NULL) {
-
-        /*
-         * 第一次启动，没有数据文件。
-         */
-        if (errno == ENOENT) {
-            return 0;
-        }
-
+        if (errno == ENOENT)
+            return 0; // 首次启动，无文件
         perror("fopen");
-
         return -1;
     }
-
-    /*
-     * =====================================
-     * 读取文件头
-     * =====================================
-     */
 
     kvs_file_header_t header;
-
     if (fread(&header, sizeof(header), 1, fp) != 1) {
-
         fclose(fp);
-
         return -1;
     }
 
-    /*
-     * 检查 magic
-     */
     if (memcmp(header.magic, KVS_FILE_MAGIC, strlen(KVS_FILE_MAGIC)) != 0) {
-
         fprintf(stderr, "invalid hash file magic\n");
-
         fclose(fp);
-
         return -1;
     }
 
-    /*
-     * 检查版本
-     */
     if (header.version != KVS_FILE_VERSION) {
-
         fprintf(stderr, "unsupported hash file version: %u\n", header.version);
-
         fclose(fp);
-
         return -1;
     }
 
-    /*
-     * =====================================
-     * 逐条读取
-     * =====================================
-     */
+    // 创建临时哈希表
+    kvs_hash_t tmp_hash;
+    memset(&tmp_hash, 0, sizeof(tmp_hash));
+    if (kvs_hash_create(&tmp_hash) != 0) { // 假设返回 0 表示成功
+        fclose(fp);
+        return -1;
+    }
 
     for (uint32_t i = 0; i < header.count; ++i) {
-
         kvs_record_header_t record;
-
-        /*
-         * 读取 record header
-         */
         if (fread(&record, sizeof(record), 1, fp) != 1) {
-
+            fprintf(stderr, "read record header failed\n");
+            kvs_hash_destroy(&tmp_hash);
             fclose(fp);
-
             return -1;
         }
 
-        /*
-         * 检查长度
-         */
         if (record.key_len == 0 || record.key_len > MAX_KEY_LEN) {
-
             fprintf(stderr, "invalid key length: %u\n", record.key_len);
-
+            kvs_hash_destroy(&tmp_hash);
             fclose(fp);
-
             return -1;
         }
-
         if (record.value_len > MAX_VALUE_LEN) {
-
             fprintf(stderr, "invalid value length: %u\n", record.value_len);
-
+            kvs_hash_destroy(&tmp_hash);
             fclose(fp);
-
             return -1;
         }
-
-        /*
-         * =================================
-         * 分配临时 key/value
-         * =================================
-         */
 
         char* key = (char*)kvs_malloc(record.key_len + 1);
-
         char* value = (char*)kvs_malloc(record.value_len + 1);
-
         if (key == NULL || value == NULL) {
-
             kvs_free(key);
             kvs_free(value);
-
+            kvs_hash_destroy(&tmp_hash);
             fclose(fp);
-
             return -1;
         }
 
-        /*
-         * =================================
-         * 读取 key
-         * =================================
-         */
-
-        if (fread(key, record.key_len, 1, fp) != 1) {
-
+        if (fread(key, record.key_len, 1, fp) != 1 || fread(value, record.value_len, 1, fp) != 1) {
             kvs_free(key);
             kvs_free(value);
-
+            kvs_hash_destroy(&tmp_hash);
             fclose(fp);
-
             return -1;
         }
-
         key[record.key_len] = '\0';
-
-        /*
-         * =================================
-         * 读取 value
-         * =================================
-         */
-
-        if (fread(value, record.value_len, 1, fp) != 1) {
-
-            kvs_free(key);
-            kvs_free(value);
-
-            fclose(fp);
-
-            return -1;
-        }
-
         value[record.value_len] = '\0';
 
-        /*
-         * =================================
-         * 重新插入 Hash
-         * =================================
-         */
-
-        int ret = kvs_hash_set(hash, key, value);
-
-        if (ret < 0) {
-
-            fprintf(stderr, "hash set failed: key=%s\n", key);
-
+        int ret = kvs_hash_set(&tmp_hash, key, value);
+        if (ret != 0) { // 包括 ret > 0（重复键）和 ret < 0（错误）
+            fprintf(stderr, "hash set failed (ret=%d) key=%s\n", ret, key);
             kvs_free(key);
             kvs_free(value);
-
+            kvs_hash_destroy(&tmp_hash);
             fclose(fp);
-
             return -1;
         }
-
-        if (ret == 1) {
-
-            fprintf(stderr, "duplicate key in hash file: %s\n", key);
-
-            kvs_free(key);
-            kvs_free(value);
-
-            fclose(fp);
-
-            return -1;
-        }
-
         kvs_free(key);
         kvs_free(value);
     }
 
     fclose(fp);
 
+    // 成功：替换旧哈希表
+    if (hash->nodes != NULL) {
+        kvs_hash_destroy(hash);
+    }
+    *hash = tmp_hash; // 结构体赋值，转移指针所有权
+
     return 0;
 }
+
 #endif
 
 #if ENABLE_SKIPTABLE
@@ -1030,225 +828,111 @@ int kvs_skiptable_save(kvs_skiptable_t* table, const char* filename) {
 
     return 0;
 }
+
 int kvs_skiptable_load(kvs_skiptable_t* table, const char* filename) {
-    if (table == NULL || filename == NULL) {
-
+    if (table == NULL || filename == NULL)
         return -1;
-    }
-
-    if (table->header != NULL) {
-        kvs_skiptable_destroy(table);
-    }
-    memset(table, 0, sizeof(*table));
-    kvs_skiptable_create(table);
 
     FILE* fp = fopen(filename, "rb");
-
     if (fp == NULL) {
-
-        /*
-         * 第一次启动，没有数据文件。
-         */
-        if (errno == ENOENT) {
-            return 0;
-        }
-
+        if (errno == ENOENT)
+            return 0; // 首次启动，无文件
         perror("fopen");
-
         return -1;
     }
-
-    /*
-     * =====================================
-     * 读取文件头
-     * =====================================
-     */
 
     kvs_file_header_t header;
-
     if (fread(&header, sizeof(header), 1, fp) != 1) {
-
         fclose(fp);
-
         return -1;
     }
 
-    /*
-     * 检查 magic
-     */
     if (memcmp(header.magic, KVS_FILE_MAGIC, strlen(KVS_FILE_MAGIC)) != 0) {
-
         fprintf(stderr, "invalid skiptable file magic\n");
-
         fclose(fp);
-
         return -1;
     }
 
-    /*
-     * 检查版本
-     */
     if (header.version != KVS_FILE_VERSION) {
-
         fprintf(stderr, "unsupported skiptable file version: %u\n", header.version);
-
         fclose(fp);
-
         return -1;
     }
 
-    /*
-     * =====================================
-     * 读取所有 KV
-     * =====================================
-     */
+    // 创建临时跳表
+    kvs_skiptable_t tmp_table;
+    memset(&tmp_table, 0, sizeof(tmp_table));
+    if (kvs_skiptable_create(&tmp_table) != 0) { // 假设返回 0 成功
+        fclose(fp);
+        return -1;
+    }
 
     for (uint32_t i = 0; i < header.count; ++i) {
-
         kvs_record_header_t record;
-
-        /*
-         * 读取 record header
-         */
         if (fread(&record, sizeof(record), 1, fp) != 1) {
-
+            fprintf(stderr, "read record header failed\n");
+            kvs_skiptable_destroy(&tmp_table);
             fclose(fp);
-
             return -1;
         }
 
-        /*
-         * 检查 key 长度
-         */
         if (record.key_len == 0 || record.key_len > MAX_KEY_LEN) {
-
             fprintf(stderr, "invalid key length: %u\n", record.key_len);
-
+            kvs_skiptable_destroy(&tmp_table);
             fclose(fp);
-
             return -1;
         }
-
-        /*
-         * 检查 value 长度
-         */
         if (record.value_len > MAX_VALUE_LEN) {
-
             fprintf(stderr, "invalid value length: %u\n", record.value_len);
-
+            kvs_skiptable_destroy(&tmp_table);
             fclose(fp);
-
             return -1;
         }
-
-        /*
-         * =================================
-         * 分配临时 key/value
-         * =================================
-         */
 
         char* key = (char*)kvs_malloc(record.key_len + 1);
-
         char* value = (char*)kvs_malloc(record.value_len + 1);
-
         if (key == NULL || value == NULL) {
-
             kvs_free(key);
             kvs_free(value);
-
+            kvs_skiptable_destroy(&tmp_table);
             fclose(fp);
-
             return -1;
         }
 
-        /*
-         * =================================
-         * 读取 key
-         * =================================
-         */
-
-        if (fread(key, record.key_len, 1, fp) != 1) {
-
+        if (fread(key, record.key_len, 1, fp) != 1 || fread(value, record.value_len, 1, fp) != 1) {
             kvs_free(key);
             kvs_free(value);
-
+            kvs_skiptable_destroy(&tmp_table);
             fclose(fp);
-
             return -1;
         }
-
         key[record.key_len] = '\0';
-
-        /*
-         * =================================
-         * 读取 value
-         * =================================
-         */
-
-        if (fread(value, record.value_len, 1, fp) != 1) {
-
-            kvs_free(key);
-            kvs_free(value);
-
-            fclose(fp);
-
-            return -1;
-        }
-
         value[record.value_len] = '\0';
 
-        /*
-         * =================================
-         * 重新插入 SkipTable
-         * =================================
-         */
-
-        int ret = kvs_skiptable_set(table, key, value);
-
-        /*
-         * set() 应该已经复制
-         * key/value。
-         */
-
-        if (ret < 0) {
-
-            fprintf(stderr, "skiptable set failed: key=%s\n", key);
-
+        int ret = kvs_skiptable_set(&tmp_table, key, value);
+        if (ret != 0) { // 包括 ret > 0（重复键）和 ret < 0（错误）
+            fprintf(stderr, "skiptable set failed (ret=%d) key=%s\n", ret, key);
             kvs_free(key);
             kvs_free(value);
-
+            kvs_skiptable_destroy(&tmp_table);
             fclose(fp);
-
             return -1;
         }
-
-        /*
-         * 如果 1 表示 key 已存在，
-         * 正常的数据文件不应该出现重复 key。
-         */
-        if (ret == 1) {
-
-            fprintf(stderr, "duplicate key in skiptable file: %s\n", key);
-
-            kvs_free(key);
-            kvs_free(value);
-
-            fclose(fp);
-
-            return -1;
-        }
-
-        /*
-         * SkipTable 已经复制了一份。
-         */
         kvs_free(key);
         kvs_free(value);
     }
 
     fclose(fp);
 
+    // 成功：替换旧跳表
+    if (table->header != NULL) {
+        kvs_skiptable_destroy(table);
+    }
+    *table = tmp_table; // 结构体赋值，转移指针所有权
+
     return 0;
 }
+
 #endif
 
 #if 0 

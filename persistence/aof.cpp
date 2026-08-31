@@ -95,7 +95,7 @@ int kvs_aof_replay(const char* filename) {
         }
 
         // 执行命令
-        char response[1024];
+        char response[128];
 
         kvs_filter_protocol(argv, argc, response, sizeof(response));
 

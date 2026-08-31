@@ -6,7 +6,10 @@
 #include "kvs_skiptable.h"
 #include "kvstore.h"
 #include "network.h"
+#include <cerrno>
 #include <cstring>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #if ENABLE_ARRAY
@@ -29,12 +32,12 @@ void* kvs_malloc(size_t size) { return malloc(size); }
 
 void kvs_free(void* ptr) { return free(ptr); }
 
-const char* command[] = {"SET",      "GET",      "DEL",  "MOD",  "EXIST",  "SAVE",  "LOAD",
-                         "RSET",     "RGET",     "RDEL", "RMOD", "REXIST", "RSAVE", "RLOAD",
-                         "HSET",     "HGET",     "HDEL", "HMOD", "HEXIST", "HSAVE", "HLOAD",
-                         "SSET",     "SGET",     "SDEL", "SMOD", "SEXIST", "SSAVE", "SLOAD",
+const char* command[] = {"SET",      "GET",      "DEL",      "MOD",      "EXIST",  "SAVE",  "LOAD",
+                         "RSET",     "RGET",     "RDEL",     "RMOD",     "REXIST", "RSAVE", "RLOAD",
+                         "HSET",     "HGET",     "HDEL",     "HMOD",     "HEXIST", "HSAVE", "HLOAD",
+                         "SSET",     "SGET",     "SDEL",     "SMOD",     "SEXIST", "SSAVE", "SLOAD",
 
-                         "LOAD_AOF", "CLEAR_AOF"};
+                         "SAVE ALL", "LOAD ALL", "LOAD AOF", "CLEAR AOF"};
 
 enum KVS_CMD {
     KVS_CMD_START = 0,
@@ -74,6 +77,8 @@ enum KVS_CMD {
     KVS_CMD_SSAVE,
     KVS_CMD_SLOAD,
 
+    KVS_CMD_SAVE_ALL,
+    KVS_CMD_LOAD_ALL,
     KVS_CMD_LOAD_AOF,
     KVS_CMD_CLEAR_AOF,
 
@@ -567,10 +572,87 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
 
 #endif
 
+    case KVS_CMD_SAVE_ALL: {
+        int ret = 0;
+
+#if ENABLE_ARRAY
+        if (kvs_array_save(&global_array, "../data/array.data") != 0) {
+            ret = -1;
+        }
+#endif
+
+#if ENABLE_RBTREE
+        if (kvs_rbtree_save(&global_rbtree, "../data/rbtree.data") != 0) {
+            ret = -1;
+        }
+#endif
+
+#if ENABLE_HASH
+        if (kvs_hash_save(&global_hash, "../data/hash.data") != 0) {
+            ret = -1;
+        }
+#endif
+
+#if ENABLE_SKIPTABLE
+        if (kvs_skiptable_save(&global_skiptable, "../data/skiptable.data") != 0) {
+            ret = -1;
+        }
+#endif
+
+#if AOF_ENABLE
+        if (ret == 0 && kvs_aof_clear() != 0) {
+            ret = -1;
+        }
+#endif
+
+        if (ret == 0) {
+            length = snprintf(response, response_size, "+OK\r\n");
+        } else {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+        }
+        break;
+    }
+
+    case (KVS_CMD_LOAD_ALL): {
+        int ret = 0;
+
+#if ENABLE_ARRAY
+        if (kvs_array_load(&global_array, "../data/array.data") != 0) {
+            ret = -1;
+        }
+#endif
+
+#if ENABLE_RBTREE
+        if (kvs_rbtree_load(&global_rbtree, "../data/rbtree.data") != 0) {
+            ret = -1;
+        }
+#endif
+
+#if ENABLE_HASH
+        if (kvs_hash_load(&global_hash, "../data/hash.data") != 0) {
+            ret = -1;
+        }
+#endif
+
+#if ENABLE_SKIPTABLE
+        if (kvs_skiptable_load(&global_skiptable, "../data/skiptable.data") != 0) {
+            ret = -1;
+        }
+#endif
+
+        if (ret == 0 && kvs_replication_resync() == 0) {
+            length = snprintf(response, response_size, "+OK\r\n");
+        } else {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+        }
+        break;
+    }
+
 #if AOF_ENABLE
     case KVS_CMD_LOAD_AOF: {
         int ret = kvs_aof_replay("../data/append.aof");
         if (ret == 0) {
+            kvs_replication_resync();
             length = snprintf(response, response_size, "+OK\r\n");
         } else {
             length = snprintf(response, response_size, "-ERROR\r\n");
@@ -694,6 +776,36 @@ int kvs_reset_data() {
     return init_kvengine();
 }
 
+static int kvs_load_all_storage() {
+    int ret = 0;
+
+#if ENABLE_ARRAY
+    if (kvs_array_load(&global_array, "../data/array.data") != 0) {
+        ret = -1;
+    }
+#endif
+
+#if ENABLE_RBTREE
+    if (kvs_rbtree_load(&global_rbtree, "../data/rbtree.data") != 0) {
+        ret = -1;
+    }
+#endif
+
+#if ENABLE_HASH
+    if (kvs_hash_load(&global_hash, "../data/hash.data") != 0) {
+        ret = -1;
+    }
+#endif
+
+#if ENABLE_SKIPTABLE
+    if (kvs_skiptable_load(&global_skiptable, "../data/skiptable.data") != 0) {
+        ret = -1;
+    }
+#endif
+
+    return ret;
+}
+
 // ./kvstore <port> <network> <role> <master_ip> <master_port>
 // network: 1(reactor) 2(NtyCo) 3(proactor)
 // role: 0(Master) 1(Replica)
@@ -731,12 +843,27 @@ int main(int argc, char* argv[]) {
     }
 
 #if AOF_ENABLE
-    // 初始化 AOF
-    if (kvs_aof_init("../data/append.aof") != 0) {
-        fprintf(stderr, "Failed to initialize AOF\n");
 
-        destroy_kvengine();
-        return -1;
+    if (role == KVS_ROLE_MASTER) {
+        // 加载持久化数据（先全量，后增量）
+        if (kvs_load_all_storage() != 0) {
+            // 如果全量加载失败，且 AOF 存在，则报错退出
+            if (access("../data/append.aof", F_OK) == 0) {
+                fprintf(stderr, "Snapshot corrupted but AOF exists, aborting.\n");
+                return -1;
+            }
+            // 否则视为空数据库，继续
+        }
+        if (access("../data/append.aof", F_OK) == 0) {
+            if (kvs_aof_replay("../data/append.aof") != 0) {
+                fprintf(stderr, "AOF replay failed, data may be incomplete.\n");
+            }
+        }
+        // 重放完成后，再初始化 AOF 的追加模式
+        if (kvs_aof_init("../data/append.aof") != 0) {
+            fprintf(stderr, "AOF init failed.\n");
+            return -1;
+        }
     }
 
 #endif
