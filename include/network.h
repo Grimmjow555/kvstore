@@ -1,8 +1,11 @@
-#ifndef NETWORK_H
-#define NETWORK_H
+#pragma once
 
 // 选择网络框架
-enum NETWORK_ARCHITECTURE { NETWORK_REACTOR = 0, NETWORK_NTYCO = 1, NETWORK_PROACTOR = 2 };
+#define USE_REACTOR 0
+#define USE_NTYCO 1
+#define USE_PROACTOR 0
+
+// enum NETWORK_ARCHITECTURE { NETWORK_REACTOR = 0, NETWORK_NTYCO = 1, NETWORK_PROACTOR = 2 };
 
 // 协议解析函数
 typedef int (*msg_handler)(char* msg, int length, char* response, int response_sizes);
@@ -25,5 +28,3 @@ extern int ntyco_start(unsigned short port, msg_handler handler);
 // uring启动函数：监听的端口，解析协议
 extern int proactor_start(unsigned short port, msg_handler handler);
 /*--------------------------------------------------------------------*/
-
-#endif

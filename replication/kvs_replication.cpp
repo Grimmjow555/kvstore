@@ -35,22 +35,14 @@ extern kvs_skiptable_t global_skiptable;
 static kvs_role_t g_role = KVS_ROLE_MASTER;
 
 static int replica_fds[MAX_REPLICAS]; //记录连接的fd
-static int replica_pending[MAX_REPLICAS]; //记录是否属于全量同步状态，1为准备全量同步，0为已完成
+static int replica_pending[MAX_REPLICAS]; // 记录是全量同步的状态，1为准备全量同步，0为结束全量同步
 
 static pthread_mutex_t replica_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int master_fd = -1;
+
 static pthread_t replication_tid;
 static volatile int replication_running = 0;
 static int replication_replaying = 0;
-
-static int send_all(int fd, const char* data, size_t len);
-static int send_frame(int fd, const char* data, size_t len);
-static int recv_all(int fd, char* data, size_t len);
-static int send_full_snapshot(int fd);
-static int send_memory_record(int fd, const char* command, const char* key, const char* value);
-#if ENABLE_RBTREE
-static int send_rbtree_records(int fd, rbtree_node* node, rbtree_node* nil);
-#endif
 
 /*
  * 发送方向：Replica -> Master
@@ -313,38 +305,6 @@ static int send_rbtree_records(int fd, rbtree_node* node, rbtree_node* nil) {
 }
 #endif
 
-void kvs_replication_finish_handshake(int fd) {
-    if (g_role != KVS_ROLE_MASTER) {
-        return;
-    }
-
-    pthread_mutex_lock(&replica_mutex);
-    int slot = -1;
-    for (int i = 0; i < MAX_REPLICAS; ++i) {
-        if (replica_fds[i] == fd && replica_pending[i]) {
-            slot = i;
-            break;
-        }
-    }
-    if (slot < 0) {
-        pthread_mutex_unlock(&replica_mutex);
-        return;
-    }
-
-    if (send_full_snapshot(fd) < 0) {
-        close(fd);
-        replica_fds[slot] = -1;
-        replica_pending[slot] = 0;
-        pthread_mutex_unlock(&replica_mutex);
-        return;
-    }
-
-    if (replica_fds[slot] == fd) {
-        replica_pending[slot] = 0;
-    }
-    pthread_mutex_unlock(&replica_mutex);
-}
-
 // 遍历 Master 当前内存中的四种存储结构，完成 Replica 全量重同步。
 static int send_full_snapshot(int fd) {
 #if ENABLE_ARRAY
@@ -378,6 +338,38 @@ static int send_full_snapshot(int fd) {
     }
 #endif
     return 0;
+}
+
+void kvs_replication_finish_handshake(int fd) {
+    if (g_role != KVS_ROLE_MASTER) {
+        return;
+    }
+
+    pthread_mutex_lock(&replica_mutex);
+    int slot = -1;
+    for (int i = 0; i < MAX_REPLICAS; ++i) {
+        if (replica_fds[i] == fd && replica_pending[i]) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        pthread_mutex_unlock(&replica_mutex);
+        return;
+    }
+
+    if (send_full_snapshot(fd) < 0) {
+        close(fd);
+        replica_fds[slot] = -1;
+        replica_pending[slot] = 0;
+        pthread_mutex_unlock(&replica_mutex);
+        return;
+    }
+
+    if (replica_fds[slot] == fd) {
+        replica_pending[slot] = 0;
+    }
+    pthread_mutex_unlock(&replica_mutex);
 }
 
 // Master 主动要求所有 Replica 重新同步

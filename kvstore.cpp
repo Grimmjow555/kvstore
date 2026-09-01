@@ -32,10 +32,16 @@ void* kvs_malloc(size_t size) { return malloc(size); }
 
 void kvs_free(void* ptr) { return free(ptr); }
 
-const char* command[] = {"SET",      "GET",      "DEL",      "MOD",      "EXIST",  "SAVE",  "LOAD",
-                         "RSET",     "RGET",     "RDEL",     "RMOD",     "REXIST", "RSAVE", "RLOAD",
-                         "HSET",     "HGET",     "HDEL",     "HMOD",     "HEXIST", "HSAVE", "HLOAD",
-                         "SSET",     "SGET",     "SDEL",     "SMOD",     "SEXIST", "SSAVE", "SLOAD",
+int kvs_snapshot_save_all(const char* filename);
+int kvs_snapshot_load_all(const char* filename);
+
+const char* command[] = {"SET",      "GET",      "DEL",      "MOD",      "EXIST",
+
+                         "RSET",     "RGET",     "RDEL",     "RMOD",     "REXIST",
+
+                         "HSET",     "HGET",     "HDEL",     "HMOD",     "HEXIST",
+
+                         "SSET",     "SGET",     "SDEL",     "SMOD",     "SEXIST",
 
                          "SAVE ALL", "LOAD ALL", "LOAD AOF", "CLEAR AOF"};
 
@@ -47,8 +53,6 @@ enum KVS_CMD {
     KVS_CMD_DEL,
     KVS_CMD_MOD,
     KVS_CMD_EXIST,
-    KVS_CMD_SAVE,
-    KVS_CMD_LOAD,
 
     // rbtree
     KVS_CMD_RSET,
@@ -56,8 +60,6 @@ enum KVS_CMD {
     KVS_CMD_RDEL,
     KVS_CMD_RMOD,
     KVS_CMD_REXIST,
-    KVS_CMD_RSAVE,
-    KVS_CMD_RLOAD,
 
     // hash
     KVS_CMD_HSET,
@@ -65,8 +67,6 @@ enum KVS_CMD {
     KVS_CMD_HDEL,
     KVS_CMD_HMOD,
     KVS_CMD_HEXIST,
-    KVS_CMD_HSAVE,
-    KVS_CMD_HLOAD,
 
     // skiptable
     KVS_CMD_SSET,
@@ -74,8 +74,6 @@ enum KVS_CMD {
     KVS_CMD_SDEL,
     KVS_CMD_SMOD,
     KVS_CMD_SEXIST,
-    KVS_CMD_SSAVE,
-    KVS_CMD_SLOAD,
 
     KVS_CMD_SAVE_ALL,
     KVS_CMD_LOAD_ALL,
@@ -272,25 +270,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         }
         break;
     }
-    case (KVS_CMD_SAVE): {
-        int ret = kvs_array_save(&global_array, "../data/array.data");
-        if (ret == 0) {
-            length = snprintf(response, response_size, "+OK\r\n");
-        } else {
-            length = snprintf(response, response_size, "-ERROR\r\n");
-        }
-        break;
-    }
-    case (KVS_CMD_LOAD): {
-        int ret = kvs_array_load(&global_array, "../data/array.data");
-        if (ret == 0) {
-            kvs_replication_resync();
-            length = snprintf(response, response_size, "+OK\r\n");
-        } else {
-            length = snprintf(response, response_size, "-ERROR\r\n");
-        }
-        break;
-    }
+
 #endif
 
 // rbtree
@@ -364,25 +344,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         }
         break;
     }
-    case (KVS_CMD_RSAVE): {
-        int ret = kvs_rbtree_save(&global_rbtree, "../data/rbtree.data");
-        if (ret == 0) {
-            length = snprintf(response, response_size, "+OK\r\n");
-        } else {
-            length = snprintf(response, response_size, "-ERROR\r\n");
-        }
-        break;
-    }
-    case (KVS_CMD_RLOAD): {
-        int ret = kvs_rbtree_load(&global_rbtree, "../data/rbtree.data");
-        if (ret == 0) {
-            kvs_replication_resync();
-            length = snprintf(response, response_size, "+OK\r\n");
-        } else {
-            length = snprintf(response, response_size, "-ERROR\r\n");
-        }
-        break;
-    }
+
 #endif
 
 // hash
@@ -456,26 +418,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         }
         break;
     }
-    case (KVS_CMD_HSAVE): {
-        int ret = kvs_hash_save(&global_hash, "../data/hash.data");
-        if (ret == 0) {
-            length = snprintf(response, response_size, "+OK\r\n");
-        } else {
-            length = snprintf(response, response_size, "-ERROR\r\n");
-        }
-        break;
-    }
 
-    case (KVS_CMD_HLOAD): {
-        int ret = kvs_hash_load(&global_hash, "../data/hash.data");
-        if (ret == 0) {
-            kvs_replication_resync();
-            length = snprintf(response, response_size, "+OK\r\n");
-        } else {
-            length = snprintf(response, response_size, "-ERROR\r\n");
-        }
-        break;
-    }
 #endif
 
 // skiptable
@@ -550,54 +493,11 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         }
         break;
     }
-    case (KVS_CMD_SSAVE): {
-        int ret = kvs_skiptable_save(&global_skiptable, "../data/skiptable.data");
-        if (ret == 0) {
-            length = snprintf(response, response_size, "+OK\r\n");
-        } else {
-            length = snprintf(response, response_size, "-ERROR\r\n");
-        }
-        break;
-    }
-    case (KVS_CMD_SLOAD): {
-        int ret = kvs_skiptable_load(&global_skiptable, "../data/skiptable.data");
-        if (ret == 0) {
-            kvs_replication_resync();
-            length = snprintf(response, response_size, "+OK\r\n");
-        } else {
-            length = snprintf(response, response_size, "-ERROR\r\n");
-        }
-        break;
-    }
 
 #endif
 
     case KVS_CMD_SAVE_ALL: {
-        int ret = 0;
-
-#if ENABLE_ARRAY
-        if (kvs_array_save(&global_array, "../data/array.data") != 0) {
-            ret = -1;
-        }
-#endif
-
-#if ENABLE_RBTREE
-        if (kvs_rbtree_save(&global_rbtree, "../data/rbtree.data") != 0) {
-            ret = -1;
-        }
-#endif
-
-#if ENABLE_HASH
-        if (kvs_hash_save(&global_hash, "../data/hash.data") != 0) {
-            ret = -1;
-        }
-#endif
-
-#if ENABLE_SKIPTABLE
-        if (kvs_skiptable_save(&global_skiptable, "../data/skiptable.data") != 0) {
-            ret = -1;
-        }
-#endif
+        int ret = kvs_snapshot_save_all("../data/kvstore.data");
 
 #if AOF_ENABLE
         if (ret == 0 && kvs_aof_clear() != 0) {
@@ -614,31 +514,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     }
 
     case (KVS_CMD_LOAD_ALL): {
-        int ret = 0;
-
-#if ENABLE_ARRAY
-        if (kvs_array_load(&global_array, "../data/array.data") != 0) {
-            ret = -1;
-        }
-#endif
-
-#if ENABLE_RBTREE
-        if (kvs_rbtree_load(&global_rbtree, "../data/rbtree.data") != 0) {
-            ret = -1;
-        }
-#endif
-
-#if ENABLE_HASH
-        if (kvs_hash_load(&global_hash, "../data/hash.data") != 0) {
-            ret = -1;
-        }
-#endif
-
-#if ENABLE_SKIPTABLE
-        if (kvs_skiptable_load(&global_skiptable, "../data/skiptable.data") != 0) {
-            ret = -1;
-        }
-#endif
+        int ret = kvs_snapshot_load_all("../data/kvstore.data");
 
         if (ret == 0 && kvs_replication_resync() == 0) {
             length = snprintf(response, response_size, "+OK\r\n");
@@ -776,47 +652,18 @@ int kvs_reset_data() {
     return init_kvengine();
 }
 
-static int kvs_load_all_storage() {
-    int ret = 0;
+static int kvs_load_all_storage() { return kvs_snapshot_load_all("../data/kvstore.data"); }
 
-#if ENABLE_ARRAY
-    if (kvs_array_load(&global_array, "../data/array.data") != 0) {
-        ret = -1;
-    }
-#endif
-
-#if ENABLE_RBTREE
-    if (kvs_rbtree_load(&global_rbtree, "../data/rbtree.data") != 0) {
-        ret = -1;
-    }
-#endif
-
-#if ENABLE_HASH
-    if (kvs_hash_load(&global_hash, "../data/hash.data") != 0) {
-        ret = -1;
-    }
-#endif
-
-#if ENABLE_SKIPTABLE
-    if (kvs_skiptable_load(&global_skiptable, "../data/skiptable.data") != 0) {
-        ret = -1;
-    }
-#endif
-
-    return ret;
-}
-
-// ./kvstore <port> <network> <role> <master_ip> <master_port>
-// network: 1(reactor) 2(NtyCo) 3(proactor)
+// ./kvstore <port> <role> <master_ip> <master_port>
 // role: 0(Master) 1(Replica)
-// ./kvstore 9999 0 0
-// ./kvstore 2000 0 1 39.97.42.225 9999
+// ./kvstore 9999 0
+// ./kvstore 2000 1 39.97.42.225 9999
 int main(int argc, char* argv[]) {
 
-    if (argc < 4) {
+    if (argc < 3) {
         printf("Usage:\n"
-               "  Master : %s <port> <network> 0\n"
-               "  Replica: %s <port> <network> 1 <master_ip> <master_port>\n",
+               "  Master : %s <port> 0\n"
+               "  Replica: %s <port> 1 <master_ip> <master_port>\n",
                argv[0], argv[0]);
 
         return -1;
@@ -824,9 +671,7 @@ int main(int argc, char* argv[]) {
 
     unsigned short port = atoi(argv[1]);
 
-    int select_network_architecture = atoi(argv[2]);
-
-    int role = atoi(argv[3]);
+    int role = atoi(argv[2]);
 
     /*
      * 初始化 KV Engine
@@ -854,11 +699,11 @@ int main(int argc, char* argv[]) {
             }
             // 否则视为空数据库，继续
         }
-        if (access("../data/append.aof", F_OK) == 0) {
-            if (kvs_aof_replay("../data/append.aof") != 0) {
-                fprintf(stderr, "AOF replay failed, data may be incomplete.\n");
-            }
-        }
+        // if (access("../data/append.aof", F_OK) == 0) {
+        //     if (kvs_aof_replay("../data/append.aof") != 0) {
+        //         fprintf(stderr, "AOF replay failed, data may be incomplete.\n");
+        //     }
+        // }
         // 重放完成后，再初始化 AOF 的追加模式
         if (kvs_aof_init("../data/append.aof") != 0) {
             fprintf(stderr, "AOF init failed.\n");
@@ -880,9 +725,9 @@ int main(int argc, char* argv[]) {
             return -1;
         }
 
-        const char* master_ip = argv[4];
+        const char* master_ip = argv[3];
 
-        int master_port = atoi(argv[5]);
+        int master_port = atoi(argv[4]);
 
         int fd = kvs_replication_connect_master(master_ip, master_port);
 
@@ -902,30 +747,18 @@ int main(int argc, char* argv[]) {
     /*
      * 启动网络服务
      */
-    switch (select_network_architecture) { //
-    case NETWORK_REACTOR: {
-        printf("**********USE reactor**********\n");
-        reactor_start(port, kvs_protocol);
-        break;
-    }
+#if USE_REACTOR
+    printf("**********USE reactor**********\n");
+    reactor_start(port, kvs_protocol);
 
-    case NETWORK_NTYCO: {
-        printf("**********USE NtyCo**********\n");
-        ntyco_start(port, kvs_protocol);
-        break;
-    }
+#elif USE_NTYCO
+    printf("**********USE NtyCo**********\n");
+    ntyco_start(port, kvs_protocol);
+#elif USE_PROACTOR
+    printf("**********USE proactor**********\n");
+    proactor_start(port, kvs_protocol);
+#endif
 
-    case NETWORK_PROACTOR: {
-        printf("**********USE proactor**********\n");
-        proactor_start(port, kvs_protocol);
-        break;
-    }
-
-    default: {
-        printf("no such NETWORK ARCHITECTURE");
-        break;
-    }
-    }
 #if AOF_ENABLE
     kvs_aof_close();
 #endif
