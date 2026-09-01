@@ -2,7 +2,7 @@
 #include "kvstore.h"
 #include <cstring>
 
-kvs_skiptable_t global_skiptable;
+kvs_skiptable_t global_skiptable = {0};
 
 #if HASH_ENABLE_CHAR_KV
 Node* createNode(int level, const char* key, const char* value) {

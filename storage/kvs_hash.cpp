@@ -5,7 +5,7 @@
 // Key, Value -->
 // Modify
 
-kvs_hash_t global_hash;
+kvs_hash_t global_hash = {0};
 
 // Connection
 //  'C' + 'o' + 'n'
@@ -85,17 +85,28 @@ void kvs_hash_destroy(kvs_hash_t* hash) {
     for (i = 0; i < hash->max_slots; i++) {
         hashnode_t* node = hash->nodes[i];
 
-        while (node != NULL) { // error
-
+        while (node != NULL) {
             hashnode_t* tmp = node;
             node = node->next;
-            hash->nodes[i] = node;
+
+#if ENABLE_KEY_POINTER
+            if (tmp->key)
+                kvs_free(tmp->key);
+            if (tmp->value)
+                kvs_free(tmp->value);
+#endif
 
             kvs_free(tmp);
         }
+        hash->nodes[i] = NULL;
     }
 
-    kvs_free(hash->nodes);
+    if (hash->nodes) {
+        kvs_free(hash->nodes);
+        hash->nodes = NULL;
+    }
+    hash->max_slots = 0;
+    hash->count = 0;
 }
 
 // 5 + 2

@@ -21,21 +21,16 @@ extern kvs_skiptable_t global_skiptable;
 int init_kvengine();
 int destroy_kvengine();
 
-typedef struct {
+typedef struct { //文件头
     char magic[8];
     uint32_t version;
-    uint32_t count;
+    uint32_t count; //记录存储的份数
 } kvs_file_header_t;
 
-typedef struct {
+typedef struct { //区块头
     uint32_t type;
     uint32_t count;
 } kvs_section_header_t;
-
-typedef struct {
-    uint32_t key_len;
-    uint32_t value_len;
-} kvs_record_header_t;
 
 enum {
     KVS_SNAPSHOT_TYPE_ARRAY = 1,
@@ -397,8 +392,7 @@ int kvs_snapshot_load(const char* filename) {
         return -1;
     }
 
-    destroy_kvengine();
-    init_kvengine();
+    kvs_reset_data();
 
     for (uint32_t i = 0; i < header.count; ++i) {
         kvs_section_header_t section;

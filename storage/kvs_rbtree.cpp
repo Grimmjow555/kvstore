@@ -408,13 +408,29 @@ int kvs_rbtree_create(kvs_rbtree_t* inst) {
 void kvs_rbtree_destroy(kvs_rbtree_t* inst) {
     if (inst == NULL)
         return;
-    rbtree_node* node = NULL;
-    while (node != inst->root) {
-        rbtree_node* mini = rbtree_mini(inst, node);
+
+    while (inst->root != inst->nil) {
+        rbtree_node* mini = rbtree_mini(inst, inst->root);
         rbtree_node* cur = rbtree_delete(inst, mini);
-        kvs_free(cur);
+
+        if (cur != NULL) {
+            if (cur->key != NULL) {
+                kvs_free(cur->key);
+                cur->key = NULL;
+            }
+            if (cur->value != NULL) {
+                kvs_free(cur->value);
+                cur->value = NULL;
+            }
+            kvs_free(cur);
+        }
     }
-    kvs_free(inst->nil);
+
+    if (inst->nil != NULL) {
+        kvs_free(inst->nil);
+        inst->nil = NULL;
+    }
+    inst->root = NULL;
 }
 
 // void kvs_rbtree_destroy(kvs_rbtree_t* inst) {

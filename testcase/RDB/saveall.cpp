@@ -428,7 +428,7 @@ int main(int argc, char* argv[]) {
     const char* args_save[] = {};
     char* req = nullptr;
     req = build_resp_request("RDB SAVE", 0, args_save);
-    testcase_raw(connfd, req, "+OK\r\n", "RDB_SAVE", 0);
+    testcase_raw(connfd, req, "+OK\r\n", "RDB SAVE", 0);
     free(req);
 
 #else
@@ -437,7 +437,7 @@ int main(int argc, char* argv[]) {
     const char* args_load[] = {};
     char* req = nullptr;
     req = build_resp_request("RDB LOAD", 0, args_load);
-    testcase_raw(connfd, req, "+OK\r\n", "RDB_LOAD", 0);
+    testcase_raw(connfd, req, "+OK\r\n", "RDB LOAD", 0);
     free(req);
 
     rbtree_testcase(connfd);
