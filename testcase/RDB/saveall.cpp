@@ -175,19 +175,7 @@ void array_testcase(int connfd) {
     testcase_raw(connfd, req, "$6\r\nDarren\r\n", "GET-Darren-Teacher", 0);
     free(req);
 
-    // SAVE (should return OK)
-    const char* args_save[] = {};
-    req = build_resp_request("SAVE ALL", 0, args_save);
-    testcase_raw(connfd, req, "+OK\r\n", "SAVE_ALL", 0);
-    free(req);
-
 #else
-
-    // // LOAD (should return OK)
-    // const char* args_load[] = {};
-    // req = build_resp_request("LOAD", 0, args_load);
-    // testcase_raw(connfd, req, "+OK\r\n", "LOAD_ARRAY", 0);
-    // free(req);
 
     // EXIST Teacher
     const char* args5[] = {"Teacher"};
@@ -250,19 +238,7 @@ void rbtree_testcase(int connfd) {
     testcase_raw(connfd, req, "$6\r\nDarren\r\n", "RGET-Darren-Teacher", 0);
     free(req);
 
-    // // RSAVE (should return OK)
-    // const char* args_save[] = {};
-    // req = build_resp_request("RSAVE", 0, args_save);
-    // testcase_raw(connfd, req, "+OK\r\n", "SAVE_RBTREE", 0);
-    // free(req);
-
 #else
-
-    // // RLOAD (should return OK)
-    // const char* args_load[] = {};
-    // req = build_resp_request("RLOAD", 0, args_load);
-    // testcase_raw(connfd, req, "+OK\r\n", "LOAD_RBTREE", 0);
-    // free(req);
 
     // REXIST Teacher
     const char* args5[] = {"Teacher"};
@@ -325,19 +301,7 @@ void hash_testcase(int connfd) {
     testcase_raw(connfd, req, "$6\r\nDarren\r\n", "HGET-Darren-Teacher", 0);
     free(req);
 
-    // // HSAVE (should return OK)
-    // const char* args_save[] = {};
-    // req = build_resp_request("HSAVE", 0, args_save);
-    // testcase_raw(connfd, req, "+OK\r\n", "SAVE_HASH", 0);
-    // free(req);
-
 #else
-
-    // // HLOAD (should return OK)
-    // const char* args_load[] = {};
-    // req = build_resp_request("HLOAD", 0, args_load);
-    // testcase_raw(connfd, req, "+OK\r\n", "LOAD_HASH", 0);
-    // free(req);
 
     // HEXIST Teacher
     const char* args5[] = {"Teacher"};
@@ -401,19 +365,7 @@ void skiptable_testcase(int connfd) {
     testcase_raw(connfd, req, "$6\r\nDarren\r\n", "SGET-Darren-Teacher", 0);
     free(req);
 
-    // // SSAVE (should return OK)
-    // const char* args_save[] = {};
-    // req = build_resp_request("SSAVE", 0, args_save);
-    // testcase_raw(connfd, req, "+OK\r\n", "SAVE_SKIPTABLE", 0);
-    // free(req);
-
 #else
-
-    // // SLOAD (should return OK)
-    // const char* args_load[] = {};
-    // req = build_resp_request("SLOAD", 0, args_load);
-    // testcase_raw(connfd, req, "+OK\r\n", "LOAD_SKIPTABLE", 0);
-    // free(req);
 
     // SEXIST Teacher
     const char* args5[] = {"Teacher"};
@@ -453,35 +405,48 @@ void skiptable_testcase(int connfd) {
 // 0: rbtree; 1: array; 2: hash; 3: skiptable
 int main(int argc, char* argv[]) {
 
-    if (argc != 4) {
+    if (argc != 3) {
         printf("arg error\n");
         return -1;
     }
 
     char* ip = argv[1];
     unsigned short port = atoi(argv[2]);
-    int mode = atoi(argv[3]);
 
-#if LEVEL1
     printf("LEVEL1:使用9条测试样例, 测试一次\n");
     int connfd = connect_tcpserver(ip, port);
 
-    // SAVE (should return OK)
+#if SAVE
+    rbtree_testcase(connfd);
+
+    array_testcase(connfd);
+
+    hash_testcase(connfd);
+
+    skiptable_testcase(connfd);
+
     const char* args_save[] = {};
     char* req = nullptr;
-    req = build_resp_request("SAVE ALL", 0, args_save);
-    testcase_raw(connfd, req, "+OK\r\n", "SAVE_ALL", 0);
+    req = build_resp_request("RDB SAVE", 0, args_save);
+    testcase_raw(connfd, req, "+OK\r\n", "RDB_SAVE", 0);
     free(req);
 
-    if (mode == 0) {
-        rbtree_testcase(connfd);
-    } else if (mode == 1) {
-        array_testcase(connfd);
-    } else if (mode == 2) {
-        hash_testcase(connfd);
-    } else if (mode == 3) {
-        skiptable_testcase(connfd);
-    }
+#else
+
+    printf("LOAD\n");
+    const char* args_load[] = {};
+    char* req = nullptr;
+    req = build_resp_request("RDB LOAD", 0, args_load);
+    testcase_raw(connfd, req, "+OK\r\n", "RDB_LOAD", 0);
+    free(req);
+
+    rbtree_testcase(connfd);
+
+    array_testcase(connfd);
+
+    hash_testcase(connfd);
+
+    skiptable_testcase(connfd);
 
 #endif
     return 0;

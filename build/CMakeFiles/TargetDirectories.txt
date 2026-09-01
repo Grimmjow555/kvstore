@@ -1,3 +1,0 @@
-/home/Share/VScode/12.kvstore/build/CMakeFiles/kvstore.dir
-/home/Share/VScode/12.kvstore/build/CMakeFiles/edit_cache.dir
-/home/Share/VScode/12.kvstore/build/CMakeFiles/rebuild_cache.dir
