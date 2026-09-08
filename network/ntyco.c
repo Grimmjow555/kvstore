@@ -82,7 +82,7 @@ void server_reader(void* arg) {
         buf[msg_len] = '\0'; // 确保字符串结束
 
         // 5. 动态分配响应缓冲区（与最大允许长度相同，或使用更小的合理上限）
-        char* response = (char*)malloc(MAX_ALLOWED_LEN);
+        char* response = (char*)malloc(MAX_ALLOWED_LEN + 1);
         if (!response) {
             free(buf);
             close(fd);
@@ -93,9 +93,9 @@ void server_reader(void* arg) {
         int is_replica = kvs_replication_accept_handshake(fd, buf, (int)msg_len) == 1;
         int slength;
         if (is_replica) {
-            slength = snprintf(response, MAX_ALLOWED_LEN, "+OK\r\n");
+            slength = snprintf(response, MAX_ALLOWED_LEN + 1, "+OK\r\n");
         } else {
-            slength = kvs_handler(buf, (int)msg_len, response, MAX_ALLOWED_LEN);
+            slength = kvs_handler(buf, (int)msg_len, response, MAX_ALLOWED_LEN + 1);
         }
         if (slength < 0) {
             slength = 0; // 或发送错误响应

@@ -69,7 +69,7 @@ int kvs_aof_replay(const char* filename) {
     long size = ftell(fp);
     rewind(fp);
 
-    char* buffer = (char*)kvs_malloc(size + 1);
+    char* buffer = (char*)malloc(size + 1);
 
     if (!buffer) {
         fclose(fp);
@@ -100,17 +100,17 @@ int kvs_aof_replay(const char* filename) {
         kvs_filter_protocol(argv, argc, response, sizeof(response));
 
         for (int i = 0; i < argc; ++i) {
-            kvs_free(argv[i]);
+            free(argv[i]);
         }
 
-        kvs_free(argv);
+        free(argv);
 
         offset += consumed;
     }
 
     aof_replaying = 0;
 
-    kvs_free(buffer);
+    free(buffer);
     fclose(fp);
 
     return 0;

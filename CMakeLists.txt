@@ -27,13 +27,13 @@ if(NOT URING_LIBRARY)
 endif()
 
 # 查找 jemalloc
-find_library(JEMALLOC_LIBRARY
-    NAMES jemalloc
-    HINTS /usr/local/lib /usr/lib
-)
-if(NOT JEMALLOC_LIBRARY)
-    message(FATAL_ERROR "jemalloc not found. Please install jemalloc or specify its path.")
-endif()
+# find_library(JEMALLOC_LIBRARY
+#     NAMES jemalloc
+#     HINTS /usr/local/lib /usr/lib
+# )
+# if(NOT JEMALLOC_LIBRARY)
+#     message(FATAL_ERROR "jemalloc not found. Please install jemalloc or specify its path.")
+# endif()
 
 # 可选：检查 liburing 头文件
 find_path(URING_INCLUDE_DIR
@@ -59,6 +59,8 @@ add_executable(kvstore
     storage/kvs_hash.cpp
     storage/kvs_skiptable.cpp
 
+    memorypool/memorypool.cpp
+
     persistence/snapshot.cpp
     persistence/aof.cpp
 
@@ -77,13 +79,9 @@ target_link_directories(kvstore PRIVATE ${NTYCO_LIBRARY_DIR})
 # 链接库
 target_link_libraries(kvstore
     ${URING_LIBRARY}
-    ${JEMALLOC_LIBRARY}
+    # ${JEMALLOC_LIBRARY}
     ntyco                    # 库名，依赖于前面的 link_directories
     Threads::Threads         # 提供 pthread
     ${CMAKE_DL_LIBS}         # 提供 dl（如果系统需要）
 )
 
-# # 如果使用 GCC/Clang，建议开启常用警告（可选）
-# if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-#     target_compile_options(kvstore PRIVATE -Wall -Wextra)
-# endif()

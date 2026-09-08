@@ -74,25 +74,25 @@ static int kvs_read_record(FILE* fp, char** out_key, char** out_value) {
         return -1;
 
     if (key_len > 0) {
-        key = (char*)kvs_malloc(key_len + 1);
+        key = (char*)malloc(key_len + 1);
         if (!key)
             return -1;
         if (kvs_read_exact(fp, key, key_len) != 0) {
-            kvs_free(key);
+            free(key);
             return -1;
         }
         key[key_len] = '\0';
     }
 
     if (value_len > 0) {
-        value = (char*)kvs_malloc(value_len + 1);
+        value = (char*)malloc(value_len + 1);
         if (!value) {
-            kvs_free(key);
+            free(key);
             return -1;
         }
         if (kvs_read_exact(fp, value, value_len) != 0) {
-            kvs_free(key);
-            kvs_free(value);
+            free(key);
+            free(value);
             return -1;
         }
         value[value_len] = '\0';
@@ -133,15 +133,15 @@ static int kvs_load_array_section(FILE* fp, uint32_t count) {
             return -1;
         if (key && value) {
             if (kvs_array_set(&global_array, key, value) != 0) {
-                kvs_free(key);
-                kvs_free(value);
+                free(key);
+                free(value);
                 return -1;
             }
-            kvs_free(key);
-            kvs_free(value);
+            free(key);
+            free(value);
         } else {
-            kvs_free(key);
-            kvs_free(value);
+            free(key);
+            free(value);
             return -1;
         }
     }
@@ -187,15 +187,15 @@ static int kvs_load_rbtree_section(FILE* fp, uint32_t count) {
             return -1;
         if (key && value) {
             if (kvs_rbtree_set(&global_rbtree, key, value) != 0) {
-                kvs_free(key);
-                kvs_free(value);
+                free(key);
+                free(value);
                 return -1;
             }
-            kvs_free(key);
-            kvs_free(value);
+            free(key);
+            free(value);
         } else {
-            kvs_free(key);
-            kvs_free(value);
+            free(key);
+            free(value);
             return -1;
         }
     }
@@ -245,15 +245,15 @@ static int kvs_load_hash_section(FILE* fp, uint32_t count) {
             return -1;
         if (key && value) {
             if (kvs_hash_set(&global_hash, key, value) != 0) {
-                kvs_free(key);
-                kvs_free(value);
+                free(key);
+                free(value);
                 return -1;
             }
-            kvs_free(key);
-            kvs_free(value);
+            free(key);
+            free(value);
         } else {
-            kvs_free(key);
-            kvs_free(value);
+            free(key);
+            free(value);
             return -1;
         }
     }
@@ -299,15 +299,15 @@ static int kvs_load_skiptable_section(FILE* fp, uint32_t count) {
             return -1;
         if (key && value) {
             if (kvs_skiptable_set(&global_skiptable, key, value) != 0) {
-                kvs_free(key);
-                kvs_free(value);
+                free(key);
+                free(value);
                 return -1;
             }
-            kvs_free(key);
-            kvs_free(value);
+            free(key);
+            free(value);
         } else {
-            kvs_free(key);
-            kvs_free(value);
+            free(key);
+            free(value);
             return -1;
         }
     }

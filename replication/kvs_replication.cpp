@@ -218,7 +218,7 @@ int kvs_replication_append(int argc, char* argv[]) {
         size += strlen(argv[i]) + 32;
     }
 
-    char* buffer = (char*)kvs_malloc(size);
+    char* buffer = (char*)malloc(size);
 
     if (!buffer) {
         return -1;
@@ -262,7 +262,7 @@ int kvs_replication_append(int argc, char* argv[]) {
 
     pthread_mutex_unlock(&replica_mutex);
 
-    kvs_free(buffer);
+    free(buffer);
     return 0;
 }
 
@@ -280,7 +280,7 @@ static int send_memory_record(int fd, const char* command, const char* key, cons
     }
 
     size_t size = command_len + key_len + value_len + 64;
-    char* buffer = (char*)kvs_malloc(size);
+    char* buffer = (char*)malloc(size);
     if (buffer == NULL) {
         return -1;
     }
@@ -288,7 +288,7 @@ static int send_memory_record(int fd, const char* command, const char* key, cons
     int length = snprintf(buffer, size, "*3\r\n$%zu\r\n%s\r\n$%zu\r\n%s\r\n$%zu\r\n%s\r\n",
                           command_len, command, key_len, key, value_len, value);
     int result = length < 0 || (size_t)length >= size ? -1 : send_frame(fd, buffer, length);
-    kvs_free(buffer);
+    free(buffer);
     return result;
 }
 
@@ -501,13 +501,13 @@ void* replication_thread(void* arg) {
         return NULL;
     }
     uint32_t response_len = ntohl(net_len);
-    char* buffer = (char*)kvs_malloc((size_t)response_len + 1);
+    char* buffer = (char*)malloc((size_t)response_len + 1);
     if (buffer == NULL || recv_all(fd, buffer, response_len) < 0) {
-        kvs_free(buffer);
+        free(buffer);
         replication_running = 0;
         return NULL;
     }
-    kvs_free(buffer);
+    free(buffer);
 
     // =============================================
     // 块2：主循环——持续接收增量命令
@@ -523,9 +523,9 @@ void* replication_thread(void* arg) {
         }
 
         // ---- 2.2 接收命令数据体 ----
-        buffer = (char*)kvs_malloc((size_t)command_len + 1);
+        buffer = (char*)malloc((size_t)command_len + 1);
         if (buffer == NULL || recv_all(fd, buffer, command_len) < 0) {
-            kvs_free(buffer);
+            free(buffer);
             break;
         }
         buffer[command_len] = '\0';
@@ -535,7 +535,7 @@ void* replication_thread(void* arg) {
         // 通常用于全量同步前的清理，确保数据一致性。
         if (strcmp(buffer, replication_reset) == 0) {
             kvs_reset_data();
-            kvs_free(buffer);
+            free(buffer);
             continue;
         }
 
@@ -550,7 +550,7 @@ void* replication_thread(void* arg) {
             kvs_protocol(buffer, (int)command_len, response, 128);
         }
 
-        kvs_free(buffer);
+        free(buffer);
 
         // 清除回放标志
         kvs_replication_set_replaying(0);

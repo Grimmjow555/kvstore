@@ -6,6 +6,7 @@
 #include "kvs_skiptable.h"
 #include "kvs_snapshot.h"
 #include "kvstore.h"
+#include "memorypool.h"
 #include "network.h"
 #include <cerrno>
 #include <cstring>
@@ -29,9 +30,22 @@ extern kvs_hash_t global_hash;
 extern kvs_skiptable_t global_skiptable;
 #endif
 
-void* kvs_malloc(size_t size) { return malloc(size); }
+void* kvs_malloc(size_t size) {
+#if ENABLE_MEMORYPOOL
+    return slab_alloc(size);
+#else
+    return malloc(size);
+#endif
+}
 
-void kvs_free(void* ptr) { return free(ptr); }
+void kvs_free(void* ptr) {
+#if ENABLE_MEMORYPOOL
+    if (ptr != nullptr)
+        slab_free_ptr(ptr);
+#else
+    free(ptr);
+#endif
+}
 
 const char* command[] = {"SET",      "GET",      "DEL",      "MOD",      "EXIST",
 
@@ -99,8 +113,7 @@ const char* response[] = {};
  * @note 1. 本函数仅支持 RESP 的数组（以 '*' 开头）和批量字符串（以 '$' 开头）。
  *       2. 不支持 null 批量字符串（长度为 -1），遇到会返回 NULL。
  *       3. 调用者负责最终释放返回的 argv 中每个字符串及其本身（通过 kvs_free）。
- *       4. 本函数内部使用 kvs_malloc/kvs_free，需确保外部已实现。
- *       5. 遇到解析错误（如格式不匹配）会立即返回 NULL，调用者需自行处理。
+ *       4. 遇到解析错误（如格式不匹配）会立即返回 NULL，调用者需自行处理。
  */
 char** resp_parse_command(char* buffer, int* argc, int* consumed) {
     // 1. 基本校验：非空且必须以 '*' 开头（RESP 数组格式）
@@ -120,7 +133,7 @@ char** resp_parse_command(char* buffer, int* argc, int* consumed) {
     *consumed = (int)(p - buffer);
 
     // 5. 为 argv 数组分配内存（参数个数 + 1 个 NULL 结尾）
-    char** argv = (char**)kvs_malloc((param_count + 1) * sizeof(char*));
+    char** argv = (char**)malloc((param_count + 1) * sizeof(char*));
     if (!argv)
         return NULL;
 
@@ -128,7 +141,7 @@ char** resp_parse_command(char* buffer, int* argc, int* consumed) {
     for (int i = 0; i < param_count; i++) {
         // 6.1 检查当前参数是否以 '$' 开头（批量字符串）
         if (*p != '$') {
-            kvs_free(argv);
+            free(argv);
             return NULL;
         }
 
@@ -140,19 +153,19 @@ char** resp_parse_command(char* buffer, int* argc, int* consumed) {
 
         // 6.4 处理 null 批量字符串（长度为 -1），本函数不支持
         if (len < 0) {
-            kvs_free(argv);
+            free(argv);
             return NULL;
         }
 
         // 6.5 为当前参数值分配内存（len + 1 字节，用于存放 '\0'）
-        char* data = (char*)kvs_malloc(len + 1);
+        char* data = (char*)malloc(len + 1);
         if (!data) {
             // 分配失败，释放已分配的 argv 及其它已分配的数据
             // 注意：前面 i 个参数已分配，需要释放
             for (int j = 0; j < i; j++) {
-                kvs_free(argv[j]);
+                free(argv[j]);
             }
-            kvs_free(argv);
+            free(argv);
             return NULL;
         }
 
@@ -644,20 +657,21 @@ int kvs_protocol(char* msg, int length, char* response, int response_size) {
             // 这里简单处理为返回错误
             free(tmp_resp);
             for (int i = 0; i < argc; i++)
-                kvs_free(argv[i]);
-            kvs_free(argv);
+                free(argv[i]);
+            free(argv);
             break;
         }
         free(tmp_resp);
 
         for (int i = 0; i < argc; i++)
-            kvs_free(argv[i]);
-        kvs_free(argv);
+            free(argv[i]);
+        free(argv);
         msg_used += consumed;
     }
     return resp_offset;
 }
 
+//初始化存储引擎
 int init_kvengine() {
 #if ENABLE_ARRAY
     memset(&global_array, 0, sizeof(kvs_array_t));
@@ -681,6 +695,7 @@ int init_kvengine() {
     return 0;
 }
 
+//销毁存储引擎
 int destroy_kvengine() {
 #if ENABLE_ARRAY
     kvs_array_destroy(&global_array);
@@ -700,6 +715,7 @@ int destroy_kvengine() {
     return 0;
 }
 
+//引擎数据重置
 int kvs_reset_data() {
     destroy_kvengine();
 
@@ -725,14 +741,15 @@ int main(int argc, char* argv[]) {
 
     int role = atoi(argv[2]);
 
-    /*
-     * 初始化 KV Engine
-     */
+    // 初始化 KV Engine
     init_kvengine();
 
-    /*
-     * 初始化复制模块
-     */
+    //初始化内存池
+#if ENABLE_MEMORYPOOL
+    slab_init();
+#endif
+
+    // 初始化复制模块
     if (role == 0) {
         kvs_replication_init(KVS_ROLE_MASTER);
         if (kvs_aof_init("../data/append.aof") != 0) {
@@ -743,9 +760,7 @@ int main(int argc, char* argv[]) {
         kvs_replication_init(KVS_ROLE_REPLICA);
     }
 
-    /*
-     * Replica 连接 Master
-     */
+    // Replica 连接 Master
     if (role == KVS_ROLE_REPLICA) {
 
         if (argc != 5) {
@@ -774,9 +789,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    /*
-     * 启动网络服务
-     */
+    // 启动网络服务
 #if USE_REACTOR
     // printf("**********USE reactor**********\n");
     reactor_start(port, kvs_protocol);
@@ -793,6 +806,9 @@ int main(int argc, char* argv[]) {
 
 #if AOF_ENABLE
     kvs_aof_close();
+#endif
+#if ENABLE_MEMORYPOOL
+    slab_dest();
 #endif
     kvs_replication_destroy();
     destroy_kvengine();
