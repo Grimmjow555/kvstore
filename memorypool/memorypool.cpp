@@ -6,9 +6,7 @@
 
 #define MEM_PAGE_SIZE 4096
 
-// 内存池结构体定义（移到头文件之前需要在这里定义，因为 kvstore.h 中引用了它）
-
-// 初始化单个内存池
+// 初始化一个固定大小的内存池
 int mp_init(mempool_t* m, int size) {
 
     if (!m)
@@ -38,7 +36,7 @@ int mp_init(mempool_t* m, int size) {
     return 0;
 }
 
-// 销毁单个内存池
+// 销毁内存池
 void mp_dest(mempool_t* m) {
     if (!m || !m->mem)
         return;
@@ -49,7 +47,7 @@ void mp_dest(mempool_t* m) {
     m->free_count = 0;
 }
 
-// 从单个内存池分配
+// 从内存池分配
 void* mp_alloc(mempool_t* m) {
 
     if (!m || m->free_count == 0)
@@ -63,7 +61,7 @@ void* mp_alloc(mempool_t* m) {
     return ptr;
 }
 
-// 释放到单个内存池
+// 回收内存到内存池
 void mp_free(mempool_t* m, void* ptr) {
     if (!m || !ptr)
         return;

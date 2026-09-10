@@ -1,5 +1,6 @@
 #include "aof.h"
 #include "kvs_array.h"
+#include "kvs_config.h"
 #include "kvs_hash.h"
 #include "kvs_rbtree.h"
 #include "kvs_replication.h"
@@ -111,9 +112,7 @@ const char* response[] = {};
  *         失败返回 NULL（并释放已分配内存）。
  *
  * @note 1. 本函数仅支持 RESP 的数组（以 '*' 开头）和批量字符串（以 '$' 开头）。
- *       2. 不支持 null 批量字符串（长度为 -1），遇到会返回 NULL。
- *       3. 调用者负责最终释放返回的 argv 中每个字符串及其本身（通过 kvs_free）。
- *       4. 遇到解析错误（如格式不匹配）会立即返回 NULL，调用者需自行处理。
+ *       2. 调用者负责最终释放返回的 argv 中每个字符串及其本身。
  */
 char** resp_parse_command(char* buffer, int* argc, int* consumed) {
     // 1. 基本校验：非空且必须以 '*' 开头（RESP 数组格式）
@@ -214,8 +213,9 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     case KVS_CMD_SET: {
         int ret = kvs_array_set(&global_array, tokens[1], tokens[2]);
         if (ret == 0) {
-            // 正常写入时记录 AOF；AOF 恢复或 Replica 重放时不重复记录
-            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
+            // 在AOF功能打开时，正常写入时记录 AOF；AOF 恢复或 Replica 重放时不重复记录
+            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
+                !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);
             }
 
@@ -248,7 +248,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         int ret = kvs_array_del(&global_array, tokens[1]);
         if (ret == 0) {
 
-            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
+            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
+                !kvs_replication_is_replaying()) {
                 kvs_aof_append(2, tokens);
             }
 
@@ -269,7 +270,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         int ret = kvs_array_mod(&global_array, tokens[1], tokens[2]);
         if (ret == 0) {
 
-            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
+            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
+                !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);
             }
 
@@ -305,7 +307,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         int ret = kvs_rbtree_set(&global_rbtree, tokens[1], tokens[2]);
         if (ret == 0) {
 
-            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
+            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
+                !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);
             }
 
@@ -337,7 +340,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         int ret = kvs_rbtree_del(&global_rbtree, tokens[1]);
         if (ret == 0) {
 
-            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
+            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
+                !kvs_replication_is_replaying()) {
                 kvs_aof_append(2, tokens);
             }
 
@@ -358,7 +362,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         int ret = kvs_rbtree_mod(&global_rbtree, tokens[1], tokens[2]);
         if (ret == 0) {
 
-            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
+            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
+                !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);
             }
 
@@ -394,7 +399,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         int ret = kvs_hash_set(&global_hash, tokens[1], tokens[2]);
         if (ret == 0) {
 
-            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
+            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
+                !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);
             }
 
@@ -426,7 +432,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         int ret = kvs_hash_del(&global_hash, tokens[1]);
         if (ret == 0) {
 
-            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
+            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
+                !kvs_replication_is_replaying()) {
                 kvs_aof_append(2, tokens);
             }
 
@@ -447,7 +454,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         int ret = kvs_hash_mod(&global_hash, tokens[1], tokens[2]);
         if (ret == 0) {
 
-            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
+            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
+                !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);
             }
 
@@ -484,7 +492,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         int ret = kvs_skiptable_set(&global_skiptable, tokens[1], tokens[2]);
         if (ret == 0) {
 
-            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
+            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
+                !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);
             }
 
@@ -516,7 +525,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         int ret = kvs_skiptable_del(&global_skiptable, tokens[1]);
         if (ret == 0) {
 
-            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
+            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
+                !kvs_replication_is_replaying()) {
                 kvs_aof_append(2, tokens);
             }
 
@@ -537,7 +547,8 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         int ret = kvs_skiptable_mod(&global_skiptable, tokens[1], tokens[2]);
         if (ret == 0) {
 
-            if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
+            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
+                !kvs_replication_is_replaying()) {
                 kvs_aof_append(3, tokens);
             }
 
@@ -568,6 +579,11 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
 #endif
 
     case KVS_CMD_RDB_SAVE: {
+        if (!kvs_config_rdb_enabled()) {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+            break;
+        }
+
         int ret = kvs_snapshot_save("../data/kvstore.data");
 
         if (ret == 0) {
@@ -579,6 +595,11 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     }
 
     case (KVS_CMD_RDB_LOAD): {
+        if (!kvs_config_rdb_enabled()) {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+            break;
+        }
+
         int ret = kvs_snapshot_load("../data/kvstore.data");
 
         if (ret == 0) {
@@ -592,6 +613,11 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
 
 #if AOF_ENABLE
     case KVS_CMD_AOF_LOAD: {
+        if (!kvs_config_aof_enabled()) {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+            break;
+        }
+
         int ret = kvs_aof_replay("../data/append.aof");
         if (ret == 0) {
             kvs_replication_resync();
@@ -603,6 +629,11 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     }
 
     case KVS_CMD_AOF_CLEAR: {
+        if (!kvs_config_aof_enabled()) {
+            length = snprintf(response, response_size, "-ERROR\r\n");
+            break;
+        }
+
         int ret = kvs_aof_clear();
         if (ret == 0) {
             length = snprintf(response, response_size, "+OK\r\n");
@@ -718,7 +749,10 @@ int destroy_kvengine() {
 //引擎数据重置
 int kvs_reset_data() {
     destroy_kvengine();
-
+#if ENABLE_MEMORYPOOL
+    slab_dest();
+    slab_init();
+#endif
     return init_kvengine();
 }
 
@@ -728,10 +762,24 @@ int kvs_reset_data() {
 // ./kvstore 2000 1 39.97.42.225 9999
 int main(int argc, char* argv[]) {
 
+    kvs_config_set_defaults();
+    if (kvs_config_parse_switches(&argc, &argv) != 0) {
+        fprintf(stderr, "Invalid persistence switch. Use --rdb on|off and --aof on|off.\n");
+        return -1;
+    }
+    printf("Persistence Config: RDB %s, AOF %s\n",
+           kvs_config_rdb_enabled() ? "enabled" : "disabled",
+           kvs_config_aof_enabled() ? "enabled" : "disabled");
+
+    printf("argc: %d, argv: ", argc);
+    for (int i = 0; i < argc; i++) {
+        printf("%s ", argv[i]);
+    }
+    printf("\n");
     if (argc < 3) {
         printf("Usage:\n"
-               "  Master : %s <port> 0\n"
-               "  Replica: %s <port> 1 <master_ip> <master_port>\n",
+               "  Master : %s <port> 0 [--rdb on|off] [--aof on|off]\n"
+               "  Replica: %s <port> 1 <master_ip> <master_port> [--rdb on|off] [--aof on|off]\n",
                argv[0], argv[0]);
 
         return -1;
@@ -752,7 +800,7 @@ int main(int argc, char* argv[]) {
     // 初始化复制模块
     if (role == 0) {
         kvs_replication_init(KVS_ROLE_MASTER);
-        if (kvs_aof_init("../data/append.aof") != 0) {
+        if (kvs_config_aof_enabled() && kvs_aof_init("../data/append.aof") != 0) {
             fprintf(stderr, "AOF init failed.\n");
             return -1;
         }

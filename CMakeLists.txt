@@ -50,6 +50,8 @@ endif()
 add_executable(kvstore
     kvstore.cpp
 
+    config/kvs_config.cpp
+
     network/proactor.cpp
     network/reactor.cpp
     network/ntyco.c          # 纯 C 源文件
@@ -84,4 +86,3 @@ target_link_libraries(kvstore
     Threads::Threads         # 提供 pthread
     ${CMAKE_DL_LIBS}         # 提供 dl（如果系统需要）
 )
-

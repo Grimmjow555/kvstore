@@ -1,4 +1,5 @@
 #include "aof.h"
+#include "kvs_config.h"
 #include "kvstore.h"
 #include <cstring>
 
@@ -28,6 +29,12 @@ int kvs_aof_init(const char* filename) {
 }
 
 int kvs_aof_append(int argc, char* argv[]) {
+    // // AOF 增量持久化开关关闭时，直接视为成功且不写盘。
+    // // 这样各写命令调用点不需要重复判断配置开关。
+    // if (!kvs_config_aof_enabled()) {
+    //     return 0;
+    // }
+
     if (aof_fp == NULL || argc <= 0) {
         return -1;
     }

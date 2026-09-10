@@ -4,8 +4,6 @@
 
 #define ENABLE_MEMORYPOOL 1
 
-#if ENABLE_MEMORYPOOL
-
 // 内存池结构体
 typedef struct mempool_s {
     int block_size;
@@ -14,6 +12,8 @@ typedef struct mempool_s {
     char* free_ptr;
     char* mem;
 } mempool_t;
+
+#if ENABLE_MEMORYPOOL
 
 // 单池 API
 int mp_init(mempool_t* m, int size);
