@@ -1,70 +1,110 @@
 #include "aof.h"
 #include "kvs_config.h"
+#include "kvs_io_uring.h"
 #include "kvstore.h"
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
+#include <string>
+#include <sys/stat.h>
 
 extern int kvs_filter_protocol(char* tokens[], int count, char* response, int response_size);
 extern char** resp_parse_command(char* buffer, int* argc, int* consumed);
 
 #if AOF_ENABLE
 
+#define KVS_AOF_FLUSH_THRESHOLD (64 * 1024)
+
 static int aof_replaying = 0;
 
-static FILE* aof_fp = NULL;
+static kvs_io_uring_file_t* aof_fp = NULL;
 static char aof_filename[512] = {0};
+static std::string aof_buffer;
+
+static int kvs_aof_flush(void);
 
 int kvs_aof_init(const char* filename) {
     if (filename == NULL) {
         return -1;
     }
 
-    aof_fp = fopen(filename, "a+");
+    aof_fp = kvs_io_uring_open(filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (aof_fp == NULL) {
         return -1;
     }
 
     snprintf(aof_filename, sizeof(aof_filename), "%s", filename);
+    aof_buffer.clear();
 
     return 0;
 }
 
 int kvs_aof_append(int argc, char* argv[]) {
-    // // AOF 增量持久化开关关闭时，直接视为成功且不写盘。
-    // // 这样各写命令调用点不需要重复判断配置开关。
-    // if (!kvs_config_aof_enabled()) {
-    //     return 0;
-    // }
 
     if (aof_fp == NULL || argc <= 0) {
         return -1;
     }
 
-    fprintf(aof_fp, "*%d\r\n", argc);
+    aof_buffer += "*";
+    aof_buffer += std::to_string(argc);
+    aof_buffer += "\r\n";
 
     for (int i = 0; i < argc; ++i) {
-        fprintf(aof_fp, "$%zu\r\n%s\r\n", strlen(argv[i]), argv[i]);
+        aof_buffer += "$";
+        aof_buffer += std::to_string(strlen(argv[i]));
+        aof_buffer += "\r\n";
+        aof_buffer += argv[i];
+        aof_buffer += "\r\n";
     }
 
-    fflush(aof_fp);
+    if (aof_buffer.size() >= KVS_AOF_FLUSH_THRESHOLD) {
+        return kvs_aof_flush();
+    }
 
     return 0;
+}
+
+static int kvs_aof_flush(void) {
+    if (aof_fp == NULL) {
+        return aof_buffer.empty() ? 0 : -1;
+    }
+    if (aof_buffer.empty()) {
+        return 0;
+    }
+
+    int ret = kvs_io_uring_write_and_fsync(aof_fp, aof_buffer.data(), aof_buffer.size());
+    if (ret == 0) {
+        aof_buffer.clear();
+    }
+    return ret;
 }
 
 int kvs_aof_close() {
     if (aof_fp != NULL) {
 
-        fflush(aof_fp);
+        if (!aof_buffer.empty()) {
+            kvs_aof_flush();
+        } else {
+            kvs_io_uring_fsync(aof_fp);
+        }
 
-        fclose(aof_fp);
+        kvs_io_uring_close(aof_fp);
 
         aof_fp = NULL;
     }
 
+    aof_buffer.clear();
     return 0;
 }
 
 //读取增量文件，执行命令
 int kvs_aof_replay(const char* filename) {
+
+    // 回放前先提交仍在内存中的 AOF 增量，避免读到旧文件后漏掉最近写入。
+    if (kvs_aof_flush() != 0) {
+        return -1;
+    }
 
     FILE* fp = fopen(filename, "r");
 
@@ -131,17 +171,29 @@ int kvs_aof_clear() {
         return -1;
     }
 
+    // 先落盘当前缓冲区，再关闭并重建空文件。
+    if (kvs_aof_flush() != 0) {
+        return -1;
+    }
+
     // 关闭当前 AOF 文件
-    fclose(aof_fp);
+    if (kvs_io_uring_fsync(aof_fp) != 0) {
+        return -1;
+    }
+    kvs_io_uring_close(aof_fp);
     aof_fp = NULL;
 
     // 以 "w" 模式重新打开，清空原文件
-    aof_fp = fopen(aof_filename, "w");
+    aof_fp = kvs_io_uring_open(aof_filename, O_WRONLY | O_CREAT | O_TRUNC | O_APPEND, 0644);
     if (aof_fp == NULL) {
         return -1;
     }
 
-    fflush(aof_fp);
+    aof_buffer.clear();
+
+    if (kvs_io_uring_fsync(aof_fp) != 0) {
+        return -1;
+    }
 
     return 0;
 }

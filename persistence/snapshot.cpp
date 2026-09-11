@@ -3,11 +3,15 @@
 #include "kvs_rbtree.h"
 #include "kvs_skiptable.h"
 #include "kvs_snapshot.h"
+#include "kvs_io_uring.h"
 #include "kvstore.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <vector>
 
 extern kvs_array_t global_array;
 extern kvs_rbtree_t global_rbtree;
@@ -39,15 +43,24 @@ enum {
     KVS_SNAPSHOT_TYPE_SKIPTABLE = 4,
 };
 
-static int kvs_write_exact(FILE* fp, const void* buf, size_t len) {
-    return fwrite(buf, 1, len, fp) == len ? 0 : -1;
+static int kvs_write_exact(std::vector<char>* fp, const void* buf, size_t len) {
+    if (fp == NULL || buf == NULL) {
+        return len == 0 ? 0 : -1;
+    }
+    if (len == 0) {
+        return 0;
+    }
+
+    const char* bytes = (const char*)buf;
+    fp->insert(fp->end(), bytes, bytes + len);
+    return 0;
 }
 
 static int kvs_read_exact(FILE* fp, void* buf, size_t len) {
     return fread(buf, 1, len, fp) == len ? 0 : -1;
 }
 
-static int kvs_write_record(FILE* fp, const char* key, const char* value) {
+static int kvs_write_record(std::vector<char>* fp, const char* key, const char* value) {
     uint32_t key_len = key ? (uint32_t)strlen(key) : 0;
     uint32_t value_len = value ? (uint32_t)strlen(value) : 0;
 
@@ -110,7 +123,7 @@ static uint32_t kvs_array_count(const kvs_array_t* array) {
     return (uint32_t)array->total;
 }
 
-static int kvs_save_array_section(FILE* fp) {
+static int kvs_save_array_section(std::vector<char>* fp) {
     uint32_t count = kvs_array_count(&global_array);
     kvs_section_header_t section = {KVS_SNAPSHOT_TYPE_ARRAY, count};
     if (kvs_write_exact(fp, &section, sizeof(section)) != 0)
@@ -157,7 +170,7 @@ static uint32_t kvs_rbtree_count_node(kvs_rbtree_t* tree, rbtree_node* node) {
     return 1 + kvs_rbtree_count_node(tree, node->left) + kvs_rbtree_count_node(tree, node->right);
 }
 
-static int kvs_write_rbtree_node(FILE* fp, kvs_rbtree_t* tree, rbtree_node* node) {
+static int kvs_write_rbtree_node(std::vector<char>* fp, kvs_rbtree_t* tree, rbtree_node* node) {
     if (node == tree->nil)
         return 0;
 
@@ -171,7 +184,7 @@ static int kvs_write_rbtree_node(FILE* fp, kvs_rbtree_t* tree, rbtree_node* node
     return 0;
 }
 
-static int kvs_save_rbtree_section(FILE* fp) {
+static int kvs_save_rbtree_section(std::vector<char>* fp) {
     uint32_t count = kvs_rbtree_count_node(&global_rbtree, global_rbtree.root);
     kvs_section_header_t section = {KVS_SNAPSHOT_TYPE_RBTREE, count};
     if (kvs_write_exact(fp, &section, sizeof(section)) != 0)
@@ -218,7 +231,7 @@ static uint32_t kvs_hash_count(const kvs_hash_t* hash) {
     return count;
 }
 
-static int kvs_save_hash_section(FILE* fp) {
+static int kvs_save_hash_section(std::vector<char>* fp) {
     uint32_t count = kvs_hash_count(&global_hash);
     kvs_section_header_t section = {KVS_SNAPSHOT_TYPE_HASH, count};
     if (kvs_write_exact(fp, &section, sizeof(section)) != 0)
@@ -274,7 +287,7 @@ static uint32_t kvs_skiptable_count(const kvs_skiptable_t* table) {
     return count;
 }
 
-static int kvs_save_skiptable_section(FILE* fp) {
+static int kvs_save_skiptable_section(std::vector<char>* fp) {
     uint32_t count = kvs_skiptable_count(&global_skiptable);
     kvs_section_header_t section = {KVS_SNAPSHOT_TYPE_SKIPTABLE, count};
     if (kvs_write_exact(fp, &section, sizeof(section)) != 0)
@@ -316,10 +329,6 @@ static int kvs_load_skiptable_section(FILE* fp, uint32_t count) {
 #endif
 
 int kvs_snapshot_save(const char* filename) {
-    FILE* fp = fopen(filename, "wb");
-    if (!fp)
-        return -1;
-
     uint32_t section_count = 0;
 #if ENABLE_ARRAY
     ++section_count;
@@ -340,38 +349,44 @@ int kvs_snapshot_save(const char* filename) {
     header.version = KVS_FILE_VERSION;
     header.count = section_count;
 
-    if (kvs_write_exact(fp, &header, sizeof(header)) != 0) {
-        fclose(fp);
+    // 先完整序列化到内存，避免对持久化文件执行大量小写入和多次 io_uring 提交。
+    std::vector<char> buffer;
+    buffer.reserve(1024 * 1024);
+
+    if (kvs_write_exact(&buffer, &header, sizeof(header)) != 0) {
         return -1;
     }
 
 #if ENABLE_ARRAY
-    if (kvs_save_array_section(fp) != 0) {
-        fclose(fp);
+    if (kvs_save_array_section(&buffer) != 0) {
         return -1;
     }
 #endif
 #if ENABLE_RBTREE
-    if (kvs_save_rbtree_section(fp) != 0) {
-        fclose(fp);
+    if (kvs_save_rbtree_section(&buffer) != 0) {
         return -1;
     }
 #endif
 #if ENABLE_HASH
-    if (kvs_save_hash_section(fp) != 0) {
-        fclose(fp);
+    if (kvs_save_hash_section(&buffer) != 0) {
         return -1;
     }
 #endif
 #if ENABLE_SKIPTABLE
-    if (kvs_save_skiptable_section(fp) != 0) {
-        fclose(fp);
+    if (kvs_save_skiptable_section(&buffer) != 0) {
         return -1;
     }
 #endif
 
-    fclose(fp);
-    return 0;
+    kvs_io_uring_file_t* fp =
+        kvs_io_uring_open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fp == NULL) {
+        return -1;
+    }
+
+    int ret = kvs_io_uring_write_and_fsync(fp, buffer.data(), buffer.size());
+    kvs_io_uring_close(fp);
+    return ret;
 }
 
 int kvs_snapshot_load(const char* filename) {

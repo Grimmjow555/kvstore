@@ -65,9 +65,27 @@ add_executable(kvstore
 
     persistence/snapshot.cpp
     persistence/aof.cpp
+    persistence/io_uring.cpp
 
     replication/kvs_replication.cpp
 )
+
+# 持久化循环脚本使用的测试客户端
+add_executable(rdb_save testcase/RDB/save.cpp)
+add_executable(rdb_load testcase/RDB/load.cpp)
+add_executable(aof_save testcase/AOF/save.cpp)
+add_executable(aof_load testcase/AOF/load.cpp)
+
+set_target_properties(rdb_save PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/RDB" OUTPUT_NAME save)
+set_target_properties(rdb_load PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/RDB" OUTPUT_NAME load)
+set_target_properties(aof_save PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/AOF" OUTPUT_NAME save)
+set_target_properties(aof_load PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/AOF" OUTPUT_NAME load)
+
+foreach(testcase_target rdb_save rdb_load aof_save aof_load)
+    target_include_directories(${testcase_target} PRIVATE
+        ${CMAKE_SOURCE_DIR}/testcase
+    )
+endforeach()
 
 # 包含目录
 target_include_directories(kvstore PRIVATE

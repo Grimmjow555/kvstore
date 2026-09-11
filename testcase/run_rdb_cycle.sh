@@ -5,8 +5,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
 SERVER="$BUILD_DIR/kvstore"
-SAVE_CLIENT="$ROOT_DIR/testcase/RDB/save"
-LOAD_CLIENT="$ROOT_DIR/testcase/RDB/load"
+SAVE_CLIENT="$BUILD_DIR/testcase/RDB/save"
+LOAD_CLIENT="$BUILD_DIR/testcase/RDB/load"
 SERVER_PID=""
 SERVER_LOG="${TMPDIR:-/tmp}/kvstore-rdb-cycle.$$.log"
 

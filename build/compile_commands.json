@@ -1,0 +1,92 @@
+[
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/NtyCo-master/core -I/home/Share/VScode/12.kvstore/include -g -std=c++11 -o CMakeFiles/kvstore.dir/kvstore.cpp.o -c /home/Share/VScode/12.kvstore/kvstore.cpp",
+  "file": "/home/Share/VScode/12.kvstore/kvstore.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/NtyCo-master/core -I/home/Share/VScode/12.kvstore/include -g -std=c++11 -o CMakeFiles/kvstore.dir/config/kvs_config.cpp.o -c /home/Share/VScode/12.kvstore/config/kvs_config.cpp",
+  "file": "/home/Share/VScode/12.kvstore/config/kvs_config.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/NtyCo-master/core -I/home/Share/VScode/12.kvstore/include -g -std=c++11 -o CMakeFiles/kvstore.dir/network/proactor.cpp.o -c /home/Share/VScode/12.kvstore/network/proactor.cpp",
+  "file": "/home/Share/VScode/12.kvstore/network/proactor.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/NtyCo-master/core -I/home/Share/VScode/12.kvstore/include -g -std=c++11 -o CMakeFiles/kvstore.dir/network/reactor.cpp.o -c /home/Share/VScode/12.kvstore/network/reactor.cpp",
+  "file": "/home/Share/VScode/12.kvstore/network/reactor.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/gcc  -I/home/Share/VScode/12.kvstore/NtyCo-master/core -I/home/Share/VScode/12.kvstore/include -g -o CMakeFiles/kvstore.dir/network/ntyco.c.o -c /home/Share/VScode/12.kvstore/network/ntyco.c",
+  "file": "/home/Share/VScode/12.kvstore/network/ntyco.c"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/NtyCo-master/core -I/home/Share/VScode/12.kvstore/include -g -std=c++11 -o CMakeFiles/kvstore.dir/storage/kvs_array.cpp.o -c /home/Share/VScode/12.kvstore/storage/kvs_array.cpp",
+  "file": "/home/Share/VScode/12.kvstore/storage/kvs_array.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/NtyCo-master/core -I/home/Share/VScode/12.kvstore/include -g -std=c++11 -o CMakeFiles/kvstore.dir/storage/kvs_rbtree.cpp.o -c /home/Share/VScode/12.kvstore/storage/kvs_rbtree.cpp",
+  "file": "/home/Share/VScode/12.kvstore/storage/kvs_rbtree.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/NtyCo-master/core -I/home/Share/VScode/12.kvstore/include -g -std=c++11 -o CMakeFiles/kvstore.dir/storage/kvs_hash.cpp.o -c /home/Share/VScode/12.kvstore/storage/kvs_hash.cpp",
+  "file": "/home/Share/VScode/12.kvstore/storage/kvs_hash.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/NtyCo-master/core -I/home/Share/VScode/12.kvstore/include -g -std=c++11 -o CMakeFiles/kvstore.dir/storage/kvs_skiptable.cpp.o -c /home/Share/VScode/12.kvstore/storage/kvs_skiptable.cpp",
+  "file": "/home/Share/VScode/12.kvstore/storage/kvs_skiptable.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/NtyCo-master/core -I/home/Share/VScode/12.kvstore/include -g -std=c++11 -o CMakeFiles/kvstore.dir/memorypool/memorypool.cpp.o -c /home/Share/VScode/12.kvstore/memorypool/memorypool.cpp",
+  "file": "/home/Share/VScode/12.kvstore/memorypool/memorypool.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/NtyCo-master/core -I/home/Share/VScode/12.kvstore/include -g -std=c++11 -o CMakeFiles/kvstore.dir/persistence/snapshot.cpp.o -c /home/Share/VScode/12.kvstore/persistence/snapshot.cpp",
+  "file": "/home/Share/VScode/12.kvstore/persistence/snapshot.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/NtyCo-master/core -I/home/Share/VScode/12.kvstore/include -g -std=c++11 -o CMakeFiles/kvstore.dir/persistence/aof.cpp.o -c /home/Share/VScode/12.kvstore/persistence/aof.cpp",
+  "file": "/home/Share/VScode/12.kvstore/persistence/aof.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/NtyCo-master/core -I/home/Share/VScode/12.kvstore/include -g -std=c++11 -o CMakeFiles/kvstore.dir/persistence/io_uring.cpp.o -c /home/Share/VScode/12.kvstore/persistence/io_uring.cpp",
+  "file": "/home/Share/VScode/12.kvstore/persistence/io_uring.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/NtyCo-master/core -I/home/Share/VScode/12.kvstore/include -g -std=c++11 -o CMakeFiles/kvstore.dir/replication/kvs_replication.cpp.o -c /home/Share/VScode/12.kvstore/replication/kvs_replication.cpp",
+  "file": "/home/Share/VScode/12.kvstore/replication/kvs_replication.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/testcase -g -std=c++11 -o CMakeFiles/rdb_save.dir/testcase/RDB/save.cpp.o -c /home/Share/VScode/12.kvstore/testcase/RDB/save.cpp",
+  "file": "/home/Share/VScode/12.kvstore/testcase/RDB/save.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/testcase -g -std=c++11 -o CMakeFiles/rdb_load.dir/testcase/RDB/load.cpp.o -c /home/Share/VScode/12.kvstore/testcase/RDB/load.cpp",
+  "file": "/home/Share/VScode/12.kvstore/testcase/RDB/load.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/testcase -g -std=c++11 -o CMakeFiles/aof_save.dir/testcase/AOF/save.cpp.o -c /home/Share/VScode/12.kvstore/testcase/AOF/save.cpp",
+  "file": "/home/Share/VScode/12.kvstore/testcase/AOF/save.cpp"
+},
+{
+  "directory": "/home/Share/VScode/12.kvstore/build",
+  "command": "/usr/bin/g++  -I/home/Share/VScode/12.kvstore/testcase -g -std=c++11 -o CMakeFiles/aof_load.dir/testcase/AOF/load.cpp.o -c /home/Share/VScode/12.kvstore/testcase/AOF/load.cpp",
+  "file": "/home/Share/VScode/12.kvstore/testcase/AOF/load.cpp"
+}
+]

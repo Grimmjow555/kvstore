@@ -1,0 +1,1 @@
+/usr/bin/g++ -g CMakeFiles/rdb_load.dir/testcase/RDB/load.cpp.o -o testcase/RDB/load 
