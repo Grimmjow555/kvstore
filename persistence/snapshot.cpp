@@ -10,7 +10,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 extern kvs_array_t global_array;
@@ -43,6 +45,12 @@ enum {
     KVS_SNAPSHOT_TYPE_SKIPTABLE = 4,
 };
 
+typedef struct {
+    const unsigned char* base;
+    size_t size;
+    size_t offset;
+} kvs_mmap_reader_t;
+
 static int kvs_write_exact(std::vector<char>* fp, const void* buf, size_t len) {
     if (fp == NULL || buf == NULL) {
         return len == 0 ? 0 : -1;
@@ -56,8 +64,19 @@ static int kvs_write_exact(std::vector<char>* fp, const void* buf, size_t len) {
     return 0;
 }
 
-static int kvs_read_exact(FILE* fp, void* buf, size_t len) {
-    return fread(buf, 1, len, fp) == len ? 0 : -1;
+static int kvs_mmap_read_exact(kvs_mmap_reader_t* reader, void* buf, size_t len) {
+    if (reader == NULL || (buf == NULL && len != 0)) {
+        return -1;
+    }
+    if (reader->offset > reader->size || len > reader->size - reader->offset) {
+        return -1;
+    }
+
+    if (len > 0) {
+        memcpy(buf, reader->base + reader->offset, len);
+        reader->offset += len;
+    }
+    return 0;
 }
 
 static int kvs_write_record(std::vector<char>* fp, const char* key, const char* value) {
@@ -75,22 +94,22 @@ static int kvs_write_record(std::vector<char>* fp, const char* key, const char* 
     return 0;
 }
 
-static int kvs_read_record(FILE* fp, char** out_key, char** out_value) {
+static int kvs_read_record(kvs_mmap_reader_t* reader, char** out_key, char** out_value) {
     uint32_t key_len = 0;
     uint32_t value_len = 0;
     char* key = nullptr;
     char* value = nullptr;
 
-    if (kvs_read_exact(fp, &key_len, sizeof(key_len)) != 0)
+    if (kvs_mmap_read_exact(reader, &key_len, sizeof(key_len)) != 0)
         return -1;
-    if (kvs_read_exact(fp, &value_len, sizeof(value_len)) != 0)
+    if (kvs_mmap_read_exact(reader, &value_len, sizeof(value_len)) != 0)
         return -1;
 
     if (key_len > 0) {
         key = (char*)malloc(key_len + 1);
         if (!key)
             return -1;
-        if (kvs_read_exact(fp, key, key_len) != 0) {
+        if (kvs_mmap_read_exact(reader, key, key_len) != 0) {
             free(key);
             return -1;
         }
@@ -103,7 +122,7 @@ static int kvs_read_record(FILE* fp, char** out_key, char** out_value) {
             free(key);
             return -1;
         }
-        if (kvs_read_exact(fp, value, value_len) != 0) {
+        if (kvs_mmap_read_exact(reader, value, value_len) != 0) {
             free(key);
             free(value);
             return -1;
@@ -138,11 +157,11 @@ static int kvs_save_array_section(std::vector<char>* fp) {
     return 0;
 }
 
-static int kvs_load_array_section(FILE* fp, uint32_t count) {
+static int kvs_load_array_section(kvs_mmap_reader_t* reader, uint32_t count) {
     for (uint32_t i = 0; i < count; ++i) {
         char* key = nullptr;
         char* value = nullptr;
-        if (kvs_read_record(fp, &key, &value) != 0)
+        if (kvs_read_record(reader, &key, &value) != 0)
             return -1;
         if (key && value) {
             if (kvs_array_set(&global_array, key, value) != 0) {
@@ -192,11 +211,11 @@ static int kvs_save_rbtree_section(std::vector<char>* fp) {
     return kvs_write_rbtree_node(fp, &global_rbtree, global_rbtree.root);
 }
 
-static int kvs_load_rbtree_section(FILE* fp, uint32_t count) {
+static int kvs_load_rbtree_section(kvs_mmap_reader_t* reader, uint32_t count) {
     for (uint32_t i = 0; i < count; ++i) {
         char* key = nullptr;
         char* value = nullptr;
-        if (kvs_read_record(fp, &key, &value) != 0)
+        if (kvs_read_record(reader, &key, &value) != 0)
             return -1;
         if (key && value) {
             if (kvs_rbtree_set(&global_rbtree, key, value) != 0) {
@@ -250,11 +269,11 @@ static int kvs_save_hash_section(std::vector<char>* fp) {
     return 0;
 }
 
-static int kvs_load_hash_section(FILE* fp, uint32_t count) {
+static int kvs_load_hash_section(kvs_mmap_reader_t* reader, uint32_t count) {
     for (uint32_t i = 0; i < count; ++i) {
         char* key = nullptr;
         char* value = nullptr;
-        if (kvs_read_record(fp, &key, &value) != 0)
+        if (kvs_read_record(reader, &key, &value) != 0)
             return -1;
         if (key && value) {
             if (kvs_hash_set(&global_hash, key, value) != 0) {
@@ -304,11 +323,11 @@ static int kvs_save_skiptable_section(std::vector<char>* fp) {
     return 0;
 }
 
-static int kvs_load_skiptable_section(FILE* fp, uint32_t count) {
+static int kvs_load_skiptable_section(kvs_mmap_reader_t* reader, uint32_t count) {
     for (uint32_t i = 0; i < count; ++i) {
         char* key = nullptr;
         char* value = nullptr;
-        if (kvs_read_record(fp, &key, &value) != 0)
+        if (kvs_read_record(reader, &key, &value) != 0)
             return -1;
         if (key && value) {
             if (kvs_skiptable_set(&global_skiptable, key, value) != 0) {
@@ -389,21 +408,41 @@ int kvs_snapshot_save(const char* filename) {
     return ret;
 }
 
+// 使用 mmap 将快照文件映射为只读内存，再按游标顺序解析，避免通过 FILE* 逐段读取。
 int kvs_snapshot_load(const char* filename) {
-    FILE* fp = fopen(filename, "rb");
-    if (!fp)
+    int fd = open(filename, O_RDONLY);
+    if (fd < 0) {
         return -1;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size <= 0) {
+        close(fd);
+        return -1;
+    }
+
+    void* mapped = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (mapped == MAP_FAILED) {
+        close(fd);
+        return -1;
+    }
+    close(fd);
+
+    kvs_mmap_reader_t reader;
+    reader.base = (const unsigned char*)mapped;
+    reader.size = (size_t)st.st_size;
+    reader.offset = 0;
 
     kvs_file_header_t header;
     memset(&header, 0, sizeof(header));
-    if (kvs_read_exact(fp, &header, sizeof(header)) != 0) {
-        fclose(fp);
+    if (kvs_mmap_read_exact(&reader, &header, sizeof(header)) != 0) {
+        munmap(mapped, (size_t)st.st_size);
         return -1;
     }
 
     if (memcmp(header.magic, KVS_FILE_MAGIC, sizeof(header.magic)) != 0 ||
         header.version != KVS_FILE_VERSION) {
-        fclose(fp);
+        munmap(mapped, (size_t)st.st_size);
         return -1;
     }
 
@@ -411,50 +450,50 @@ int kvs_snapshot_load(const char* filename) {
 
     for (uint32_t i = 0; i < header.count; ++i) {
         kvs_section_header_t section;
-        if (kvs_read_exact(fp, &section, sizeof(section)) != 0) {
-            fclose(fp);
+        if (kvs_mmap_read_exact(&reader, &section, sizeof(section)) != 0) {
+            munmap(mapped, (size_t)st.st_size);
             return -1;
         }
 
         switch (section.type) {
 #if ENABLE_ARRAY
         case KVS_SNAPSHOT_TYPE_ARRAY:
-            if (kvs_load_array_section(fp, section.count) != 0) {
-                fclose(fp);
+            if (kvs_load_array_section(&reader, section.count) != 0) {
+                munmap(mapped, (size_t)st.st_size);
                 return -1;
             }
             break;
 #endif
 #if ENABLE_RBTREE
         case KVS_SNAPSHOT_TYPE_RBTREE:
-            if (kvs_load_rbtree_section(fp, section.count) != 0) {
-                fclose(fp);
+            if (kvs_load_rbtree_section(&reader, section.count) != 0) {
+                munmap(mapped, (size_t)st.st_size);
                 return -1;
             }
             break;
 #endif
 #if ENABLE_HASH
         case KVS_SNAPSHOT_TYPE_HASH:
-            if (kvs_load_hash_section(fp, section.count) != 0) {
-                fclose(fp);
+            if (kvs_load_hash_section(&reader, section.count) != 0) {
+                munmap(mapped, (size_t)st.st_size);
                 return -1;
             }
             break;
 #endif
 #if ENABLE_SKIPTABLE
         case KVS_SNAPSHOT_TYPE_SKIPTABLE:
-            if (kvs_load_skiptable_section(fp, section.count) != 0) {
-                fclose(fp);
+            if (kvs_load_skiptable_section(&reader, section.count) != 0) {
+                munmap(mapped, (size_t)st.st_size);
                 return -1;
             }
             break;
 #endif
         default:
-            fclose(fp);
+            munmap(mapped, (size_t)st.st_size);
             return -1;
         }
     }
 
-    fclose(fp);
+    munmap(mapped, (size_t)st.st_size);
     return 0;
 }

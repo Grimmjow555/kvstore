@@ -150,10 +150,12 @@ RDB 实现位于 `persistence/snapshot.cpp`：
 - 每个存储引擎一个 section，section 头包含 type 和 count。
 - record 由 key 长度、value 长度、key 数据、value 数据组成。
 - `kvs_snapshot_load` 会先 `kvs_reset_data()`，再按 section 顺序恢复数据。
+- `kvs_snapshot_save` 会先在内存中完整序列化快照，再通过 io_uring 一次性写入并 `fsync`。
 
 AOF 实现位于 `persistence/aof.cpp`：
 
 - 写命令在成功后追加为 RESP 文本。
+- AOF 增量先写入内存缓冲区，达到阈值或执行 `AOF LOAD` / `AOF CLEAR` / 关闭服务时批量写盘并 `fsync`。
 - `AOF LOAD` 读取并重放 `data/append.aof`。
 - `AOF CLEAR` 关闭当前 AOF 文件并以 `w` 模式重新打开清空。
 
@@ -164,6 +166,7 @@ AOF 实现位于 `persistence/aof.cpp`：
 - `RDB LOAD` / `AOF LOAD` 成功后会调用 `kvs_replication_resync()`，让在线 Replica 重新全量同步。
 - RDB 使用原生整数布局，且当前记录长度依赖 `strlen`；不要把嵌入 NUL 的 key/value 或跨主机移植作为已支持行为。
 - AOF 重放遇到解析失败可能提前停止但仍返回成功，修改加载逻辑时应保留并覆盖该错误路径。
+- AOF 当前使用批量落盘，进程被强制杀死时最多可能丢失未达刷新阈值的内存缓冲数据；优雅关闭或执行 `AOF LOAD`/`AOF CLEAR` 会先刷新缓冲区。
 
 ## 复制
 

@@ -1,1 +1,0 @@
-/usr/bin/g++ -g CMakeFiles/aof_save.dir/testcase/AOF/save.cpp.o -o testcase/AOF/save 

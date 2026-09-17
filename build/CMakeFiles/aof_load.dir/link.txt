@@ -1,1 +1,0 @@
-/usr/bin/g++ -g CMakeFiles/aof_load.dir/testcase/AOF/load.cpp.o -o testcase/AOF/load 

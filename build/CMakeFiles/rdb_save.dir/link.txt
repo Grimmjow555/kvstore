@@ -1,1 +1,0 @@
-/usr/bin/g++ -g CMakeFiles/rdb_save.dir/testcase/RDB/save.cpp.o -o testcase/RDB/save 

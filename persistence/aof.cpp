@@ -2,19 +2,21 @@
 #include "kvs_config.h"
 #include "kvs_io_uring.h"
 #include "kvstore.h"
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <string>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 extern int kvs_filter_protocol(char* tokens[], int count, char* response, int response_size);
-extern char** resp_parse_command(char* buffer, int* argc, int* consumed);
 
 #if AOF_ENABLE
 
-#define KVS_AOF_FLUSH_THRESHOLD (64 * 1024)
+#define KVS_AOF_FLUSH_THRESHOLD (0)
 
 static int aof_replaying = 0;
 
@@ -23,6 +25,132 @@ static char aof_filename[512] = {0};
 static std::string aof_buffer;
 
 static int kvs_aof_flush(void);
+
+static const char* kvs_aof_find_crlf(const char* p, const char* end) {
+    if (p == NULL || end == NULL || p >= end) {
+        return NULL;
+    }
+    while (p + 1 < end) {
+        if (p[0] == '\r' && p[1] == '\n') {
+            return p;
+        }
+        ++p;
+    }
+    return NULL;
+}
+
+static int kvs_aof_parse_int(const char* p, const char* end, int* out, const char** next) {
+    if (p == NULL || out == NULL || next == NULL || p >= end) {
+        return -1;
+    }
+
+    const char* q = p;
+    int sign = 1;
+    if (*q == '-') {
+        sign = -1;
+        ++q;
+    }
+
+    if (q >= end || *q < '0' || *q > '9') {
+        return -1;
+    }
+
+    long value = 0;
+    while (q < end && *q >= '0' && *q <= '9') {
+        int digit = *q - '0';
+        if (value > (LONG_MAX - digit) / 10) {
+            return -1;
+        }
+        value = value * 10 + digit;
+        ++q;
+    }
+
+    value *= sign;
+    if (value < INT_MIN || value > INT_MAX) {
+        return -1;
+    }
+
+    *out = (int)value;
+    *next = q;
+    return 0;
+}
+
+static char** kvs_aof_parse_command(const char* data, size_t size, int* argc, int* consumed) {
+    if (data == NULL || size == 0 || data[0] != '*') {
+        return NULL;
+    }
+
+    const char* end = data + size;
+    const char* p = data + 1;
+    int param_count = 0;
+
+    if (kvs_aof_parse_int(p, end, &param_count, &p) != 0 || param_count <= 0) {
+        return NULL;
+    }
+
+    const char* line_end = kvs_aof_find_crlf(p, end);
+    if (line_end == NULL) {
+        return NULL;
+    }
+    p = line_end + 2;
+
+    char** argv = (char**)malloc((param_count + 1) * sizeof(char*));
+    if (argv == NULL) {
+        return NULL;
+    }
+    for (int i = 0; i <= param_count; ++i) {
+        argv[i] = NULL;
+    }
+
+    for (int i = 0; i < param_count; ++i) {
+        if (p >= end || *p != '$') {
+            goto parse_fail;
+        }
+
+        int len = 0;
+        if (kvs_aof_parse_int(p + 1, end, &len, &p) != 0) {
+            goto parse_fail;
+        }
+        if (len < 0) {
+            goto parse_fail;
+        }
+
+        line_end = kvs_aof_find_crlf(p, end);
+        if (line_end == NULL) {
+            goto parse_fail;
+        }
+
+        const char* data_start = line_end + 2;
+        if ((size_t)(end - data_start) < (size_t)len) {
+            goto parse_fail;
+        }
+
+        char* item = (char*)malloc((size_t)len + 1);
+        if (item == NULL) {
+            goto parse_fail;
+        }
+        memcpy(item, data_start, (size_t)len);
+        item[len] = '\0';
+        argv[i] = item;
+
+        p = data_start + len;
+        if ((size_t)(end - p) < 2 || p[0] != '\r' || p[1] != '\n') {
+            goto parse_fail;
+        }
+        p += 2;
+    }
+
+    *argc = param_count;
+    *consumed = (int)(p - data);
+    return argv;
+
+parse_fail:
+    for (int i = 0; i < param_count; ++i) {
+        free(argv[i]);
+    }
+    free(argv);
+    return NULL;
+}
 
 int kvs_aof_init(const char* filename) {
     if (filename == NULL) {
@@ -106,27 +234,30 @@ int kvs_aof_replay(const char* filename) {
         return -1;
     }
 
-    FILE* fp = fopen(filename, "r");
-
-    if (!fp) {
+    // 将 AOF 文件 mmap 到只读内存后，使用带边界检查的 RESP 解析器逐条回放。
+    int fd = open(filename, O_RDONLY);
+    if (fd < 0) {
         return -1;
     }
 
-    fseek(fp, 0, SEEK_END);
-    long size = ftell(fp);
-    rewind(fp);
-
-    char* buffer = (char*)malloc(size + 1);
-
-    if (!buffer) {
-        fclose(fp);
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size < 0) {
+        close(fd);
         return -1;
     }
 
-    fread(buffer, 1, size, fp);
-    buffer[size] = '\0';
+    size_t size = (size_t)st.st_size;
+    void* mapped = NULL;
+    if (size > 0) {
+        mapped = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
+        if (mapped == MAP_FAILED) {
+            close(fd);
+            return -1;
+        }
+    }
+    close(fd);
 
-    int offset = 0;
+    size_t offset = 0;
 
     aof_replaying = 1;
 
@@ -135,9 +266,10 @@ int kvs_aof_replay(const char* filename) {
         int argc;
         int consumed;
 
-        char** argv = resp_parse_command(buffer + offset, &argc, &consumed);
+        char** argv =
+            kvs_aof_parse_command((const char*)mapped + offset, size - offset, &argc, &consumed);
 
-        if (!argv) {
+        if (argv == NULL || consumed <= 0) {
             break;
         }
 
@@ -157,8 +289,9 @@ int kvs_aof_replay(const char* filename) {
 
     aof_replaying = 0;
 
-    free(buffer);
-    fclose(fp);
+    if (size > 0) {
+        munmap(mapped, size);
+    }
 
     return 0;
 }
