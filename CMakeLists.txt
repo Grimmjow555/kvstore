@@ -46,15 +46,39 @@ else()
     message(WARNING "liburing header not found in standard paths. Building may fail.")
 endif()
 
-# 添加可执行文件
-add_executable(kvstore
+# 查找 RDMA 相关依赖。未安装开发头文件或运行库时自动回退到纯 TCP 全量同步。
+find_path(RDMA_VERBS_INCLUDE_DIR
+    NAMES infiniband/verbs.h
+    HINTS /usr/local/include /usr/include
+)
+find_path(RDMA_CMA_INCLUDE_DIR
+    NAMES rdma/rdma_cma.h
+    HINTS /usr/local/include /usr/include
+)
+find_library(IBVERBS_LIBRARY
+    NAMES ibverbs
+    HINTS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu
+)
+find_library(RDMACM_LIBRARY
+    NAMES rdmacm
+    HINTS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu
+)
+
+set(KVSTORE_RDMA_FOUND FALSE)
+if(RDMA_VERBS_INCLUDE_DIR AND RDMA_CMA_INCLUDE_DIR AND IBVERBS_LIBRARY AND RDMACM_LIBRARY)
+    set(KVSTORE_RDMA_FOUND TRUE)
+else()
+    message(WARNING "RDMA development headers/libraries not found. Building without RDMA full sync; TCP fallback will be used.")
+endif()
+
+set(KVSTORE_SOURCES
     kvstore.cpp
 
     config/kvs_config.cpp
 
     network/proactor.cpp
     network/reactor.cpp
-    network/ntyco.c          # 纯 C 源文件
+    network/ntyco.c
 
     storage/kvs_array.cpp
     storage/kvs_rbtree.cpp
@@ -68,20 +92,29 @@ add_executable(kvstore
     persistence/io_uring.cpp
 
     replication/kvs_replication.cpp
+    replication/kvs_ebpf.cpp
 )
+
+if(KVSTORE_RDMA_FOUND)
+    list(APPEND KVSTORE_SOURCES replication/kvs_rdma.cpp)
+endif()
+
+# 添加可执行文件
+add_executable(kvstore ${KVSTORE_SOURCES})
 
 # 持久化循环脚本使用的测试客户端
 add_executable(rdb_save testcase/RDB/save.cpp)
 add_executable(rdb_load testcase/RDB/load.cpp)
 add_executable(aof_save testcase/AOF/save.cpp)
 add_executable(aof_load testcase/AOF/load.cpp)
+add_executable(master_replica_insert5w testcase/master-replica/insert5w.cpp)
 
 set_target_properties(rdb_save PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/RDB" OUTPUT_NAME save)
 set_target_properties(rdb_load PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/RDB" OUTPUT_NAME load)
 set_target_properties(aof_save PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/AOF" OUTPUT_NAME save)
 set_target_properties(aof_load PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/AOF" OUTPUT_NAME load)
 
-foreach(testcase_target rdb_save rdb_load aof_save aof_load)
+foreach(testcase_target rdb_save rdb_load aof_save aof_load master_replica_insert5w)
     target_include_directories(${testcase_target} PRIVATE
         ${CMAKE_SOURCE_DIR}/testcase
     )
@@ -92,6 +125,14 @@ target_include_directories(kvstore PRIVATE
     ${NTYCO_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}/include
 )
+
+if(KVSTORE_RDMA_FOUND)
+    target_include_directories(kvstore PRIVATE
+        ${RDMA_VERBS_INCLUDE_DIR}
+        ${RDMA_CMA_INCLUDE_DIR}
+    )
+    target_compile_definitions(kvstore PRIVATE KVS_ENABLE_RDMA=1)
+endif()
 
 # 链接目录（用于 NtyCo）
 target_link_directories(kvstore PRIVATE ${NTYCO_LIBRARY_DIR})
@@ -104,3 +145,10 @@ target_link_libraries(kvstore
     Threads::Threads         # 提供 pthread
     ${CMAKE_DL_LIBS}         # 提供 dl（如果系统需要）
 )
+
+if(KVSTORE_RDMA_FOUND)
+    target_link_libraries(kvstore
+        ${RDMACM_LIBRARY}
+        ${IBVERBS_LIBRARY}
+    )
+endif()

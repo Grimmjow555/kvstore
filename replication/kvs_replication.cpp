@@ -1,4 +1,5 @@
 #include "kvs_array.h"
+#include "kvs_ebpf.h"
 #include "kvs_hash.h"
 #include "kvs_rbtree.h"
 #include "kvs_replication.h"
@@ -8,6 +9,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
@@ -36,6 +38,7 @@ static kvs_role_t g_role = KVS_ROLE_MASTER;
 
 static int replica_fds[MAX_REPLICAS]; //记录连接的fd
 static int replica_pending[MAX_REPLICAS]; // 记录是全量同步的状态，1为准备全量同步，0为结束全量同步
+static int replica_ebpf[MAX_REPLICAS]; // 该 Replica 是否使用 eBPF 队列进行实时同步
 
 static pthread_mutex_t replica_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int master_fd = -1;
@@ -43,6 +46,17 @@ static int master_fd = -1;
 static pthread_t replication_tid;
 static volatile int replication_running = 0;
 static int replication_replaying = 0;
+
+static char g_master_ip[INET_ADDRSTRLEN] = {0};
+static int g_master_port = 0;
+
+#ifdef KVS_ENABLE_RDMA
+static int g_rdma_enabled = 0;
+
+int kvs_replication_is_rdma_enabled() { return g_rdma_enabled; }
+
+void kvs_replication_set_rdma_enabled(int enabled) { g_rdma_enabled = enabled ? 1 : 0; }
+#endif
 
 /*
  * 发送方向：Replica -> Master
@@ -73,6 +87,16 @@ static const char* replication_handshake = "*1\r\n$7\r\nREPLICA\r\n";
  *   SET / RSET / HSET / SSET ...
  */
 static const char* replication_reset = "*1\r\n$13\r\nREPLICA_RESET\r\n";
+/* 发送方向：Master -> Replica
+ *
+ * 作用：
+ *   仅在 eBPF 实时同步路径下使用。Master 通过 TCP 发送完全量快照后，
+ *   再发送该控制帧，通知 Replica“全量快照已结束，可以开始消费 eBPF 队列”。
+ *
+ * 这样保证全量快照与后续 eBPF 实时命令之间有一个明确的顺序屏障：
+ * 不会出现 Replica 先重放新写入，之后又被快照中的旧值覆盖。
+ */
+static const char* replication_fullsync_done = "*1\r\n$21\r\nREPLICA_FULLSYNC_DONE\r\n";
 
 void* replication_thread(void* arg);
 
@@ -85,6 +109,7 @@ int kvs_replication_init(kvs_role_t role) {
     for (int i = 0; i < MAX_REPLICAS; ++i) {
         replica_fds[i] = -1;
         replica_pending[i] = 0;
+        replica_ebpf[i] = 0;
     }
 
     return 0;
@@ -155,6 +180,18 @@ int kvs_replication_accept_handshake(int fd, const char* data, int length) {
     if (!kvs_replication_is_handshake(data, length)) {
         return 0;
     }
+
+    pthread_mutex_lock(&replica_mutex);
+    for (int i = 0; i < MAX_REPLICAS; ++i) {
+        if (replica_fds[i] == fd) {
+            pthread_mutex_unlock(&replica_mutex);
+            // 同一个 Replica 在重同步完成后会再次发送 REPLICA 握手。
+            // 此时只需要保留 pending 状态，等待 finish_handshake 将其置为 0。
+            return 1;
+        }
+    }
+    pthread_mutex_unlock(&replica_mutex);
+
     return kvs_replication_add_replica(fd) == 0 ? 1 : -1;
 }
 
@@ -171,8 +208,12 @@ int kvs_replication_add_replica(int fd) {
         if (replica_fds[i] == -1) {
             replica_fds[i] = fd;
             replica_pending[i] = 1; //
+            replica_ebpf[i] = kvs_ebpf_master_available() && kvs_ebpf_peer_is_local(fd);
             pthread_mutex_unlock(&replica_mutex);
             printf("[REPLICATION] replica connected fd=%d\n", fd);
+            if (replica_ebpf[i]) {
+                printf("[REPLICATION] replica fd=%d will use eBPF realtime sync\n", fd);
+            }
             return 0;
         }
     }
@@ -192,6 +233,7 @@ void kvs_replication_remove_replica(int fd) {
             close(replica_fds[i]);
             replica_fds[i] = -1;
             replica_pending[i] = 0;
+            replica_ebpf[i] = 0;
             printf("[REPLICATION] replica removed fd=%d\n", fd);
             break;
         }
@@ -249,12 +291,26 @@ int kvs_replication_append(int argc, char* argv[]) {
             continue;
         }
 
-        if (send_frame(fd, buffer, (size_t)offset) < 0) {
+        int sent = -1;
+        if (replica_ebpf[i]) {
+            sent = kvs_ebpf_push(buffer, (unsigned int)offset);
+            if (sent == 0) {
+                continue;
+            }
+
+            // eBPF 队列写入失败（例如被回收或队列暂时不可用）时，
+            // 该副本回退到 TCP 实时同步；后续命令继续走 TCP。
+            printf("[REPLICATION] eBPF push failed for fd=%d, fallback to TCP sync\n", fd);
+            replica_ebpf[i] = 0;
+        }
+
+        if (sent < 0 && send_frame(fd, buffer, (size_t)offset) < 0) {
 
             close(fd);
 
             replica_fds[i] = -1;
             replica_pending[i] = 0;
+            replica_ebpf[i] = 0;
 
             printf("[REPLICATION] replica disconnected fd=%d\n", fd);
         }
@@ -358,10 +414,32 @@ void kvs_replication_finish_handshake(int fd) {
         return;
     }
 
-    if (send_full_snapshot(fd) < 0) {
+    int need_full_snapshot = 1;
+#ifdef KVS_ENABLE_RDMA
+    if (kvs_replication_is_rdma_enabled()) {
+        // RDMA 模式下，Replica 在发送 TCP REPLICA 握手前已经完成全量同步；
+        // 重同步时也会在收到 REPLICA_RESET 后重新走一次 RDMA 全量同步。
+        need_full_snapshot = 0;
+    }
+#endif
+
+    if (need_full_snapshot && send_full_snapshot(fd) < 0) {
         close(fd);
         replica_fds[slot] = -1;
         replica_pending[slot] = 0;
+        replica_ebpf[slot] = 0;
+        pthread_mutex_unlock(&replica_mutex);
+        return;
+    }
+
+    // eBPF 实时同步路径下，全量快照与 eBPF 队列是两条独立通道。
+    // 这里补一个 TCP 控制帧作为顺序屏障，Replica 收到后才能开始消费队列。
+    if (replica_ebpf[slot] &&
+        send_frame(fd, replication_fullsync_done, strlen(replication_fullsync_done)) < 0) {
+        close(fd);
+        replica_fds[slot] = -1;
+        replica_pending[slot] = 0;
+        replica_ebpf[slot] = 0;
         pthread_mutex_unlock(&replica_mutex);
         return;
     }
@@ -386,15 +464,34 @@ int kvs_replication_resync() {
             continue;
         }
         replica_pending[i] = 1; //准备全量同步
+
+        int need_full_snapshot = 1;
+#ifdef KVS_ENABLE_RDMA
+        if (kvs_replication_is_rdma_enabled()) {
+            // RDMA 模式下仅发送 REPLICA_RESET。Replica 会清空数据，
+            // 重新连接 Master 的 RDMA 端口拉取快照，然后再次发送 REPLICA 握手。
+            need_full_snapshot = 0;
+        }
+#endif
+
         if (send_frame(fd, replication_reset, strlen(replication_reset)) < 0 ||
-            send_full_snapshot(fd) < 0) {
+            (need_full_snapshot && send_full_snapshot(fd) < 0) ||
+            (need_full_snapshot && replica_ebpf[i] &&
+             send_frame(fd, replication_fullsync_done, strlen(replication_fullsync_done)) < 0)) {
             close(fd);
             replica_fds[i] = -1;
             replica_pending[i] = 0;
+            replica_ebpf[i] = 0;
             result = -1;
             continue;
         }
-        replica_pending[i] = 0; //已完成全量同步
+
+        // TCP 全量同步在这里直接结束；RDMA 路径仍保持 pending=1，
+        // 等 Replica 完成 RDMA 全量同步并重新发送 REPLICA 握手后由
+        // kvs_replication_finish_handshake 再结束 pending。
+        if (need_full_snapshot) {
+            replica_pending[i] = 0; //已完成全量同步
+        }
     }
     pthread_mutex_unlock(&replica_mutex);
     return result;
@@ -404,6 +501,9 @@ int kvs_replication_resync() {
 
 // Replica 主动与 Master 建立 TCP 连接。
 int kvs_replication_connect_master(const char* ip, int port) {
+    if (ip == NULL || strlen(ip) >= INET_ADDRSTRLEN) {
+        return -1;
+    }
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -434,6 +534,9 @@ int kvs_replication_connect_master(const char* ip, int port) {
 
     printf("[REPLICATION] connected to master %s:%d\n", ip, port);
 
+    snprintf(g_master_ip, sizeof(g_master_ip), "%s", ip);
+    g_master_port = port;
+
     master_fd = fd;
 
     return fd;
@@ -450,14 +553,20 @@ int kvs_replication_start() {
     if (g_role != KVS_ROLE_REPLICA || master_fd < 0 || replication_running) {
         return -1;
     }
+
+    // 本地 Replica 可以打开 Master pin 的 eBPF 队列；失败则继续使用 TCP 实时同步。
+    kvs_ebpf_replica_open((unsigned short)g_master_port);
+
     replication_running = 1;
     if (send_frame(master_fd, replication_handshake, strlen(replication_handshake)) < 0) {
+        kvs_ebpf_replica_close();
         replication_running = 0;
         close(master_fd);
         master_fd = -1;
         return -1;
     }
     if (pthread_create(&replication_tid, NULL, replication_thread, &master_fd) != 0) {
+        kvs_ebpf_replica_close();
         replication_running = 0;
         close(master_fd);
         master_fd = -1;
@@ -476,6 +585,7 @@ void kvs_replication_stop() {
     pthread_join(replication_tid, NULL);
     close(master_fd);
     master_fd = -1;
+    kvs_ebpf_replica_close();
 }
 
 // 销毁 Replica 端的复制资源。
@@ -483,12 +593,21 @@ void kvs_replication_destroy() {
     if (g_role == KVS_ROLE_REPLICA) {
         kvs_replication_stop();
     }
+#ifdef KVS_ENABLE_RDMA
+    if (g_role == KVS_ROLE_MASTER) {
+        kvs_replication_stop_rdma_listener();
+    }
+#endif
+    kvs_ebpf_master_destroy();
+    kvs_ebpf_replica_close();
 }
 
 // ==================== Replica 回放线程 ====================
 
 void* replication_thread(void* arg) {
     int fd = *(int*)arg;
+    int ebpf_active = kvs_ebpf_replica_available();
+    char* buffer = NULL;
 
     // =============================================
     // 块1：忽略握手响应（Master 回复的 +OK）
@@ -501,19 +620,81 @@ void* replication_thread(void* arg) {
         return NULL;
     }
     uint32_t response_len = ntohl(net_len);
-    char* buffer = (char*)malloc((size_t)response_len + 1);
+    buffer = (char*)malloc((size_t)response_len + 1);
     if (buffer == NULL || recv_all(fd, buffer, response_len) < 0) {
         free(buffer);
         replication_running = 0;
         return NULL;
     }
     free(buffer);
+    buffer = NULL;
 
     // =============================================
-    // 块2：主循环——持续接收增量命令
+    // 块2：主循环——持续接收增量命令。
+    //
+    // 若 Replica 成功打开了本地 eBPF 队列，则实时写命令从 eBPF 队列读取，
+    // TCP 连接只负责 REPLICA_RESET、全量快照等控制/全量同步帧；
+    // 否则保持原来的纯 TCP 实时同步路径。
     // =============================================
+    char* ebpf_buffer = NULL;
+    int ebpf_ready = 0;
+    if (ebpf_active) {
+        ebpf_buffer = (char*)malloc(KVS_EBPF_MAX_COMMAND_LEN);
+        if (ebpf_buffer == NULL) {
+            ebpf_active = 0;
+        }
+    }
+
     while (replication_running) {
-        // ---- 2.1 接收命令长度头（4 字节，网络序） ----
+        // ---- 2.1 优先消费 eBPF 队列中的实时写命令 ----
+        if (ebpf_active && ebpf_ready) {
+            int processed = 0;
+            unsigned int ebpf_len = (unsigned int)KVS_EBPF_MAX_COMMAND_LEN;
+            while (processed < 32 && kvs_ebpf_pop(ebpf_buffer, &ebpf_len) == 0) {
+                if (ebpf_len == 0) {
+                    ebpf_len = (unsigned int)KVS_EBPF_MAX_COMMAND_LEN;
+                    continue;
+                }
+
+                ebpf_buffer[ebpf_len] = '\0';
+                kvs_replication_set_replaying(1);
+                char response[128] = {0};
+                kvs_protocol(ebpf_buffer, (int)ebpf_len, response, sizeof(response));
+                kvs_replication_set_replaying(0);
+
+                ebpf_len = (unsigned int)KVS_EBPF_MAX_COMMAND_LEN;
+                ++processed;
+            }
+        }
+
+        // ---- 2.2 检查 TCP 控制通道 ----
+        // eBPF 路径下使用短超时，保证既能及时消费队列，又能收到控制帧；
+        // 纯 TCP 路径下保持原有阻塞接收，不改变既有行为。
+        if (ebpf_active) {
+            struct pollfd pfd;
+            pfd.fd = fd;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+
+            int poll_ret = poll(&pfd, 1, 5);
+            if (poll_ret < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                break;
+            }
+            if (poll_ret == 0) {
+                continue;
+            }
+            if ((pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+                break;
+            }
+            if ((pfd.revents & POLLIN) == 0) {
+                continue;
+            }
+        }
+
+        // ---- 2.3 接收 TCP 帧长度头（4 字节，网络序） ----
         if (recv_all(fd, (char*)&net_len, sizeof(net_len)) < 0) {
             break;
         }
@@ -522,7 +703,7 @@ void* replication_thread(void* arg) {
             break;
         }
 
-        // ---- 2.2 接收命令数据体 ----
+        // ---- 2.4 接收 TCP 帧数据体 ----
         buffer = (char*)malloc((size_t)command_len + 1);
         if (buffer == NULL || recv_all(fd, buffer, command_len) < 0) {
             free(buffer);
@@ -530,16 +711,46 @@ void* replication_thread(void* arg) {
         }
         buffer[command_len] = '\0';
 
-        // ---- 2.3 特殊命令：重置数据库 ----
-        // 如果 Master 推送了 "RESET" 命令，则清空本地所有数据。
-        // 通常用于全量同步前的清理，确保数据一致性。
-        if (strcmp(buffer, replication_reset) == 0) {
-            kvs_reset_data();
+        // ---- 2.5 eBPF 全量同步完成标记 ----
+        // Master 在 eBPF 路径下会先通过 TCP 发完全量快照，再发送该标记；
+        // 收到标记后，后续实时写命令才允许从 eBPF 队列重放。
+        if (strcmp(buffer, replication_fullsync_done) == 0) {
+            ebpf_ready = 1;
             free(buffer);
+            buffer = NULL;
             continue;
         }
 
-        // ---- 2.4 正常命令执行（标记为“回放中”） ----
+        // ---- 2.6 特殊命令：重置数据库 ----
+        // 如果 Master 推送了 "RESET" 命令，则清空本地所有数据。
+        // 通常用于全量同步前的清理，确保数据一致性。
+        if (strcmp(buffer, replication_reset) == 0) {
+            // 重置期间禁止消费 eBPF 队列，等待下一次全量同步完成标记。
+            ebpf_ready = 0;
+            // eBPF 队列中可能还残留重置前的旧命令，直接丢弃，
+            // 避免全量同步完成后又重放过期写操作。
+            kvs_ebpf_drain();
+            kvs_reset_data();
+#ifdef KVS_ENABLE_RDMA
+            if (kvs_replication_is_rdma_enabled()) {
+                // 清空本地数据后，通过 RDMA 从 Master 拉取新的全量快照；
+                // 成功后再发送一次 REPLICA 握手，让 Master 结束 pending 状态。
+                if (kvs_replication_rdma_full_sync(g_master_ip, g_master_port) != 0) {
+                    free(buffer);
+                    break;
+                }
+                if (send_frame(fd, replication_handshake, strlen(replication_handshake)) < 0) {
+                    free(buffer);
+                    break;
+                }
+            }
+#endif
+            free(buffer);
+            buffer = NULL;
+            continue;
+        }
+
+        // ---- 2.7 正常 TCP 命令执行（标记为“回放中”） ----
         // 设置标志，防止 AOF 等模块再次记录这条命令（避免无限循环）。
         kvs_replication_set_replaying(1);
 
@@ -551,6 +762,7 @@ void* replication_thread(void* arg) {
         }
 
         free(buffer);
+        buffer = NULL;
 
         // 清除回放标志
         kvs_replication_set_replaying(0);
@@ -561,5 +773,6 @@ void* replication_thread(void* arg) {
     // =============================================
     // 当连接断开、协议错误或主动停止时，将运行标志置 0，线程结束。
     replication_running = 0;
+    free(ebpf_buffer);
     return NULL;
 }

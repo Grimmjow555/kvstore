@@ -138,7 +138,7 @@ RESP 解析目前只接受完整的数组和 bulk string；不支持 null bulk s
 
 - 各存储引擎头部有 `ENABLE_ARRAY` / `ENABLE_RBTREE` / `ENABLE_HASH` / `ENABLE_SKIPTABLE`。
 - `include/aof.h` 有 `AOF_ENABLE`。
-- `include/network.h` 有 `USE_REACTOR` / `USE_NTYCO` / `USE_PROACTOR`，当前 `USE_NTYCO=1`。CMake 会同时编译三个网络源文件，但运行时只走被启用的那一个；切换后必须重新构建并做协议级验证。
+- `include/network.h` 有 `USE_REACTOR` / `USE_NTYCO` / `USE_PROACTOR`，当前 `USE_REACTOR=1`。CMake 会同时编译三个网络源文件，但运行时只走被启用的那一个；切换后必须重新构建并做协议级验证。
 
 修改这些宏时，要同步考虑对应模块是否被 CMake 编译，以及快照/复制逻辑中的 `#if` 条件。
 

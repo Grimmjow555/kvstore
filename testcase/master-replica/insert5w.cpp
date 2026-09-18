@@ -14,8 +14,8 @@
 #define MAX_MSG_LENGTH 1024
 #define TIME_SUB_MS(tv1, tv2)                                                                      \
     ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
-#define SET_NUMS 25
-#define PRINT_PASS 0
+#define SET_NUMS 125
+#define PRINT_PASS 1
 #define SAVE 1 // 测试保存功能
 
 // 将空格分隔的命令字符串（如 "SSET Teacher King"）转换为 RESP 格式
@@ -75,14 +75,19 @@ void testcase_raw(int connfd, const char* msg, const char* expected_pattern, con
 
     if (strcmp(result, expected_pattern) == 0) {
 #if PRINT_PASS
-
+#if LEVEL3
+        printf("thread[%d]==> PASS ->  %s\n", thread_id, casename);
+#else
         printf("==> PASS ->  %s\n", casename);
-
+#endif
 #endif
     } else {
-
+#if LEVEL3
+        printf("thread[%d]==> FAILED -> %s, '%s' != '%s'\n", thread_id, casename, result,
+               expected_pattern);
+#else
         printf("==> FAILED -> %s, '%s' != '%s'\n", casename, result, expected_pattern);
-
+#endif
         exit(1);
     }
 }
@@ -100,12 +105,21 @@ void testcase(int connfd, const char* msg, const char* pattern, const char* case
     if (strcmp(result, pattern) == 0) {
 
 #if PRINT_PASS
+#if LEVEL3
+        printf("thread[%d]==> PASS ->  %s\n", thread_id, casename);
+#else
         printf("==> PASS ->  %s\n", casename);
+#endif
 #endif
 
     } else {
 
+#if LEVEL3
+        printf("thread[%d]==> FAILED -> %s, '%s' != '%s' \n", thread_id, casename, result, pattern);
+
+#else
         printf("==> FAILED -> %s, '%s' != '%s' \n", casename, result, pattern);
+#endif
 
         exit(1);
     }
@@ -292,7 +306,6 @@ int main(int argc, char* argv[]) {
     int connfd = connect_tcpserver(ip, port);
 
 #if SAVE
-    printf("RDB SAVE: insert %d records, then save to RDB file\n", SET_NUMS * 4);
 
     rbtree_testcase(connfd);
 
@@ -301,20 +314,14 @@ int main(int argc, char* argv[]) {
     hash_testcase(connfd);
 
     skiptable_testcase(connfd);
-
-    const char* args_save[] = {};
-    char* req = nullptr;
-    req = build_resp_request("RDB SAVE", 0, args_save);
-    testcase_raw(connfd, req, "+OK\r\n", "RDB SAVE", 0);
-    free(req);
 
 #else
-    printf("RDB LOAD: load %d records from RDB file, then test the loaded data\n", SET_NUMS * 4);
 
+    printf("AOF LOAD\n");
     const char* args_load[] = {};
     char* req = nullptr;
-    req = build_resp_request("RDB LOAD", 0, args_load);
-    testcase_raw(connfd, req, "+OK\r\n", "RDB LOAD", 0);
+    req = build_resp_request("AOF LOAD", 0, args_load);
+    testcase_raw(connfd, req, "+OK\r\n", "AOF LOAD", 0);
     free(req);
 
     rbtree_testcase(connfd);
@@ -324,8 +331,6 @@ int main(int argc, char* argv[]) {
     hash_testcase(connfd);
 
     skiptable_testcase(connfd);
-
-    printf("test success\n");
 
 #endif
     return 0;

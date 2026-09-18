@@ -15,7 +15,7 @@
 #define TIME_SUB_MS(tv1, tv2)                                                                      \
     ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
 #define SET_NUMS 25
-#define PRINT_PASS 1
+#define PRINT_PASS 0
 #define SAVE 0 // 测试保存功能
 
 #define LEVEL1 1 //使用最基础的9条测试样例，测试一次
@@ -305,10 +305,11 @@ int main(int argc, char* argv[]) {
     char* ip = argv[1];
     unsigned short port = atoi(argv[2]);
 
-    printf("LEVEL1:使用9条测试样例, 测试一次\n");
     int connfd = connect_tcpserver(ip, port);
 
 #if SAVE
+    printf("RDB SAVE: insert %d records, then save to RDB file\n", SET_NUMS * 4);
+
     rbtree_testcase(connfd);
 
     array_testcase(connfd);
@@ -325,7 +326,8 @@ int main(int argc, char* argv[]) {
 
 #else
 
-    printf("LOAD\n");
+    printf("RDB LOAD: load %d records from RDB file, then test the loaded data\n", SET_NUMS * 4);
+
     const char* args_load[] = {};
     char* req = nullptr;
     req = build_resp_request("RDB LOAD", 0, args_load);
@@ -339,6 +341,8 @@ int main(int argc, char* argv[]) {
     hash_testcase(connfd);
 
     skiptable_testcase(connfd);
+
+    printf("test success\n");
 
 #endif
     return 0;

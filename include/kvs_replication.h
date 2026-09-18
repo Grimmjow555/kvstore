@@ -49,6 +49,25 @@ void kvs_replication_destroy();
 int kvs_replication_is_replaying();
 void kvs_replication_set_replaying(int value);
 
+#ifdef KVS_ENABLE_RDMA
+// ==================== RDMA 全量同步接口 ====================
+
+#define KVS_RDMA_PORT_OFFSET 1
+
+// Master 启动独立 RDMA 监听端口（TCP 端口 + KVS_RDMA_PORT_OFFSET）。
+int kvs_replication_start_rdma_listener(unsigned short tcp_port);
+
+// Replica 主动连接 Master 的 RDMA 端口，完成一次全量快照同步。
+int kvs_replication_rdma_full_sync(const char* master_ip, int master_port);
+
+// 停止 Master 的 RDMA 监听线程并释放相关资源。
+void kvs_replication_stop_rdma_listener();
+
+// 查询/设置当前进程是否已成功启用 RDMA 全量同步。
+int kvs_replication_is_rdma_enabled();
+void kvs_replication_set_rdma_enabled(int enabled);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

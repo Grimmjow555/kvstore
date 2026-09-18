@@ -1,6 +1,7 @@
 #include "aof.h"
 #include "kvs_array.h"
 #include "kvs_config.h"
+#include "kvs_ebpf.h"
 #include "kvs_hash.h"
 #include "kvs_rbtree.h"
 #include "kvs_replication.h"
@@ -756,6 +757,18 @@ int kvs_reset_data() {
     return init_kvengine();
 }
 
+static int ensure_data_directory() {
+    if (mkdir("../data", 0755) == 0 || errno == EEXIST) {
+        struct stat data_stat;
+        if (stat("../data", &data_stat) == 0 && S_ISDIR(data_stat.st_mode)) {
+            return 0;
+        }
+    }
+
+    fprintf(stderr, "Failed to create data directory: %s\n", strerror(errno));
+    return -1;
+}
+
 // ./kvstore <port> <role> <master_ip> <master_port>
 // role: 0(Master) 1(Replica)
 // ./kvstore 9999 0
@@ -785,6 +798,10 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
+    if (ensure_data_directory() != 0) {
+        return -1;
+    }
+
     unsigned short port = atoi(argv[1]);
 
     int role = atoi(argv[2]);
@@ -800,6 +817,17 @@ int main(int argc, char* argv[]) {
     // 初始化复制模块
     if (role == 0) {
         kvs_replication_init(KVS_ROLE_MASTER);
+        // 优先创建本地 eBPF 实时同步队列；失败时后续增量同步自动回退 TCP。
+        if (kvs_ebpf_master_init(port) != 0) {
+            fprintf(stderr,
+                    "Warning: eBPF realtime sync unavailable, falling back to TCP realtime sync\n");
+        }
+#ifdef KVS_ENABLE_RDMA
+        if (kvs_replication_start_rdma_listener(port) != 0) {
+            // RDMA 设备不可用时不要阻止服务启动，自动回退到 TCP 全量同步。
+            fprintf(stderr, "Warning: RDMA listener unavailable, falling back to TCP full sync\n");
+        }
+#endif
         if (kvs_config_aof_enabled() && kvs_aof_init("../data/append.aof") != 0) {
             fprintf(stderr, "AOF init failed.\n");
             return -1;
@@ -830,6 +858,14 @@ int main(int argc, char* argv[]) {
 
             return -1;
         }
+
+#ifdef KVS_ENABLE_RDMA
+        // 先通过 RDMA 完成已有数据的全量同步，再发送 TCP 握手进入增量同步。
+        if (kvs_replication_rdma_full_sync(master_ip, master_port) != 0) {
+            // Master 可能同样因没有 RDMA 设备而回退为 TCP 全量同步。
+            fprintf(stderr, "Warning: RDMA full sync unavailable, falling back to TCP full sync\n");
+        }
+#endif
 
         if (kvs_replication_start() != 0) {
             fprintf(stderr, "Failed to start replication\n");

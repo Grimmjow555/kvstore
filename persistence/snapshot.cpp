@@ -1,9 +1,9 @@
 #include "kvs_array.h"
 #include "kvs_hash.h"
+#include "kvs_io_uring.h"
 #include "kvs_rbtree.h"
 #include "kvs_skiptable.h"
 #include "kvs_snapshot.h"
-#include "kvs_io_uring.h"
 #include "kvstore.h"
 #include <cstdint>
 #include <cstdio>
@@ -347,7 +347,7 @@ static int kvs_load_skiptable_section(kvs_mmap_reader_t* reader, uint32_t count)
 }
 #endif
 
-int kvs_snapshot_save(const char* filename) {
+static int kvs_snapshot_build(std::vector<char>* buffer) {
     uint32_t section_count = 0;
 #if ENABLE_ARRAY
     ++section_count;
@@ -369,36 +369,71 @@ int kvs_snapshot_save(const char* filename) {
     header.count = section_count;
 
     // 先完整序列化到内存，避免对持久化文件执行大量小写入和多次 io_uring 提交。
-    std::vector<char> buffer;
-    buffer.reserve(1024 * 1024);
+    buffer->reserve(1024 * 1024);
 
-    if (kvs_write_exact(&buffer, &header, sizeof(header)) != 0) {
+    if (kvs_write_exact(buffer, &header, sizeof(header)) != 0) {
         return -1;
     }
 
 #if ENABLE_ARRAY
-    if (kvs_save_array_section(&buffer) != 0) {
+    if (kvs_save_array_section(buffer) != 0) {
         return -1;
     }
 #endif
 #if ENABLE_RBTREE
-    if (kvs_save_rbtree_section(&buffer) != 0) {
+    if (kvs_save_rbtree_section(buffer) != 0) {
         return -1;
     }
 #endif
 #if ENABLE_HASH
-    if (kvs_save_hash_section(&buffer) != 0) {
+    if (kvs_save_hash_section(buffer) != 0) {
         return -1;
     }
 #endif
 #if ENABLE_SKIPTABLE
-    if (kvs_save_skiptable_section(&buffer) != 0) {
+    if (kvs_save_skiptable_section(buffer) != 0) {
         return -1;
     }
 #endif
 
-    kvs_io_uring_file_t* fp =
-        kvs_io_uring_open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    return 0;
+}
+
+int kvs_snapshot_serialize(char** out_data, size_t* out_len) {
+    if (out_data == NULL || out_len == NULL) {
+        return -1;
+    }
+
+    *out_data = NULL;
+    *out_len = 0;
+
+    std::vector<char> buffer;
+    if (kvs_snapshot_build(&buffer) != 0) {
+        return -1;
+    }
+
+    if (buffer.empty()) {
+        return -1;
+    }
+
+    char* data = (char*)malloc(buffer.size());
+    if (data == NULL) {
+        return -1;
+    }
+    memcpy(data, buffer.data(), buffer.size());
+
+    *out_data = data;
+    *out_len = buffer.size();
+    return 0;
+}
+
+int kvs_snapshot_save(const char* filename) {
+    std::vector<char> buffer;
+    if (kvs_snapshot_build(&buffer) != 0) {
+        return -1;
+    }
+
+    kvs_io_uring_file_t* fp = kvs_io_uring_open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fp == NULL) {
         return -1;
     }
@@ -406,6 +441,76 @@ int kvs_snapshot_save(const char* filename) {
     int ret = kvs_io_uring_write_and_fsync(fp, buffer.data(), buffer.size());
     kvs_io_uring_close(fp);
     return ret;
+}
+
+// 解析内存中的 RDB 格式快照。成功时会先重置全部引擎数据。
+static int kvs_snapshot_parse(const void* mapped, size_t mapped_size) {
+    kvs_mmap_reader_t reader;
+    reader.base = (const unsigned char*)mapped;
+    reader.size = mapped_size;
+    reader.offset = 0;
+
+    kvs_file_header_t header;
+    memset(&header, 0, sizeof(header));
+    if (kvs_mmap_read_exact(&reader, &header, sizeof(header)) != 0) {
+        return -1;
+    }
+
+    if (memcmp(header.magic, KVS_FILE_MAGIC, sizeof(header.magic)) != 0 ||
+        header.version != KVS_FILE_VERSION) {
+        return -1;
+    }
+
+    kvs_reset_data();
+
+    for (uint32_t i = 0; i < header.count; ++i) {
+        kvs_section_header_t section;
+        if (kvs_mmap_read_exact(&reader, &section, sizeof(section)) != 0) {
+            return -1;
+        }
+
+        switch (section.type) {
+#if ENABLE_ARRAY
+        case KVS_SNAPSHOT_TYPE_ARRAY:
+            if (kvs_load_array_section(&reader, section.count) != 0) {
+                return -1;
+            }
+            break;
+#endif
+#if ENABLE_RBTREE
+        case KVS_SNAPSHOT_TYPE_RBTREE:
+            if (kvs_load_rbtree_section(&reader, section.count) != 0) {
+                return -1;
+            }
+            break;
+#endif
+#if ENABLE_HASH
+        case KVS_SNAPSHOT_TYPE_HASH:
+            if (kvs_load_hash_section(&reader, section.count) != 0) {
+                return -1;
+            }
+            break;
+#endif
+#if ENABLE_SKIPTABLE
+        case KVS_SNAPSHOT_TYPE_SKIPTABLE:
+            if (kvs_load_skiptable_section(&reader, section.count) != 0) {
+                return -1;
+            }
+            break;
+#endif
+        default:
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+int kvs_snapshot_load_buffer(const void* data, size_t len) {
+    if (data == NULL || len == 0) {
+        return -1;
+    }
+    return kvs_snapshot_parse(data, len);
 }
 
 // 使用 mmap 将快照文件映射为只读内存，再按游标顺序解析，避免通过 FILE* 逐段读取。
@@ -428,72 +533,7 @@ int kvs_snapshot_load(const char* filename) {
     }
     close(fd);
 
-    kvs_mmap_reader_t reader;
-    reader.base = (const unsigned char*)mapped;
-    reader.size = (size_t)st.st_size;
-    reader.offset = 0;
-
-    kvs_file_header_t header;
-    memset(&header, 0, sizeof(header));
-    if (kvs_mmap_read_exact(&reader, &header, sizeof(header)) != 0) {
-        munmap(mapped, (size_t)st.st_size);
-        return -1;
-    }
-
-    if (memcmp(header.magic, KVS_FILE_MAGIC, sizeof(header.magic)) != 0 ||
-        header.version != KVS_FILE_VERSION) {
-        munmap(mapped, (size_t)st.st_size);
-        return -1;
-    }
-
-    kvs_reset_data();
-
-    for (uint32_t i = 0; i < header.count; ++i) {
-        kvs_section_header_t section;
-        if (kvs_mmap_read_exact(&reader, &section, sizeof(section)) != 0) {
-            munmap(mapped, (size_t)st.st_size);
-            return -1;
-        }
-
-        switch (section.type) {
-#if ENABLE_ARRAY
-        case KVS_SNAPSHOT_TYPE_ARRAY:
-            if (kvs_load_array_section(&reader, section.count) != 0) {
-                munmap(mapped, (size_t)st.st_size);
-                return -1;
-            }
-            break;
-#endif
-#if ENABLE_RBTREE
-        case KVS_SNAPSHOT_TYPE_RBTREE:
-            if (kvs_load_rbtree_section(&reader, section.count) != 0) {
-                munmap(mapped, (size_t)st.st_size);
-                return -1;
-            }
-            break;
-#endif
-#if ENABLE_HASH
-        case KVS_SNAPSHOT_TYPE_HASH:
-            if (kvs_load_hash_section(&reader, section.count) != 0) {
-                munmap(mapped, (size_t)st.st_size);
-                return -1;
-            }
-            break;
-#endif
-#if ENABLE_SKIPTABLE
-        case KVS_SNAPSHOT_TYPE_SKIPTABLE:
-            if (kvs_load_skiptable_section(&reader, section.count) != 0) {
-                munmap(mapped, (size_t)st.st_size);
-                return -1;
-            }
-            break;
-#endif
-        default:
-            munmap(mapped, (size_t)st.st_size);
-            return -1;
-        }
-    }
-
+    int ret = kvs_snapshot_parse(mapped, (size_t)st.st_size);
     munmap(mapped, (size_t)st.st_size);
-    return 0;
+    return ret;
 }

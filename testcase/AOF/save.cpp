@@ -15,10 +15,8 @@
 #define TIME_SUB_MS(tv1, tv2)                                                                      \
     ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
 #define SET_NUMS 25
-#define PRINT_PASS 1
+#define PRINT_PASS 0
 #define SAVE 1 // 测试保存功能
-
-#define LEVEL1 1 //使用最基础的9条测试样例，测试一次
 
 // 将空格分隔的命令字符串（如 "SSET Teacher King"）转换为 RESP 格式
 // 返回静态缓冲区指针（调用后立即使用，因为会被后续调用覆盖）
@@ -77,19 +75,12 @@ void testcase_raw(int connfd, const char* msg, const char* expected_pattern, con
 
     if (strcmp(result, expected_pattern) == 0) {
 #if PRINT_PASS
-#if LEVEL3
-        printf("thread[%d]==> PASS ->  %s\n", thread_id, casename);
-#else
         printf("==> PASS ->  %s\n", casename);
 #endif
-#endif
     } else {
-#if LEVEL3
-        printf("thread[%d]==> FAILED -> %s, '%s' != '%s'\n", thread_id, casename, result,
-               expected_pattern);
-#else
+
         printf("==> FAILED -> %s, '%s' != '%s'\n", casename, result, expected_pattern);
-#endif
+
         exit(1);
     }
 }
@@ -107,21 +98,12 @@ void testcase(int connfd, const char* msg, const char* pattern, const char* case
     if (strcmp(result, pattern) == 0) {
 
 #if PRINT_PASS
-#if LEVEL3
-        printf("thread[%d]==> PASS ->  %s\n", thread_id, casename);
-#else
         printf("==> PASS ->  %s\n", casename);
-#endif
 #endif
 
     } else {
 
-#if LEVEL3
-        printf("thread[%d]==> FAILED -> %s, '%s' != '%s' \n", thread_id, casename, result, pattern);
-
-#else
         printf("==> FAILED -> %s, '%s' != '%s' \n", casename, result, pattern);
-#endif
 
         exit(1);
     }
@@ -305,10 +287,11 @@ int main(int argc, char* argv[]) {
     char* ip = argv[1];
     unsigned short port = atoi(argv[2]);
 
-    printf("LEVEL1:使用9条测试样例, 测试一次\n");
     int connfd = connect_tcpserver(ip, port);
 
 #if SAVE
+    printf("AOF SAVE: insert %d records, and recorded to AOF file\n", SET_NUMS * 4);
+
     const char* args_save[] = {};
     char* req = nullptr;
     req = build_resp_request("AOF CLEAR", 0, args_save);
@@ -325,7 +308,8 @@ int main(int argc, char* argv[]) {
 
 #else
 
-    printf("AOF LOAD\n");
+    printf("AOF LOAD: load %d records from AOF file, then test the loaded data\n", SET_NUMS * 4);
+
     const char* args_load[] = {};
     char* req = nullptr;
     req = build_resp_request("AOF LOAD", 0, args_load);
@@ -339,6 +323,8 @@ int main(int argc, char* argv[]) {
     hash_testcase(connfd);
 
     skiptable_testcase(connfd);
+
+    printf("test success\n");
 
 #endif
     return 0;

@@ -109,6 +109,116 @@ cmake --build build -j$(nproc)
 - 主节点和从节点通过复制模块进行连接与同步
 - 从节点启动时需要指定主节点地址与端口
 - 主节点启动后可对在线从节点下发快照和增量同步指令
+- 当 Replica 通过回环地址连接同一台主机上的 Master 时，实时增量同步会优先使用 eBPF 队列
+  `/sys/fs/bpf/kvstore/kvstore_replication_<master_port>`；内核权限、文件系统权限或跨主机场景下
+  会自动回退到 TCP，不影响服务启动。
+
+## eBPF 实时同步配置
+
+项目在“Master 和 Replica 位于同一台主机，且 Replica 通过回环地址连接 Master”时，会尝试用
+`BPF_MAP_TYPE_QUEUE` 传输实时增量命令。eBPF 仅用于本地回环场景；跨主机同步仍使用 TCP。
+eBPF 初始化失败时会自动回退 TCP，不会阻止 `kvstore` 启动。
+
+### 依赖与内核要求
+
+- 仅支持 Linux；当前实现直接调用 `bpf(2)` 系统调用，不依赖 libbpf。
+- 需要内核支持 `BPF_MAP_TYPE_QUEUE` 和 `BPF_MAP_LOOKUP_AND_DELETE_ELEM`，建议 Linux 4.20 或更高版本。
+- `BPF_MAP_TYPE_QUEUE` 属于特权 map 类型，通常需要 `CAP_BPF`（Linux 5.8+）或 `CAP_SYS_ADMIN`。
+- 某些发行版即使设置了 `kernel.unprivileged_bpf_disabled=0`，仍会禁止非特权进程创建
+  queue/stack map，因此建议显式给二进制添加 capability，而不是依赖非特权 BPF 开关。
+- 需要 `/sys/fs/bpf`（bpffs）挂载为可写，并允许运行用户创建/删除 pin 文件。
+
+### 运行前一次性配置
+
+1. 确认 bpffs 已挂载且可写：
+
+```bash
+mount | grep ' bpf '
+sudo mount -t bpf bpf /sys/fs/bpf       # 如果尚未挂载
+sudo mount -o remount,rw /sys/fs/bpf    # 如果当前是只读挂载
+```
+
+2. 创建 eBPF 队列使用的 pin 子目录，并授权给运行用户：
+
+```bash
+sudo mkdir -p /sys/fs/bpf/kvstore
+sudo chown "$USER":$(id -gn) /sys/fs/bpf/kvstore
+sudo chmod 700 /sys/fs/bpf/kvstore
+```
+
+> 当前代码中的 pin 目录固定为 `/sys/fs/bpf/kvstore`。如果需要改到其他路径，
+> 请同步修改 `replication/kvs_ebpf.cpp` 中的 `KVS_EBPF_PIN_DIR` 后重新编译。
+
+3. 给编译产物添加 capability：
+
+```bash
+sudo setcap cap_bpf,cap_sys_admin+ep ./build/kvstore
+```
+
+注意：
+
+- Linux 5.8 以下没有 `CAP_BPF`，可只使用 `cap_sys_admin+ep`。
+- 每次重新编译并替换 `build/kvstore` 后，通常需要重新执行一次 `setcap`。
+- 如果文件系统不支持 xattr/security.capability 或挂载为 `nosuid`，`setcap` 可能失败；
+  此时可先用 `sudo ./build/kvstore` 做临时验证，但正式运行仍建议放到支持 capability 的文件系统上。
+
+### 一键配置脚本
+
+仓库根目录提供了 `setup_ebpf.sh`，可以自动完成 bpffs 检查、pin 目录创建和 `setcap`：
+
+```bash
+./setup_ebpf.sh
+```
+
+也可以指定二进制路径或 capability：
+
+```bash
+./setup_ebpf.sh --binary build/kvstore
+./setup_ebpf.sh --caps cap_bpf,cap_sys_admin+ep
+```
+
+查看完整选项：
+
+```bash
+./setup_ebpf.sh --help
+```
+
+### 启动与验证
+
+配置完成后，以普通用户身份启动即可：
+
+```bash
+cd build
+./kvstore 9999 0
+./kvstore 9999 1 127.0.0.1 9999
+```
+
+当 eBPF 队列可用时，启动日志中会看到类似输出：
+
+```text
+[EBPF] master realtime sync queue ready: /sys/fs/bpf/kvstore/kvstore_replication_9999
+[EBPF] replica realtime sync queue ready: /sys/fs/bpf/kvstore/kvstore_replication_9999
+```
+
+如果看到 `fallback to TCP sync` 或 `falling back to TCP realtime sync`，说明 eBPF 路径不可用，
+服务仍会继续运行，只是实时同步走 TCP。
+
+### 常见故障排查
+
+| 现象 | 常见原因 | 处理方式 |
+| --- | --- | --- |
+| 创建 queue 返回 `EPERM` | 缺少 `CAP_BPF`/`CAP_SYS_ADMIN`，或内核禁止该 map 类型 | 重新执行 `setcap`，并检查内核版本和安全策略 |
+| pin 返回 `EEXIST` | 上一次运行遗留了同名 pin 文件 | 删除 `/sys/fs/bpf/kvstore/kvstore_replication_<port>` 后重启 |
+| pin 返回 `EROFS` | `/sys/fs/bpf` 是只读挂载 | `sudo mount -o remount,rw /sys/fs/bpf` |
+| pin 返回 `EPERM` 或 `ENOENT` | pin 目录不存在或当前用户无写权限 | 创建并 chown `/sys/fs/bpf/kvstore` |
+| 容器/受限环境中始终回退 TCP | 容器未暴露 bpffs、capability 或内核 BPF 能力 | 属预期行为；如必须 eBPF，需要调整容器权限或改用 TCP |
+
+### 移植性说明
+
+- 当前 CMake 会无条件编译 `replication/kvs_ebpf.cpp`，因此目标平台需要提供 `<linux/bpf.h>`。
+- eBPF 队列值大小为约 1 MiB，队列容量为 16，Master 侧会额外占用约 16 MiB 内核 map 内存。
+- 如果目标环境不能使用 `BPF_MAP_TYPE_QUEUE`，需要修改 `replication/kvs_ebpf.cpp`，
+  例如改为 `BPF_MAP_TYPE_ARRAY`/`BPF_MAP_TYPE_HASH` 并在用户态实现 FIFO；否则服务会自动退化为 TCP 同步。
 
 ## 数据持久化与恢复
 
@@ -174,6 +284,3 @@ cmake -S . -B build -DNTYCO_ROOT=/path/to/NtyCo-master
 - `data/kvstore.data` 是 RDB 全量快照文件
 - `data/append.aof` 是 AOF 增量日志文件
 - 服务器启动时默认不会自动恢复数据，需通过命令手动触发
-
-
-
