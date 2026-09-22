@@ -12,19 +12,19 @@ typedef int (*msg_handler)(char* msg, int length, char* response, int response_s
 
 /*--------------------------------------------------------------------*/
 // reactor启动函数：监听的端口，解析协议
-extern int reactor_start(unsigned short port, msg_handler handler);
+extern int reactor_start(const char* bind_ip, unsigned short port, msg_handler handler);
 
 #ifdef __cplusplus // ntyco_start是纯C编写的，用C++编译时需要以兼容C的模式处理
 extern "C" {
 #endif
 
 // ntyco启动函数：监听的端口，解析协议
-extern int ntyco_start(unsigned short port, msg_handler handler);
+extern int ntyco_start(const char* bind_ip, unsigned short port, msg_handler handler);
 
 #ifdef __cplusplus
 }
 #endif
 
 // uring启动函数：监听的端口，解析协议
-extern int proactor_start(unsigned short port, msg_handler handler);
+extern int proactor_start(const char* bind_ip, unsigned short port, msg_handler handler);
 /*--------------------------------------------------------------------*/

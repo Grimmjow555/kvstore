@@ -1,3 +1,4 @@
+#include "kvs_config.h"
 #include "kvs_ebpf.h"
 
 #include <arpa/inet.h>
@@ -40,8 +41,7 @@ static int ensure_pin_dir() {
 
     if (stat(KVS_EBPF_PIN_DIR, &st) == 0) {
         if (!S_ISDIR(st.st_mode)) {
-            fprintf(stderr,
-                    "[EBPF] pin path exists but is not a directory: %s\n",
+            kvs_log(KVS_LOG_ERROR, "[EBPF] pin path exists but is not a directory: %s",
                     KVS_EBPF_PIN_DIR);
             return -1;
         }
@@ -49,8 +49,8 @@ static int ensure_pin_dir() {
     }
 
     if (mkdir(KVS_EBPF_PIN_DIR, 0700) != 0) {
-        fprintf(stderr,
-                "[EBPF] cannot create pin directory %s (errno=%d, %s)\n",
+        kvs_log(KVS_LOG_WARN,
+                "[EBPF] cannot create pin directory %s (errno=%d, %s)",
                 KVS_EBPF_PIN_DIR, errno, strerror(errno));
         return -1;
     }
@@ -64,7 +64,7 @@ int kvs_ebpf_master_init(unsigned short master_port) {
     }
 
     if (ensure_pin_dir() != 0) {
-        fprintf(stderr, "[EBPF] realtime sync unavailable; fallback to TCP sync\n");
+        kvs_log(KVS_LOG_WARN, "[EBPF] realtime sync unavailable; fallback to TCP sync");
         return -1;
     }
 
@@ -75,8 +75,8 @@ int kvs_ebpf_master_init(unsigned short master_port) {
     // 必须检查 unlink 结果：如果清理失败，后续 BPF_OBJ_PIN 会返回 EEXIST，
     // 而不是把原因隐藏在 errno=17 后面。
     if (unlink(g_pin_path) != 0 && errno != ENOENT) {
-        fprintf(stderr,
-                "[EBPF] cannot remove stale pin %s (errno=%d, %s); fallback to TCP sync\n",
+        kvs_log(KVS_LOG_WARN,
+                "[EBPF] cannot remove stale pin %s (errno=%d, %s); fallback to TCP sync",
                 g_pin_path, errno, strerror(errno));
         return -1;
     }
@@ -91,8 +91,8 @@ int kvs_ebpf_master_init(unsigned short master_port) {
 
     int fd = bpf_syscall(BPF_MAP_CREATE, &attr);
     if (fd < 0) {
-        fprintf(stderr,
-                "[EBPF] create replication queue failed (errno=%d, %s); fallback to TCP sync\n",
+        kvs_log(KVS_LOG_WARN,
+                "[EBPF] create replication queue failed (errno=%d, %s); fallback to TCP sync",
                 errno, strerror(errno));
         return -1;
     }
@@ -101,15 +101,15 @@ int kvs_ebpf_master_init(unsigned short master_port) {
     attr.pathname = (__u64)g_pin_path;
     attr.bpf_fd = (__u32)fd;
     if (bpf_syscall(BPF_OBJ_PIN, &attr) != 0) {
-        fprintf(stderr,
-                "[EBPF] pin replication queue failed (errno=%d, %s); fallback to TCP sync\n",
+        kvs_log(KVS_LOG_WARN,
+                "[EBPF] pin replication queue failed (errno=%d, %s); fallback to TCP sync",
                 errno, strerror(errno));
         close(fd);
         return -1;
     }
 
     g_master_map_fd = fd;
-    printf("[EBPF] master realtime sync queue ready: %s\n", g_pin_path);
+    kvs_log(KVS_LOG_INFO, "[EBPF] master realtime sync queue ready: %s", g_pin_path);
     return 0;
 }
 
@@ -228,15 +228,15 @@ int kvs_ebpf_replica_open(unsigned short master_port) {
 
     int fd = bpf_syscall(BPF_OBJ_GET, &attr);
     if (fd < 0) {
-        fprintf(stderr,
+        kvs_log(KVS_LOG_WARN,
                 "[EBPF] replica cannot open realtime queue %s (errno=%d, %s); "
-                "fallback to TCP sync\n",
+                "fallback to TCP sync",
                 path, errno, strerror(errno));
         return -1;
     }
 
     g_replica_map_fd = fd;
-    printf("[EBPF] replica realtime sync queue ready: %s\n", path);
+    kvs_log(KVS_LOG_INFO, "[EBPF] replica realtime sync queue ready: %s", path);
     return 0;
 }
 

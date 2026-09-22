@@ -1,5 +1,6 @@
 #ifdef KVS_ENABLE_RDMA
 
+#include "kvs_config.h"
 #include "kvs_replication.h"
 #include "kvs_snapshot.h"
 
@@ -554,7 +555,7 @@ static void* kvs_rdma_listener_thread(void* arg) {
         return NULL;
     }
 
-    printf("[RDMA] master listener ready on port %u\n", rdma_port);
+    kvs_log(KVS_LOG_INFO, "[RDMA] master listener ready on port %u", rdma_port);
     pthread_mutex_lock(&g_rdma_ready_mutex);
     g_rdma_listener_ready = 1;
     pthread_cond_broadcast(&g_rdma_ready_cond);

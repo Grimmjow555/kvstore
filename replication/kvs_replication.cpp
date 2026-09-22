@@ -1,4 +1,5 @@
 #include "kvs_array.h"
+#include "kvs_config.h"
 #include "kvs_ebpf.h"
 #include "kvs_hash.h"
 #include "kvs_rbtree.h"
@@ -210,9 +211,10 @@ int kvs_replication_add_replica(int fd) {
             replica_pending[i] = 1; //
             replica_ebpf[i] = kvs_ebpf_master_available() && kvs_ebpf_peer_is_local(fd);
             pthread_mutex_unlock(&replica_mutex);
-            printf("[REPLICATION] replica connected fd=%d\n", fd);
+            kvs_log(KVS_LOG_INFO, "[REPLICATION] replica connected fd=%d", fd);
             if (replica_ebpf[i]) {
-                printf("[REPLICATION] replica fd=%d will use eBPF realtime sync\n", fd);
+                kvs_log(KVS_LOG_INFO,
+                        "[REPLICATION] replica fd=%d will use eBPF realtime sync", fd);
             }
             return 0;
         }
@@ -234,7 +236,7 @@ void kvs_replication_remove_replica(int fd) {
             replica_fds[i] = -1;
             replica_pending[i] = 0;
             replica_ebpf[i] = 0;
-            printf("[REPLICATION] replica removed fd=%d\n", fd);
+            kvs_log(KVS_LOG_INFO, "[REPLICATION] replica removed fd=%d", fd);
             break;
         }
     }
@@ -300,7 +302,8 @@ int kvs_replication_append(int argc, char* argv[]) {
 
             // eBPF 队列写入失败（例如被回收或队列暂时不可用）时，
             // 该副本回退到 TCP 实时同步；后续命令继续走 TCP。
-            printf("[REPLICATION] eBPF push failed for fd=%d, fallback to TCP sync\n", fd);
+            kvs_log(KVS_LOG_WARN,
+                    "[REPLICATION] eBPF push failed for fd=%d, fallback to TCP sync", fd);
             replica_ebpf[i] = 0;
         }
 
@@ -312,7 +315,7 @@ int kvs_replication_append(int argc, char* argv[]) {
             replica_pending[i] = 0;
             replica_ebpf[i] = 0;
 
-            printf("[REPLICATION] replica disconnected fd=%d\n", fd);
+            kvs_log(KVS_LOG_WARN, "[REPLICATION] replica disconnected fd=%d", fd);
         }
     }
 
@@ -502,12 +505,14 @@ int kvs_replication_resync() {
 // Replica 主动与 Master 建立 TCP 连接。
 int kvs_replication_connect_master(const char* ip, int port) {
     if (ip == NULL || strlen(ip) >= INET_ADDRSTRLEN) {
+        kvs_log(KVS_LOG_ERROR, "[REPLICATION] invalid master address");
         return -1;
     }
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
 
     if (fd < 0) {
+        kvs_log(KVS_LOG_ERROR, "[REPLICATION] create socket failed: %s", strerror(errno));
         return -1;
     }
 
@@ -522,6 +527,7 @@ int kvs_replication_connect_master(const char* ip, int port) {
 
         close(fd);
 
+        kvs_log(KVS_LOG_ERROR, "[REPLICATION] invalid master ip: %s", ip);
         return -1;
     }
 
@@ -529,10 +535,12 @@ int kvs_replication_connect_master(const char* ip, int port) {
 
         close(fd);
 
+        kvs_log(KVS_LOG_ERROR, "[REPLICATION] connect to master %s:%d failed: %s", ip, port,
+                strerror(errno));
         return -1;
     }
 
-    printf("[REPLICATION] connected to master %s:%d\n", ip, port);
+    kvs_log(KVS_LOG_INFO, "[REPLICATION] connected to master %s:%d", ip, port);
 
     snprintf(g_master_ip, sizeof(g_master_ip), "%s", ip);
     g_master_port = port;
@@ -559,6 +567,7 @@ int kvs_replication_start() {
 
     replication_running = 1;
     if (send_frame(master_fd, replication_handshake, strlen(replication_handshake)) < 0) {
+        kvs_log(KVS_LOG_ERROR, "[REPLICATION] failed to send handshake to master");
         kvs_ebpf_replica_close();
         replication_running = 0;
         close(master_fd);
@@ -566,6 +575,7 @@ int kvs_replication_start() {
         return -1;
     }
     if (pthread_create(&replication_tid, NULL, replication_thread, &master_fd) != 0) {
+        kvs_log(KVS_LOG_ERROR, "[REPLICATION] failed to create replication thread");
         kvs_ebpf_replica_close();
         replication_running = 0;
         close(master_fd);
@@ -586,6 +596,7 @@ void kvs_replication_stop() {
     close(master_fd);
     master_fd = -1;
     kvs_ebpf_replica_close();
+    kvs_log(KVS_LOG_INFO, "[REPLICATION] replica sync stopped");
 }
 
 // 销毁 Replica 端的复制资源。
@@ -774,5 +785,6 @@ void* replication_thread(void* arg) {
     // 当连接断开、协议错误或主动停止时，将运行标志置 0，线程结束。
     replication_running = 0;
     free(ebpf_buffer);
+    kvs_log(KVS_LOG_INFO, "[REPLICATION] replica sync thread stopped");
     return NULL;
 }

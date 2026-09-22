@@ -1,10 +1,13 @@
 
 
+#include "kvs_config.h"
 #include "kvs_replication.h"
 #include "nty_coroutine.h"
 #include <arpa/inet.h> // htonl, ntohl
 #include <arpa/inet.h>
+#include <errno.h>
 #include <stdint.h> // uint32_t
+#include <stdio.h>
 #include <string.h> // memcpy, memset
 #include <unistd.h> // recv, send, close
 
@@ -13,6 +16,11 @@
 
 typedef int (*msg_handler)(char* msg, int length, char* response, int response_size);
 static msg_handler kvs_handler;
+
+struct nty_server_args {
+    char bind_ip[64];
+    unsigned short port;
+};
 
 // 循环接收，直到读满指定字节数或出错
 int recv_full(int fd, void* buffer, size_t len) {
@@ -210,20 +218,26 @@ void server_reader(void* arg) {
 
 static void server(void* arg) {
 
-    unsigned short port = *(unsigned short*)arg;
+    struct nty_server_args* args = (struct nty_server_args*)arg;
+    unsigned short port = args->port;
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0)
+    if (fd < 0) {
+        kvs_log(KVS_LOG_ERROR, "[NETWORK] socket create failed: %s", strerror(errno));
         return;
-
+    }
     struct sockaddr_in local, remote;
     local.sin_family = AF_INET;
     local.sin_port = htons(port);
-    local.sin_addr.s_addr = INADDR_ANY;
+    if (args->bind_ip[0] == '\0' || strcmp(args->bind_ip, "*") == 0) {
+        local.sin_addr.s_addr = INADDR_ANY;
+    } else if (inet_pton(AF_INET, args->bind_ip, &local.sin_addr) != 1) {
+        kvs_log(KVS_LOG_ERROR, "[NETWORK] invalid bind ip: %s", args->bind_ip);
+        return;
+    }
     bind(fd, (struct sockaddr*)&local, sizeof(struct sockaddr_in));
-
     listen(fd, 20);
-    printf("listen port : %d\n", port);
+    kvs_log(KVS_LOG_INFO, "[NETWORK] listen port: %d", port);
 
     while (1) {
         socklen_t len = sizeof(struct sockaddr_in);
@@ -236,14 +250,21 @@ static void server(void* arg) {
     }
 }
 
-int ntyco_start(unsigned short port, msg_handler handler) {
+int ntyco_start(const char* bind_ip, unsigned short port, msg_handler handler) {
 
     // unsigned short port = atoi(argv[1]); //原始情况，直接从命令行读取端口，需要转化为整数
 
     kvs_handler = handler;
 
+    static struct nty_server_args server_args;
+    memset(&server_args, 0, sizeof(server_args));
+    server_args.port = port;
+    if (bind_ip != NULL) {
+        snprintf(server_args.bind_ip, sizeof(server_args.bind_ip), "%s", bind_ip);
+    }
+
     nty_coroutine* co = NULL;
-    nty_coroutine_create(&co, server, &port);
+    nty_coroutine_create(&co, server, &server_args);
 
     nty_schedule_run();
 }

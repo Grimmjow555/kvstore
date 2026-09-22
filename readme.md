@@ -44,6 +44,14 @@ git submodule sync --recursive
 git submodule update --init --recursive
 ```
 
+也可以在仓库根目录执行一键配置脚本：
+
+```bash
+./setup_submodule.sh
+```
+
+脚本会同步 `.gitmodules` 配置，并递归初始化和更新所有子模块；重复执行也是安全的。
+
 ## 环境准备
 
 Ubuntu/Debian 可安装依赖：
@@ -102,6 +110,43 @@ cmake --build build -j$(nproc)
 
 ```bash
 ./build/kvstore 9999 1 127.0.0.1 19001
+```
+
+### 配置文件方式
+
+服务支持从配置文件读取监听地址、端口、日志级别、主从模式和持久化模式。默认会依次尝试加载
+`./kvstore.conf` 和 `../kvstore.conf`，也可以使用 `--config <path>` 显式指定。
+
+```bash
+./build/kvstore --config ../kvstore.conf
+```
+
+配置文件示例见仓库根目录的 `kvstore.conf`，核心字段如下：
+
+```text
+bind 0.0.0.0
+port 9999
+log_level info
+role master
+master_ip 127.0.0.1
+master_port 19001
+persistence_mode both
+```
+
+字段说明：
+
+- `bind` / `port`：服务监听地址与端口。
+- `log_level`：`debug`、`info`、`warn`、`error` 或 `off`。
+- `role`：`master` 或 `replica`（也接受 `slave`、`0`、`1`）。
+- `master_ip` / `master_port`：角色为 `replica` 时使用的主节点地址与端口。
+- `persistence_mode`：`none`、`rdb`、`aof` 或 `both`；也可以用 `rdb on/off`、
+  `aof on/off` 分别控制。
+
+配置文件加载后，命令行开关可以覆盖其中的值，旧的位置参数方式仍兼容：
+
+```bash
+./build/kvstore --config ../kvstore.conf --port 7000 --role replica \
+  --master-ip 127.0.0.1 --master-port 19001 --persistence-mode aof
 ```
 
 ## 主从复制与同步

@@ -10,6 +10,7 @@
 #include "kvstore.h"
 #include "memorypool.h"
 #include "network.h"
+#include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
 #include <sys/stat.h>
@@ -765,7 +766,7 @@ static int ensure_data_directory() {
         }
     }
 
-    fprintf(stderr, "Failed to create data directory: %s\n", strerror(errno));
+    kvs_log(KVS_LOG_ERROR, "Failed to create data directory: %s", strerror(errno));
     return -1;
 }
 
@@ -777,34 +778,64 @@ int main(int argc, char* argv[]) {
 
     kvs_config_set_defaults();
     if (kvs_config_parse_switches(&argc, &argv) != 0) {
-        fprintf(stderr, "Invalid persistence switch. Use --rdb on|off and --aof on|off.\n");
+        kvs_log(KVS_LOG_ERROR,
+                "Failed to parse configuration. Use --config <file> or see usage below.");
         return -1;
     }
-    printf("Persistence Config: RDB %s, AOF %s\n",
-           kvs_config_rdb_enabled() ? "enabled" : "disabled",
-           kvs_config_aof_enabled() ? "enabled" : "disabled");
 
-    printf("argc: %d, argv: ", argc);
-    for (int i = 0; i < argc; i++) {
-        printf("%s ", argv[i]);
+    const char* bind_ip = kvs_config_bind_ip();
+    int port = kvs_config_port();
+    int role = kvs_config_role();
+    const char* master_ip = kvs_config_master_ip();
+    int master_port = kvs_config_master_port();
+    struct in_addr bind_addr;
+    int bind_ip_valid = bind_ip != nullptr && inet_pton(AF_INET, bind_ip, &bind_addr) == 1;
+
+    // 兼容旧的纯位置参数调用方式。位置参数会覆盖配置文件或命令行开关。
+    if (argc >= 2 && argv[1] != nullptr && argv[1][0] != '\0') {
+        port = atoi(argv[1]);
     }
-    printf("\n");
-    if (argc < 3) {
+    if (argc >= 3 && argv[2] != nullptr && argv[2][0] != '\0') {
+        if (strcmp(argv[2], "master") == 0) {
+            role = 0;
+        } else if (strcmp(argv[2], "replica") == 0 || strcmp(argv[2], "slave") == 0) {
+            role = 1;
+        } else {
+            role = atoi(argv[2]);
+        }
+    }
+    if (role == KVS_ROLE_REPLICA && argc >= 5) {
+        master_ip = argv[3];
+        master_port = atoi(argv[4]);
+    }
+
+    if (port <= 0 || port > 65535 || (role != 0 && role != 1) ||
+        bind_ip == nullptr || bind_ip[0] == '\0' ||
+        bind_ip_valid != 1 ||
+        (role == KVS_ROLE_REPLICA && (master_ip == nullptr || master_ip[0] == '\0' ||
+                                     master_port <= 0 || master_port > 65535))) {
         printf("Usage:\n"
-               "  Master : %s <port> 0 [--rdb on|off] [--aof on|off]\n"
-               "  Replica: %s <port> 1 <master_ip> <master_port> [--rdb on|off] [--aof on|off]\n",
-               argv[0], argv[0]);
-
+               "  %s [--config kvstore.conf]\n"
+               "     [--bind 0.0.0.0] [--port 9999]\n"
+               "     [--role master|replica]\n"
+               "     [--master-ip 127.0.0.1] [--master-port 19001]\n"
+               "     [--log-level debug|info|warn|error|off]\n"
+               "     [--persistence-mode none|rdb|aof|both]\n"
+               "  Legacy Master : %s <port> 0\n"
+               "  Legacy Replica: %s <port> 1 <master_ip> <master_port>\n",
+               argv[0], argv[0], argv[0]);
         return -1;
     }
+
+    kvs_log(KVS_LOG_INFO,
+            "Configuration: bind=%s port=%d role=%s log_level=%d persistence=rdb:%s,aof:%s",
+            bind_ip, port, role == 0 ? "master" : "replica", kvs_config_log_level(),
+            kvs_config_rdb_enabled() ? "on" : "off",
+            kvs_config_aof_enabled() ? "on" : "off");
 
     if (ensure_data_directory() != 0) {
         return -1;
     }
-
-    unsigned short port = atoi(argv[1]);
-
-    int role = atoi(argv[2]);
 
     // 初始化 KV Engine
     init_kvengine();
@@ -818,18 +849,19 @@ int main(int argc, char* argv[]) {
     if (role == 0) {
         kvs_replication_init(KVS_ROLE_MASTER);
         // 优先创建本地 eBPF 实时同步队列；失败时后续增量同步自动回退 TCP。
-        if (kvs_ebpf_master_init(port) != 0) {
-            fprintf(stderr,
-                    "Warning: eBPF realtime sync unavailable, falling back to TCP realtime sync\n");
+        if (kvs_ebpf_master_init((unsigned short)port) != 0) {
+            kvs_log(KVS_LOG_WARN,
+                    "eBPF realtime sync unavailable, falling back to TCP realtime sync");
         }
 #ifdef KVS_ENABLE_RDMA
-        if (kvs_replication_start_rdma_listener(port) != 0) {
+        if (kvs_replication_start_rdma_listener((unsigned short)port) != 0) {
             // RDMA 设备不可用时不要阻止服务启动，自动回退到 TCP 全量同步。
-            fprintf(stderr, "Warning: RDMA listener unavailable, falling back to TCP full sync\n");
+            kvs_log(KVS_LOG_WARN,
+                    "RDMA listener unavailable, falling back to TCP full sync");
         }
 #endif
         if (kvs_config_aof_enabled() && kvs_aof_init("../data/append.aof") != 0) {
-            fprintf(stderr, "AOF init failed.\n");
+            kvs_log(KVS_LOG_ERROR, "AOF init failed");
             return -1;
         }
     } else {
@@ -838,24 +870,10 @@ int main(int argc, char* argv[]) {
 
     // Replica 连接 Master
     if (role == KVS_ROLE_REPLICA) {
-
-        if (argc != 5) {
-
-            fprintf(stderr, "Replica requires master ip and port\n");
-
-            return -1;
-        }
-
-        const char* master_ip = argv[3];
-
-        int master_port = atoi(argv[4]);
-
         int fd = kvs_replication_connect_master(master_ip, master_port);
 
         if (fd < 0) {
-
-            fprintf(stderr, "Failed to connect master\n");
-
+            kvs_log(KVS_LOG_ERROR, "Failed to connect master %s:%d", master_ip, master_port);
             return -1;
         }
 
@@ -863,12 +881,13 @@ int main(int argc, char* argv[]) {
         // 先通过 RDMA 完成已有数据的全量同步，再发送 TCP 握手进入增量同步。
         if (kvs_replication_rdma_full_sync(master_ip, master_port) != 0) {
             // Master 可能同样因没有 RDMA 设备而回退为 TCP 全量同步。
-            fprintf(stderr, "Warning: RDMA full sync unavailable, falling back to TCP full sync\n");
+            kvs_log(KVS_LOG_WARN,
+                    "RDMA full sync unavailable, falling back to TCP full sync");
         }
 #endif
 
         if (kvs_replication_start() != 0) {
-            fprintf(stderr, "Failed to start replication\n");
+            kvs_log(KVS_LOG_ERROR, "Failed to start replication");
             return -1;
         }
     }
@@ -876,15 +895,15 @@ int main(int argc, char* argv[]) {
     // 启动网络服务
 #if USE_REACTOR
     // printf("**********USE reactor**********\n");
-    reactor_start(port, kvs_protocol);
+    reactor_start(bind_ip, (unsigned short)port, kvs_protocol);
 
 #elif USE_NTYCO
     // printf("**********USE NtyCo**********\n");
-    ntyco_start(port, kvs_protocol);
+    ntyco_start(bind_ip, (unsigned short)port, kvs_protocol);
 
 #elif USE_PROACTOR
     // printf("**********USE proactor**********\n");
-    proactor_start(port, kvs_protocol);
+    proactor_start(bind_ip, (unsigned short)port, kvs_protocol);
 
 #endif
 
@@ -896,4 +915,5 @@ int main(int argc, char* argv[]) {
 #endif
     kvs_replication_destroy();
     destroy_kvengine();
+    return 0;
 }

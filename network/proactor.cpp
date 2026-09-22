@@ -1,3 +1,4 @@
+#include "kvs_config.h"
 #include "kvs_replication.h"
 #include <arpa/inet.h>
 #include <errno.h>
@@ -51,22 +52,27 @@ struct conn_ctx {
     }
 };
 
-static int init_server(unsigned short port) {
+static int init_server(const char* bind_ip, unsigned short port) {
 
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in servaddr;
     memset(&servaddr, 0, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind_ip == nullptr || bind_ip[0] == '\0' || strcmp(bind_ip, "*") == 0) {
+        servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    } else if (inet_pton(AF_INET, bind_ip, &servaddr.sin_addr) != 1) {
+        kvs_log(KVS_LOG_ERROR, "[NETWORK] invalid bind ip: %s", bind_ip);
+        return -1;
+    }
     servaddr.sin_port = htons(port);
 
     // 如果端口正在被占用会绑定失败
     if (bind(listenfd, (struct sockaddr*)&servaddr, sizeof(servaddr)) == -1) {
-        printf("bind failed: %s\n", strerror(errno));
+        kvs_log(KVS_LOG_ERROR, "[NETWORK] bind failed: %s", strerror(errno));
         return -1;
     }
     listen(listenfd, 10);
-    printf("listen finished, listenfd: %d\n", listenfd);
+    kvs_log(KVS_LOG_INFO, "[NETWORK] listen finished, listenfd: %d", listenfd);
 
     return listenfd;
 }
@@ -174,7 +180,7 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
     switch (ctx->event) {
     case EVENT::ACCEPT: {
         int clientfd = entries->res;
-        printf("accept connection [%d]\n", clientfd);
+        kvs_log(KVS_LOG_DEBUG, "[NETWORK] accept connection [%d]", clientfd);
         set_event_recv(ring, clientfd, 0);
         set_event_accept(ring, listenfd, 0);
         delete ctx;
@@ -186,7 +192,7 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
         int recvlen = entries->res;
         if (recvlen <= 0) {
             close(ctx->clientfd);
-            printf("connection [%d] break\n", ctx->clientfd);
+            kvs_log(KVS_LOG_INFO, "[NETWORK] connection [%d] break", ctx->clientfd);
             delete ctx;
             break;
         }
@@ -204,7 +210,8 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
                 // 头部完整，解析长度
                 uint32_t msg_len = ntohl(ctx->header);
                 if (msg_len > MAX_ALLOWED_LEN) {
-                    printf("message too long: %u (max: %u)\n", msg_len, MAX_ALLOWED_LEN);
+                    kvs_log(KVS_LOG_WARN, "[NETWORK] message too long: %u (max: %u)", msg_len,
+                            MAX_ALLOWED_LEN);
                     close(ctx->clientfd);
                     delete ctx;
                     break;
@@ -250,7 +257,7 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
         int recvlen = entries->res;
         if (recvlen <= 0) {
             close(ctx->clientfd);
-            printf("connection [%d] break\n", ctx->clientfd);
+            kvs_log(KVS_LOG_INFO, "[NETWORK] connection [%d] break", ctx->clientfd);
             delete ctx;
         } else {
             // printf("connection [%d], recv %d: %s\n", ctx->clientfd, recvlen, ctx->rbuffer);
@@ -267,12 +274,13 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
     case EVENT::WRITE: {
         int sendlen = entries->res;
         if (sendlen < 0) {
-            printf("send error: %d (%s)\n", -sendlen, strerror(-sendlen));
+            kvs_log(KVS_LOG_WARN, "[NETWORK] send error: %d (%s)", -sendlen, strerror(-sendlen));
             close(ctx->clientfd);
             delete ctx;
             break;
         }
-        printf("sendback to connection --> %d: [%d]%s\n", ctx->clientfd, sendlen, ctx->wbuffer);
+        kvs_log(KVS_LOG_DEBUG, "[NETWORK] sendback to connection --> %d: [%d]%s", ctx->clientfd,
+                sendlen, ctx->wbuffer);
 
         // 正常处理
         set_event_recv(ring, ctx->clientfd, 0);
@@ -297,14 +305,14 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
 }
 
 // int main(int argc, char* argv[]) {
-int proactor_start(unsigned short port, msg_handler handler) {
+int proactor_start(const char* bind_ip, unsigned short port, msg_handler handler) {
     // unsigned short port = 2000;       //原始情况
 
     kvs_handler = handler;
 
-    int listenfd = init_server(port); // 初始化并监听端口
+    int listenfd = init_server(bind_ip, port); // 初始化并监听端口
     if (listenfd < 0) {
-        fprintf(stderr, "Server initialization failed.\n");
+        kvs_log(KVS_LOG_ERROR, "[NETWORK] server initialization failed");
         return 1;
     }
 

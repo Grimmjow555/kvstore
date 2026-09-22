@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "kvs_config.h"
 #include "kvs_replication.h"
 #include "server.h"
 
@@ -33,19 +34,24 @@ int epfd = 0;
 // struct conn conn_list[CONN_SIZE] = {0};
 std::vector<conn> conn_list(CONN_SIZE);
 
-static int init_server(unsigned short port) {
+static int init_server(const char* bind_ip, unsigned short port) {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in servaddr = {0};
     servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind_ip == nullptr || bind_ip[0] == '\0' || strcmp(bind_ip, "*") == 0) {
+        servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    } else if (inet_pton(AF_INET, bind_ip, &servaddr.sin_addr) != 1) {
+        kvs_log(KVS_LOG_ERROR, "[NETWORK] invalid bind ip: %s", bind_ip);
+        return -1;
+    }
     servaddr.sin_port = htons(port);
 
     if (bind(sockfd, (struct sockaddr*)&servaddr, sizeof(servaddr)) == -1) {
-        printf("bind failed: %s\n", strerror(errno));
+        kvs_log(KVS_LOG_ERROR, "[NETWORK] bind failed: %s", strerror(errno));
         return -1;
     }
     listen(sockfd, 10);
-    printf("listen finished on port %d, listenfd: %d\n", port, sockfd);
+    kvs_log(KVS_LOG_INFO, "[NETWORK] listen finished on port %d, listenfd: %d", port, sockfd);
 
     return sockfd;
 }
@@ -88,11 +94,11 @@ int accept_cb(int listenfd) {
     socklen_t len = sizeof(clientaddr);
     int clientfd = accept(listenfd, (struct sockaddr*)&clientaddr, &len);
     if (clientfd < 0) {
-        printf("accept error: %d\n", errno);
+        kvs_log(KVS_LOG_WARN, "[NETWORK] accept error: %d", errno);
         return -1;
     }
 
-    printf("accept finished, clientfd: %d\n", clientfd);
+    kvs_log(KVS_LOG_DEBUG, "[NETWORK] accept finished, clientfd: %d", clientfd);
 
 #if USE_EPOLLET
     event_register(clientfd, EPOLLIN | EPOLLET);
@@ -108,12 +114,13 @@ int recv_cb(int clientfd) {
     uint32_t net_len;
     ssize_t n = recv(clientfd, &net_len, sizeof(net_len), 0);
     if (n == 0) {
-        printf("client disconnect: %d\n", clientfd);
+        kvs_log(KVS_LOG_INFO, "[NETWORK] client disconnect: %d", clientfd);
         epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
         close(clientfd);
         return 0;
     } else if (n < 0) {
-        printf("recv header error, errno: %d, %s\n", errno, strerror(errno));
+        kvs_log(KVS_LOG_WARN, "[NETWORK] recv header error, errno: %d, %s", errno,
+                strerror(errno));
         epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
         close(clientfd);
         return 0;
@@ -123,14 +130,15 @@ int recv_cb(int clientfd) {
     while (n < (ssize_t)sizeof(net_len)) {
         ssize_t ret = recv(clientfd, (char*)&net_len + n, sizeof(net_len) - n, 0);
         if (ret == 0) {
-            printf("client disconnect: %d\n", clientfd);
+            kvs_log(KVS_LOG_INFO, "[NETWORK] client disconnect: %d", clientfd);
             epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
             close(clientfd);
             return 0;
         } else if (ret < 0) {
             if (errno == EINTR)
                 continue;
-            printf("recv header error, errno: %d, %s\n", errno, strerror(errno));
+            kvs_log(KVS_LOG_WARN, "[NETWORK] recv header error, errno: %d, %s", errno,
+                    strerror(errno));
             epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
             close(clientfd);
             return 0;
@@ -143,7 +151,8 @@ int recv_cb(int clientfd) {
     // 检查消息体长度是否超过缓冲区（留一个字节给 '\0'）
     // 检查消息长度是否在允许范围内
     if (msg_len > MAX_ALLOWED_LEN) {
-        printf("message too long: %u (max: %u)\n", msg_len, MAX_ALLOWED_LEN);
+        kvs_log(KVS_LOG_WARN, "[NETWORK] message too long: %u (max: %u)", msg_len,
+                MAX_ALLOWED_LEN);
         // 可选：发送错误响应并继续服务，或直接关闭连接
         const char* err = "-ERR message too long\r\n";
         send(clientfd, err, strlen(err), 0);
@@ -162,14 +171,15 @@ int recv_cb(int clientfd) {
     while (n < (ssize_t)msg_len) {
         ssize_t ret = recv(clientfd, buffer + n, msg_len - n, 0);
         if (ret == 0) {
-            printf("client disconnect: %d\n", clientfd);
+            kvs_log(KVS_LOG_INFO, "[NETWORK] client disconnect: %d", clientfd);
             epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
             close(clientfd);
             return 0;
         } else if (ret < 0) {
             if (errno == EINTR)
                 continue;
-            printf("recv body error, errno: %d, %s\n", errno, strerror(errno));
+            kvs_log(KVS_LOG_WARN, "[NETWORK] recv body error, errno: %d, %s", errno,
+                    strerror(errno));
             epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
             close(clientfd);
             return 0;
@@ -201,7 +211,7 @@ int send_cb(int clientfd) {
     uint32_t net_len = htonl(conn_list[clientfd].wlength);
     ssize_t n = send(clientfd, &net_len, sizeof(net_len), 0);
     if (n <= 0) {
-        printf("send header error: errno %d %s\n", errno, strerror(errno));
+        kvs_log(KVS_LOG_WARN, "[NETWORK] send header error: errno %d %s", errno, strerror(errno));
         epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
         close(clientfd);
         return -1;
@@ -210,7 +220,7 @@ int send_cb(int clientfd) {
     // 2. 发送消息体
     n = send(clientfd, conn_list[clientfd].wbuffer.data(), conn_list[clientfd].wlength, 0);
     if (n <= 0) {
-        printf("send body error: errno %d %s\n", errno, strerror(errno));
+        kvs_log(KVS_LOG_WARN, "[NETWORK] send body error: errno %d %s", errno, strerror(errno));
         epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
         close(clientfd);
         return -1;
@@ -229,12 +239,13 @@ int recv_cb(int clientfd) {
     memset(conn_list[clientfd].rbuffer, 0, BUFFER_LENGTH);
     int count = recv(clientfd, conn_list[clientfd].rbuffer, BUFFER_LENGTH, 0);
     if (count == 0) {
-        printf("client disconnect: %d\n", clientfd);
+        kvs_log(KVS_LOG_INFO, "[NETWORK] client disconnect: %d", clientfd);
         epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
         close(clientfd);
         return 0;
     } else if (count < 0) {
-        printf("count: %d, errno: %d, %s\n", count, errno, strerror(errno));
+        kvs_log(KVS_LOG_WARN, "[NETWORK] recv error: count=%d, errno=%d, %s", count, errno,
+                strerror(errno));
         epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
         close(clientfd);
         return 0;
@@ -275,13 +286,13 @@ int is_listenfd(int* sockfds, int fd) {
 }
 
 // int main() {
-int reactor_start(unsigned short port, msg_handler handler) {
+int reactor_start(const char* bind_ip, unsigned short port, msg_handler handler) {
     kvs_handler = handler;
     // unsigned short port = 2000;
     epfd = epoll_create(1);
     int sockfds[PORT_NUMS];
     for (int i = 0; i < PORT_NUMS; ++i) {
-        sockfds[i] = init_server(port + i);
+        sockfds[i] = init_server(bind_ip, port + i);
         conn_list[sockfds[i]].fd = sockfds[i];
         conn_list[sockfds[i]].r_action.accept_callback = accept_cb;
         set_event(sockfds[i], EPOLLIN, 1);

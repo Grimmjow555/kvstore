@@ -131,6 +131,9 @@ else
         die "无法挂载 bpffs 到 $BPF_MOUNT"
 fi
 
+run_root chmod 755 "$BPF_MOUNT" ||
+    die "无法设置 $BPF_MOUNT 的访问权限"
+
 echo "[2/4] 准备 pin 目录: $PIN_DIR"
 if [ -e "$PIN_DIR" ] && [ ! -d "$PIN_DIR" ]; then
     die "$PIN_DIR 已存在但不是目录"
