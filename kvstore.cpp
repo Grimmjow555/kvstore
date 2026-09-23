@@ -41,6 +41,14 @@ void* kvs_malloc(size_t size) {
 #endif
 }
 
+void* kvs_calloc(size_t size) {
+#if ENABLE_MEMORYPOOL
+    return slab_calloc(size);
+#else
+    return calloc(1, size);
+#endif
+}
+
 void kvs_free(void* ptr) {
 #if ENABLE_MEMORYPOOL
     if (ptr != nullptr)
@@ -752,8 +760,10 @@ int destroy_kvengine() {
 int kvs_reset_data() {
     destroy_kvengine();
 #if ENABLE_MEMORYPOOL
-    slab_dest();
-    slab_init();
+    // 这里只重置统计信息，不再 slab_dest() + slab_init()：
+    // 把 chunk 交还系统会让其它线程（Replica 回放线程）手里正在使用的块变成悬空指针。
+    // 引擎数据已由 destroy/init 重建，内存池自身的空闲链表本来就是一致的。
+    slab_reset();
 #endif
     return init_kvengine();
 }
@@ -910,10 +920,12 @@ int main(int argc, char* argv[]) {
 #if AOF_ENABLE
     kvs_aof_close();
 #endif
+    // 先停止复制线程、释放引擎数据，最后才销毁内存池：
+    // slab_dest() 会释放全部 chunk，必须确认没有其它线程还在分配/释放内存。
+    kvs_replication_destroy();
+    destroy_kvengine();
 #if ENABLE_MEMORYPOOL
     slab_dest();
 #endif
-    kvs_replication_destroy();
-    destroy_kvengine();
     return 0;
 }

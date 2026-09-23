@@ -304,8 +304,9 @@ void kvs_config_set_defaults(void) {
     g_config.role = 0;
     g_config.master_ip[0] = '\0';
     g_config.master_port = 0;
-    g_config.rdb_enabled = 1;
-    g_config.aof_enabled = 1;
+    // 默认关闭 RDB 与 AOF，需要时通过配置文件或命令行开关显式开启。
+    g_config.rdb_enabled = 0;
+    g_config.aof_enabled = 0;
 }
 
 int kvs_config_load(const char* filename) {

@@ -107,18 +107,28 @@ add_executable(rdb_save testcase/RDB/save.cpp)
 add_executable(rdb_load testcase/RDB/load.cpp)
 add_executable(aof_save testcase/AOF/save.cpp)
 add_executable(aof_load testcase/AOF/load.cpp)
-add_executable(master_replica_insert5w testcase/master-replica/insert5w.cpp)
+add_executable(get10w testcase/master-replica/get.cpp)
+add_executable(insert_after5w testcase/master-replica/insert_after5w.cpp)
+add_executable(insert_before5w testcase/master-replica/insert_before5w.cpp)
+add_executable(test testcase/test/testcase.cpp)
 
 set_target_properties(rdb_save PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/RDB" OUTPUT_NAME save)
 set_target_properties(rdb_load PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/RDB" OUTPUT_NAME load)
 set_target_properties(aof_save PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/AOF" OUTPUT_NAME save)
 set_target_properties(aof_load PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/AOF" OUTPUT_NAME load)
+set_target_properties(get10w insert_after5w insert_before5w
+    PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/master-replica"
+)
+set_target_properties(test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/test")
 
-foreach(testcase_target rdb_save rdb_load aof_save aof_load master_replica_insert5w)
+foreach(testcase_target rdb_save rdb_load aof_save aof_load
+        get10w insert_after5w insert_before5w test)
     target_include_directories(${testcase_target} PRIVATE
         ${CMAKE_SOURCE_DIR}/testcase
     )
 endforeach()
+
+target_link_libraries(test Threads::Threads)
 
 # 包含目录
 target_include_directories(kvstore PRIVATE

@@ -12,16 +12,15 @@
 #include <vector>
 
 #define MAX_MSG_LENGTH 1024
+#define REQ_BUF_SIZE 256 // 请求内容较短，直接在栈上构建，避免频繁堆分配
 #define TIME_SUB_MS(tv1, tv2)                                                                      \
     ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
-#define SET_NUMS 25
+#define SET_NUMS 100
 #define PRINT_PASS 0
 #define SAVE 0 // 测试保存功能
 
-// 将空格分隔的命令字符串（如 "SSET Teacher King"）转换为 RESP 格式
-// 返回静态缓冲区指针（调用后立即使用，因为会被后续调用覆盖）
 /**
- * @brief 构建一个符合 RESP (Redis Serialization Protocol) 协议的请求字符串
+ * @brief 将命令构建为符合 RESP (Redis Serialization Protocol) 协议的请求字符串
  *
  * RESP 协议格式：
  *   *<参数个数>\r\n
@@ -32,35 +31,36 @@
  *   ...
  * 其中第一个参数固定为命令名（如 "SET"），后续为命令的参数。
  *
- * @param cmd   命令名称（例如 "SET", "GET", "SSET" 等）
- * @param argc  命令参数的个数（不包括命令名本身）
- * @param argv  指向参数指针数组，每个元素是一个以 '\0' 结尾的字符串
+ * @param buf       调用者提供的缓冲区（通常是栈数组）
+ * @param capacity  缓冲区大小（字节数）
+ * @param cmd       命令名称（例如 "SET", "GET", "SSET" 等）
+ * @param argc      命令参数的个数（不包括命令名本身）
+ * @param argv      指向参数指针数组，每个元素是一个以 '\0' 结尾的字符串
  *
- * @return 动态分配的 RESP 格式字符串，调用者必须使用 free() 释放；
- *         若内存分配失败，返回 NULL。
+ * @return 写入的请求长度；缓冲区不足或参数非法时返回 -1。
  *
  * @note 该函数支持参数中包含任意字节（包括空格、换行等），因为长度前缀
  *       保证了数据的边界，这是 RESP 协议的二进制安全特性。
  */
-char* build_resp_request(const char* cmd, int argc, const char* argv[]) {
-    // 计算总长度：*<argc>\r\n + 每个参数的 $<len>\r\n<data>\r\n
-    int total_len = 0;
-    total_len += snprintf(NULL, 0, "*%d\r\n", argc + 1); // +1 for command
-    total_len += snprintf(NULL, 0, "$%zu\r\n%s\r\n", strlen(cmd), cmd);
+int build_resp_request(char* buf, size_t capacity, const char* cmd, int argc, const char* argv[]) {
+    size_t offset = 0;
+
+#define APPEND_FORMAT(...)                                                                         \
+    do {                                                                                           \
+        int written = snprintf(buf + offset, capacity - offset, __VA_ARGS__);                      \
+        if (written < 0 || (size_t)written >= capacity - offset)                                   \
+            return -1;                                                                             \
+        offset += (size_t)written;                                                                 \
+    } while (0)
+
+    APPEND_FORMAT("*%d\r\n", argc + 1); // +1 for command
+    APPEND_FORMAT("$%zu\r\n%s\r\n", strlen(cmd), cmd);
     for (int i = 0; i < argc; i++) {
-        total_len += snprintf(NULL, 0, "$%zu\r\n%s\r\n", strlen(argv[i]), argv[i]);
+        APPEND_FORMAT("$%zu\r\n%s\r\n", strlen(argv[i]), argv[i]);
     }
-    char* buf = (char*)malloc(total_len + 1);
-    if (!buf)
-        return NULL;
-    char* p = buf;
-    p += sprintf(p, "*%d\r\n", argc + 1);
-    p += sprintf(p, "$%zu\r\n%s\r\n", strlen(cmd), cmd);
-    for (int i = 0; i < argc; i++) {
-        p += sprintf(p, "$%zu\r\n%s\r\n", strlen(argv[i]), argv[i]);
-    }
-    *p = '\0';
-    return buf;
+
+#undef APPEND_FORMAT
+    return (int)offset;
 }
 
 void testcase_raw(int connfd, const char* msg, const char* expected_pattern, const char* casename,
@@ -126,11 +126,11 @@ int connect_tcpserver(const char* ip, unsigned short port) {
 }
 
 void array_testcase(int connfd) {
-    char* req = NULL;
+    char req[REQ_BUF_SIZE];
 
 #if SAVE
 
-    for (int i = 0; i < SET_NUMS; i++) {
+    for (int i = 0; i < SET_NUMS / 4; i++) {
         // SET Teacher King
         char key[32];
         int len = sprintf(key, "Teacher%d", i);
@@ -139,36 +139,36 @@ void array_testcase(int connfd) {
         len = sprintf(value, "King%d", i);
         value[len] = '\0'; // 确保字符串结束
         const char* args1[] = {key, value};
-        req = build_resp_request("SET", 2, args1);
+        if (build_resp_request(req, sizeof(req), "SET", 2, args1) < 0)
+            exit(1);
         testcase_raw(connfd, req, "+OK\r\n", "SET-Teacher", 0);
-        free(req);
     }
 
 #else
 
     // GET 与 SAVE 使用相同数量的数据，逐条验证 RDB 恢复结果
-    for (int i = 0; i < SET_NUMS; i++) {
+    for (int i = 0; i < SET_NUMS / 4; i++) {
         char key[32];
         int len = sprintf(key, "Teacher%d", i);
         key[len] = '\0';
         const char* args[] = {key};
-        req = build_resp_request("GET", 1, args);
+        if (build_resp_request(req, sizeof(req), "GET", 1, args) < 0)
+            exit(1);
 
         char expected[64];
         snprintf(expected, sizeof(expected), "$%zu\r\nKing%d\r\n",
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
         testcase_raw(connfd, req, expected, "GET-Teacher", 0);
-        free(req);
     }
 
 #endif
 }
 
 void rbtree_testcase(int connfd) {
-    char* req = NULL;
+    char req[REQ_BUF_SIZE];
 
 #if SAVE
-    for (int i = 0; i < SET_NUMS; i++) {
+    for (int i = 0; i < SET_NUMS / 4; i++) {
         char key[32];
         int len = sprintf(key, "Teacher%d", i);
         key[len] = '\0';
@@ -176,34 +176,34 @@ void rbtree_testcase(int connfd) {
         len = sprintf(value, "King%d", i);
         value[len] = '\0';
         const char* args[] = {key, value};
-        req = build_resp_request("RSET", 2, args);
+        if (build_resp_request(req, sizeof(req), "RSET", 2, args) < 0)
+            exit(1);
         testcase_raw(connfd, req, "+OK\r\n", "RSET-Teacher", 0);
-        free(req);
     }
 
 #else
 
-    for (int i = 0; i < SET_NUMS; i++) {
+    for (int i = 0; i < SET_NUMS / 4; i++) {
         char key[32];
         int len = sprintf(key, "Teacher%d", i);
         key[len] = '\0';
         const char* args[] = {key};
-        req = build_resp_request("RGET", 1, args);
+        if (build_resp_request(req, sizeof(req), "RGET", 1, args) < 0)
+            exit(1);
 
         char expected[64];
         snprintf(expected, sizeof(expected), "$%zu\r\nKing%d\r\n",
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
         testcase_raw(connfd, req, expected, "RGET-Teacher", 0);
-        free(req);
     }
 #endif
 }
 
 void hash_testcase(int connfd) {
-    char* req = NULL;
+    char req[REQ_BUF_SIZE];
 
 #if SAVE
-    for (int i = 0; i < SET_NUMS; i++) {
+    for (int i = 0; i < SET_NUMS / 4; i++) {
         char key[32];
         int len = sprintf(key, "Teacher%d", i);
         key[len] = '\0';
@@ -211,35 +211,35 @@ void hash_testcase(int connfd) {
         len = sprintf(value, "King%d", i);
         value[len] = '\0';
         const char* args[] = {key, value};
-        req = build_resp_request("HSET", 2, args);
+        if (build_resp_request(req, sizeof(req), "HSET", 2, args) < 0)
+            exit(1);
         testcase_raw(connfd, req, "+OK\r\n", "HSET-Teacher", 0);
-        free(req);
     }
 
 #else
 
-    for (int i = 0; i < SET_NUMS; i++) {
+    for (int i = 0; i < SET_NUMS / 4; i++) {
         char key[32];
         int len = sprintf(key, "Teacher%d", i);
         key[len] = '\0';
         const char* args[] = {key};
-        req = build_resp_request("HGET", 1, args);
+        if (build_resp_request(req, sizeof(req), "HGET", 1, args) < 0)
+            exit(1);
 
         char expected[64];
         snprintf(expected, sizeof(expected), "$%zu\r\nKing%d\r\n",
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
         testcase_raw(connfd, req, expected, "HGET-Teacher", 0);
-        free(req);
     }
 #endif
 }
 
 void skiptable_testcase(int connfd) {
-    char* req = NULL;
+    char req[REQ_BUF_SIZE];
 
     // const char* args1[] = {"SSET","Teacher", "King","SEXIST","Teacher"};
 #if SAVE
-    for (int i = 0; i < SET_NUMS; i++) {
+    for (int i = 0; i < SET_NUMS / 4; i++) {
         char key[32];
         int len = sprintf(key, "Teacher%d", i);
         key[len] = '\0';
@@ -247,25 +247,25 @@ void skiptable_testcase(int connfd) {
         len = sprintf(value, "King%d", i);
         value[len] = '\0';
         const char* args[] = {key, value};
-        req = build_resp_request("SSET", 2, args);
+        if (build_resp_request(req, sizeof(req), "SSET", 2, args) < 0)
+            exit(1);
         testcase_raw(connfd, req, "+OK\r\n", "SSET-Teacher", 0);
-        free(req);
     }
 
 #else
 
-    for (int i = 0; i < SET_NUMS; i++) {
+    for (int i = 0; i < SET_NUMS / 4; i++) {
         char key[32];
         int len = sprintf(key, "Teacher%d", i);
         key[len] = '\0';
         const char* args[] = {key};
-        req = build_resp_request("SGET", 1, args);
+        if (build_resp_request(req, sizeof(req), "SGET", 1, args) < 0)
+            exit(1);
 
         char expected[64];
         snprintf(expected, sizeof(expected), "$%zu\r\nKing%d\r\n",
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
         testcase_raw(connfd, req, expected, "SGET-Teacher", 0);
-        free(req);
     }
 #endif
 }
@@ -286,13 +286,13 @@ int main(int argc, char* argv[]) {
     int connfd = connect_tcpserver(ip, port);
 
 #if SAVE
-    printf("AOF SAVE: insert %d records, and recorded to AOF file\n", SET_NUMS * 4);
+    printf("AOF SAVE: insert %d records, and recorded to AOF file\n", SET_NUMS);
 
     const char* args_save[] = {};
-    char* req = nullptr;
-    req = build_resp_request("AOF CLEAR", 0, args_save);
+    char req[REQ_BUF_SIZE];
+    if (build_resp_request(req, sizeof(req), "AOF CLEAR", 0, args_save) < 0)
+        exit(1);
     testcase_raw(connfd, req, "+OK\r\n", "AOF CLEAR", 0);
-    free(req);
 
     rbtree_testcase(connfd);
 
@@ -304,13 +304,13 @@ int main(int argc, char* argv[]) {
 
 #else
 
-    printf("AOF LOAD: load %d records from AOF file, then test the loaded data\n", SET_NUMS * 4);
+    printf("AOF LOAD: load %d records from AOF file, then test the loaded data\n", SET_NUMS);
 
     const char* args_load[] = {};
-    char* req = nullptr;
-    req = build_resp_request("AOF LOAD", 0, args_load);
+    char req[REQ_BUF_SIZE];
+    if (build_resp_request(req, sizeof(req), "AOF LOAD", 0, args_load) < 0)
+        exit(1);
     testcase_raw(connfd, req, "+OK\r\n", "AOF LOAD", 0);
-    free(req);
 
     rbtree_testcase(connfd);
 

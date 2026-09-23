@@ -29,7 +29,7 @@ typedef struct {
 } kvs_config_t;
 
 // 恢复默认配置。默认监听 0.0.0.0:9999，角色为 Master，
-// 日志级别 INFO，RDB 与 AOF 都启用。
+// 日志级别 INFO，RDB 与 AOF 默认都关闭。
 void kvs_config_set_defaults(void);
 
 // 从指定 key=value 或 key value 配置文件中读取并覆盖当前配置。

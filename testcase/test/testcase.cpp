@@ -11,27 +11,25 @@
 #include <unistd.h>
 #include <vector>
 
-
 #define MAX_MSG_LENGTH 1024
+#define REQ_BUF_SIZE 256 // 请求内容较短，直接在栈上构建，避免频繁堆分配
 #define TIME_SUB_MS(tv1, tv2)                                                                      \
     ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
 
 #define PRINT_PASS 0
-#define TEST_COUNT 10
+#define TEST_COUNT 1000
 
-#define LEVEL1 0 //使用最基础的9条测试样例，测试一次
+#define LEVEL1 1 //使用最基础的9条测试样例，测试一次
 #define LEVEL2 0 //使用最基础的9条测试样例，测试 TEST_COUNT 次
 
 #define LEVEL3w 0 //使用30000条测试样例
 
-#define LEVEL3 1 //使用多线程，每个线程9条测试样例，测试 TEST_COUNT 次
+#define LEVEL3 0 //使用多线程，每个线程9条测试样例，测试 TEST_COUNT 次
 //若只有一套样例，考虑到线程安全，需要对这一套样例加锁，实际上和串行无异。
 //所以我们多套样例应该互不相同，互不影响结果。这样可以不加锁使用多线程，具体做法是为每一套样例的key添加对应的fd
 
-// 将空格分隔的命令字符串（如 "SSET Teacher King"）转换为 RESP 格式
-// 返回静态缓冲区指针（调用后立即使用，因为会被后续调用覆盖）
 /**
- * @brief 构建一个符合 RESP (Redis Serialization Protocol) 协议的请求字符串
+ * @brief 将命令构建为符合 RESP (Redis Serialization Protocol) 协议的请求字符串
  *
  * RESP 协议格式：
  *   *<参数个数>\r\n
@@ -42,35 +40,36 @@
  *   ...
  * 其中第一个参数固定为命令名（如 "SET"），后续为命令的参数。
  *
- * @param cmd   命令名称（例如 "SET", "GET", "SSET" 等）
- * @param argc  命令参数的个数（不包括命令名本身）
- * @param argv  指向参数指针数组，每个元素是一个以 '\0' 结尾的字符串
+ * @param buf       调用者提供的缓冲区（通常是栈数组）
+ * @param capacity  缓冲区大小（字节数）
+ * @param cmd       命令名称（例如 "SET", "GET", "SSET" 等）
+ * @param argc      命令参数的个数（不包括命令名本身）
+ * @param argv      指向参数指针数组，每个元素是一个以 '\0' 结尾的字符串
  *
- * @return 动态分配的 RESP 格式字符串，调用者必须使用 free() 释放；
- *         若内存分配失败，返回 NULL。
+ * @return 写入的请求长度；缓冲区不足或参数非法时返回 -1。
  *
  * @note 该函数支持参数中包含任意字节（包括空格、换行等），因为长度前缀
  *       保证了数据的边界，这是 RESP 协议的二进制安全特性。
  */
-char* build_resp_request(const char* cmd, int argc, const char* argv[]) {
-    // 计算总长度：*<argc>\r\n + 每个参数的 $<len>\r\n<data>\r\n
-    int total_len = 0;
-    total_len += snprintf(NULL, 0, "*%d\r\n", argc + 1); // +1 for command
-    total_len += snprintf(NULL, 0, "$%zu\r\n%s\r\n", strlen(cmd), cmd);
+int build_resp_request(char* buf, size_t capacity, const char* cmd, int argc, const char* argv[]) {
+    size_t offset = 0;
+
+#define APPEND_FORMAT(...)                                                                         \
+    do {                                                                                           \
+        int written = snprintf(buf + offset, capacity - offset, __VA_ARGS__);                      \
+        if (written < 0 || (size_t)written >= capacity - offset)                                   \
+            return -1;                                                                             \
+        offset += (size_t)written;                                                                 \
+    } while (0)
+
+    APPEND_FORMAT("*%d\r\n", argc + 1); // +1 for command
+    APPEND_FORMAT("$%zu\r\n%s\r\n", strlen(cmd), cmd);
     for (int i = 0; i < argc; i++) {
-        total_len += snprintf(NULL, 0, "$%zu\r\n%s\r\n", strlen(argv[i]), argv[i]);
+        APPEND_FORMAT("$%zu\r\n%s\r\n", strlen(argv[i]), argv[i]);
     }
-    char* buf = (char*)malloc(total_len + 1);
-    if (!buf)
-        return NULL;
-    char* p = buf;
-    p += sprintf(p, "*%d\r\n", argc + 1);
-    p += sprintf(p, "$%zu\r\n%s\r\n", strlen(cmd), cmd);
-    for (int i = 0; i < argc; i++) {
-        p += sprintf(p, "$%zu\r\n%s\r\n", strlen(argv[i]), argv[i]);
-    }
-    *p = '\0';
-    return buf;
+
+#undef APPEND_FORMAT
+    return (int)offset;
 }
 
 void testcase_raw(int connfd, const char* msg, const char* expected_pattern, const char* casename,
@@ -156,62 +155,62 @@ int connect_tcpserver(const char* ip, unsigned short port) {
 }
 
 void array_testcase(int connfd) {
-    char* req = NULL;
+    char req[REQ_BUF_SIZE];
 
     // SET Teacher King
     const char* args1[] = {"Teacher", "King"};
-    req = build_resp_request("SET", 2, args1);
+    if (build_resp_request(req, sizeof(req), "SET", 2, args1) < 0)
+        exit(1);
     testcase_raw(connfd, req, "+OK\r\n", "SET-Teacher", 0);
-    free(req);
 
     // GET Teacher
     const char* args2[] = {"Teacher"};
-    req = build_resp_request("GET", 1, args2);
+    if (build_resp_request(req, sizeof(req), "GET", 1, args2) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$4\r\nKing\r\n", "GET-King-Teacher", 0);
-    free(req);
 
     // MOD Teacher Darren
     const char* args3[] = {"Teacher", "Darren"};
-    req = build_resp_request("MOD", 2, args3);
+    if (build_resp_request(req, sizeof(req), "MOD", 2, args3) < 0)
+        exit(1);
     testcase_raw(connfd, req, "+OK\r\n", "MOD-D-Teacher", 0);
-    free(req);
 
     // GET Teacher (should return Darren)
     const char* args4[] = {"Teacher"};
-    req = build_resp_request("GET", 1, args4);
+    if (build_resp_request(req, sizeof(req), "GET", 1, args4) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$6\r\nDarren\r\n", "GET-Darren-Teacher", 0);
-    free(req);
 
     // EXIST Teacher
     const char* args5[] = {"Teacher"};
-    req = build_resp_request("EXIST", 1, args5);
+    if (build_resp_request(req, sizeof(req), "EXIST", 1, args5) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$5\r\nEXIST\r\n", "EXIST-Teacher", 0); // RESP 整数存在为 1
-    free(req);
 
     // DEL Teacher
     const char* args6[] = {"Teacher"};
-    req = build_resp_request("DEL", 1, args6);
+    if (build_resp_request(req, sizeof(req), "DEL", 1, args6) < 0)
+        exit(1);
     testcase_raw(connfd, req, "+OK\r\n", "DEL-Teacher", 0);
-    free(req);
 
     // 再 GET 应返回 NO EXIST（根据你希望的格式）
     const char* args7[] = {"Teacher"};
-    req = build_resp_request("GET", 1, args7);
+    if (build_resp_request(req, sizeof(req), "GET", 1, args7) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "GET-K-Teacher",
                  0); // 假设你返回 $8\r\nNO EXIST\r\n
-    free(req);
 
     // MOD 不存在的键
     const char* args8[] = {"Teacher", "KING"};
-    req = build_resp_request("MOD", 2, args8);
+    if (build_resp_request(req, sizeof(req), "MOD", 2, args8) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "MOD-K-Teacher", 0);
-    free(req);
 
     // EXIST 不存在的键
     const char* args9[] = {"Teacher"};
-    req = build_resp_request("EXIST", 1, args9);
+    if (build_resp_request(req, sizeof(req), "EXIST", 1, args9) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "EXIST-Teacher", 0);
-    free(req);
 }
 
 void array_testcase_pth(int connfd, int thread_id) {
@@ -226,57 +225,66 @@ void array_testcase_pth(int connfd, int thread_id) {
 
         // SET key King
         const char* args1[] = {key, "King"};
-        char* req1 = build_resp_request("SET", 2, args1);
+        char req1[REQ_BUF_SIZE];
+        if (build_resp_request(req1, sizeof(req1), "SET", 2, args1) < 0)
+            exit(1);
         testcase_raw(connfd, req1, "+OK\r\n", "SET-Teacher", thread_id);
-        free(req1);
 
         // GET key
         const char* args2[] = {key};
-        char* req2 = build_resp_request("GET", 1, args2);
+        char req2[REQ_BUF_SIZE];
+        if (build_resp_request(req2, sizeof(req2), "GET", 1, args2) < 0)
+            exit(1);
         testcase_raw(connfd, req2, "$4\r\nKing\r\n", "GET-Teacher", thread_id);
-        free(req2);
 
         // MOD key Darren
         const char* args3[] = {key, "Darren"};
-        char* req3 = build_resp_request("MOD", 2, args3);
+        char req3[REQ_BUF_SIZE];
+        if (build_resp_request(req3, sizeof(req3), "MOD", 2, args3) < 0)
+            exit(1);
         testcase_raw(connfd, req3, "+OK\r\n", "MOD-Teacher", thread_id);
-        free(req3);
 
         // GET key (should return Darren)
         const char* args4[] = {key};
-        char* req4 = build_resp_request("GET", 1, args4);
+        char req4[REQ_BUF_SIZE];
+        if (build_resp_request(req4, sizeof(req4), "GET", 1, args4) < 0)
+            exit(1);
         testcase_raw(connfd, req4, "$6\r\nDarren\r\n", "GET-Teacher", thread_id);
-        free(req4);
 
         // EXIST key
         const char* args5[] = {key};
-        char* req5 = build_resp_request("EXIST", 1, args5);
+        char req5[REQ_BUF_SIZE];
+        if (build_resp_request(req5, sizeof(req5), "EXIST", 1, args5) < 0)
+            exit(1);
         testcase_raw(connfd, req5, "$5\r\nEXIST\r\n", "EXIST-Teacher", thread_id);
-        free(req5);
 
         // DEL key
         const char* args6[] = {key};
-        char* req6 = build_resp_request("DEL", 1, args6);
+        char req6[REQ_BUF_SIZE];
+        if (build_resp_request(req6, sizeof(req6), "DEL", 1, args6) < 0)
+            exit(1);
         testcase_raw(connfd, req6, "+OK\r\n", "DEL-Teacher", thread_id);
-        free(req6);
 
         // GET key (should return NO EXIST)
         const char* args7[] = {key};
-        char* req7 = build_resp_request("GET", 1, args7);
+        char req7[REQ_BUF_SIZE];
+        if (build_resp_request(req7, sizeof(req7), "GET", 1, args7) < 0)
+            exit(1);
         testcase_raw(connfd, req7, "$8\r\nNO EXIST\r\n", "GET-Teacher", thread_id);
-        free(req7);
 
         // MOD key KING (key not exist)
         const char* args8[] = {key, "KING"};
-        char* req8 = build_resp_request("MOD", 2, args8);
+        char req8[REQ_BUF_SIZE];
+        if (build_resp_request(req8, sizeof(req8), "MOD", 2, args8) < 0)
+            exit(1);
         testcase_raw(connfd, req8, "$8\r\nNO EXIST\r\n", "MOD-Teacher", thread_id);
-        free(req8);
 
         // EXIST key (key not exist)
         const char* args9[] = {key};
-        char* req9 = build_resp_request("EXIST", 1, args9);
+        char req9[REQ_BUF_SIZE];
+        if (build_resp_request(req9, sizeof(req9), "EXIST", 1, args9) < 0)
+            exit(1);
         testcase_raw(connfd, req9, "$8\r\nNO EXIST\r\n", "EXIST-Teacher", thread_id);
-        free(req9);
     }
 
     gettimeofday(&tv_end, NULL);
@@ -301,9 +309,10 @@ void array_testcase_3w(int connfd) {
         snprintf(value, sizeof(value), "King%d", i);
 
         const char* args[] = {key, value};
-        char* req = build_resp_request("SET", 2, args);
+        char req[REQ_BUF_SIZE];
+        if (build_resp_request(req, sizeof(req), "SET", 2, args) < 0)
+            exit(1);
         testcase_raw(connfd, req, "+OK\r\n", "SET-Teacher", 0);
-        free(req);
     }
 
     // 第二阶段：GET Teacher{i}  -> 期望返回 King{i} (RESP bulk string)
@@ -318,9 +327,10 @@ void array_testcase_3w(int connfd) {
         snprintf(expected, sizeof(expected), "$%d\r\n%s\r\n", len, value);
 
         const char* args[] = {key};
-        char* req = build_resp_request("GET", 1, args);
+        char req[REQ_BUF_SIZE];
+        if (build_resp_request(req, sizeof(req), "GET", 1, args) < 0)
+            exit(1);
         testcase_raw(connfd, req, expected, "GET-King-Teacher", 0);
-        free(req);
     }
 
     // 第三阶段：MOD Teacher{i} King{i}
@@ -330,9 +340,10 @@ void array_testcase_3w(int connfd) {
         snprintf(value, sizeof(value), "King%d", i);
 
         const char* args[] = {key, value};
-        char* req = build_resp_request("MOD", 2, args);
+        char req[REQ_BUF_SIZE];
+        if (build_resp_request(req, sizeof(req), "MOD", 2, args) < 0)
+            exit(1);
         testcase_raw(connfd, req, "+OK\r\n", "MOD-King-Teacher", 0);
-        free(req);
     }
 
     struct timeval tv_end;
@@ -344,62 +355,62 @@ void array_testcase_3w(int connfd) {
 }
 
 void rbtree_testcase(int connfd) {
-    char* req = NULL;
+    char req[REQ_BUF_SIZE];
 
     // RSET Teacher King
     const char* args1[] = {"Teacher", "King"};
-    req = build_resp_request("RSET", 2, args1);
+    if (build_resp_request(req, sizeof(req), "RSET", 2, args1) < 0)
+        exit(1);
     testcase_raw(connfd, req, "+OK\r\n", "RSET-Teacher", 0);
-    free(req);
 
     // RGET Teacher
     const char* args2[] = {"Teacher"};
-    req = build_resp_request("RGET", 1, args2);
+    if (build_resp_request(req, sizeof(req), "RGET", 1, args2) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$4\r\nKing\r\n", "RGET-King-Teacher", 0);
-    free(req);
 
     // RMOD Teacher Darren
     const char* args3[] = {"Teacher", "Darren"};
-    req = build_resp_request("RMOD", 2, args3);
+    if (build_resp_request(req, sizeof(req), "RMOD", 2, args3) < 0)
+        exit(1);
     testcase_raw(connfd, req, "+OK\r\n", "RMOD-D-Teacher", 0);
-    free(req);
 
     // RGET Teacher (should return Darren)
     const char* args4[] = {"Teacher"};
-    req = build_resp_request("RGET", 1, args4);
+    if (build_resp_request(req, sizeof(req), "RGET", 1, args4) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$6\r\nDarren\r\n", "RGET-Darren-Teacher", 0);
-    free(req);
 
     // REXIST Teacher
     const char* args5[] = {"Teacher"};
-    req = build_resp_request("REXIST", 1, args5);
+    if (build_resp_request(req, sizeof(req), "REXIST", 1, args5) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$5\r\nEXIST\r\n", "REXIST-Teacher", 0); // RESP 整数存在为 1
-    free(req);
 
     // RDEL Teacher
     const char* args6[] = {"Teacher"};
-    req = build_resp_request("RDEL", 1, args6);
+    if (build_resp_request(req, sizeof(req), "RDEL", 1, args6) < 0)
+        exit(1);
     testcase_raw(connfd, req, "+OK\r\n", "RDEL-Teacher", 0);
-    free(req);
 
     // 再 GET 应返回 NO EXIST（根据你希望的格式）
     const char* args7[] = {"Teacher"};
-    req = build_resp_request("RGET", 1, args7);
+    if (build_resp_request(req, sizeof(req), "RGET", 1, args7) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "RGET-K-Teacher",
                  0); // 假设你返回 $8\r\nNO EXIST\r\n
-    free(req);
 
     // RMOD 不存在的键
     const char* args8[] = {"Teacher", "KING"};
-    req = build_resp_request("RMOD", 2, args8);
+    if (build_resp_request(req, sizeof(req), "RMOD", 2, args8) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "RMOD-K-Teacher", 0);
-    free(req);
 
     // REXIST 不存在的键
     const char* args9[] = {"Teacher"};
-    req = build_resp_request("REXIST", 1, args9);
+    if (build_resp_request(req, sizeof(req), "REXIST", 1, args9) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "REXIST-Teacher", 0);
-    free(req);
 }
 
 void rbtree_testcase_pth(int connfd, int thread_id) {
@@ -414,57 +425,66 @@ void rbtree_testcase_pth(int connfd, int thread_id) {
 
         // RSET key King
         const char* args1[] = {key, "King"};
-        char* req1 = build_resp_request("RSET", 2, args1);
+        char req1[REQ_BUF_SIZE];
+        if (build_resp_request(req1, sizeof(req1), "RSET", 2, args1) < 0)
+            exit(1);
         testcase_raw(connfd, req1, "+OK\r\n", "RSET-Teacher", thread_id);
-        free(req1);
 
         // RGET key
         const char* args2[] = {key};
-        char* req2 = build_resp_request("RGET", 1, args2);
+        char req2[REQ_BUF_SIZE];
+        if (build_resp_request(req2, sizeof(req2), "RGET", 1, args2) < 0)
+            exit(1);
         testcase_raw(connfd, req2, "$4\r\nKing\r\n", "RGET-Teacher", thread_id);
-        free(req2);
 
         // RMOD key Darren
         const char* args3[] = {key, "Darren"};
-        char* req3 = build_resp_request("RMOD", 2, args3);
+        char req3[REQ_BUF_SIZE];
+        if (build_resp_request(req3, sizeof(req3), "RMOD", 2, args3) < 0)
+            exit(1);
         testcase_raw(connfd, req3, "+OK\r\n", "RMOD-Teacher", thread_id);
-        free(req3);
 
         // RGET key (should return Darren)
         const char* args4[] = {key};
-        char* req4 = build_resp_request("RGET", 1, args4);
+        char req4[REQ_BUF_SIZE];
+        if (build_resp_request(req4, sizeof(req4), "RGET", 1, args4) < 0)
+            exit(1);
         testcase_raw(connfd, req4, "$6\r\nDarren\r\n", "RGET-Teacher", thread_id);
-        free(req4);
 
         // REXIST key
         const char* args5[] = {key};
-        char* req5 = build_resp_request("REXIST", 1, args5);
+        char req5[REQ_BUF_SIZE];
+        if (build_resp_request(req5, sizeof(req5), "REXIST", 1, args5) < 0)
+            exit(1);
         testcase_raw(connfd, req5, "$5\r\nEXIST\r\n", "REXIST-Teacher", thread_id);
-        free(req5);
 
         // RDEL key
         const char* args6[] = {key};
-        char* req6 = build_resp_request("RDEL", 1, args6);
+        char req6[REQ_BUF_SIZE];
+        if (build_resp_request(req6, sizeof(req6), "RDEL", 1, args6) < 0)
+            exit(1);
         testcase_raw(connfd, req6, "+OK\r\n", "RDEL-Teacher", thread_id);
-        free(req6);
 
         // RGET key (should return NO EXIST)
         const char* args7[] = {key};
-        char* req7 = build_resp_request("RGET", 1, args7);
+        char req7[REQ_BUF_SIZE];
+        if (build_resp_request(req7, sizeof(req7), "RGET", 1, args7) < 0)
+            exit(1);
         testcase_raw(connfd, req7, "$8\r\nNO EXIST\r\n", "RGET-Teacher", thread_id);
-        free(req7);
 
         // RMOD key KING (key not exist)
         const char* args8[] = {key, "KING"};
-        char* req8 = build_resp_request("RMOD", 2, args8);
+        char req8[REQ_BUF_SIZE];
+        if (build_resp_request(req8, sizeof(req8), "RMOD", 2, args8) < 0)
+            exit(1);
         testcase_raw(connfd, req8, "$8\r\nNO EXIST\r\n", "RMOD-Teacher", thread_id);
-        free(req8);
 
         // REXIST key (key not exist)
         const char* args9[] = {key};
-        char* req9 = build_resp_request("REXIST", 1, args9);
+        char req9[REQ_BUF_SIZE];
+        if (build_resp_request(req9, sizeof(req9), "REXIST", 1, args9) < 0)
+            exit(1);
         testcase_raw(connfd, req9, "$8\r\nNO EXIST\r\n", "REXIST-Teacher", thread_id);
-        free(req9);
     }
 
     gettimeofday(&tv_end, NULL);
@@ -489,9 +509,10 @@ void rbtree_testcase_3w(int connfd) {
         snprintf(value, sizeof(value), "King%d", i);
 
         const char* args[] = {key, value};
-        char* req = build_resp_request("RSET", 2, args);
+        char req[REQ_BUF_SIZE];
+        if (build_resp_request(req, sizeof(req), "RSET", 2, args) < 0)
+            exit(1);
         testcase_raw(connfd, req, "+OK\r\n", "RSET-Teacher", 0);
-        free(req);
     }
 
     // 第二阶段：RGET Teacher{i}  -> 期望返回 King{i} (RESP bulk string)
@@ -506,9 +527,10 @@ void rbtree_testcase_3w(int connfd) {
         snprintf(expected, sizeof(expected), "$%d\r\n%s\r\n", len, value);
 
         const char* args[] = {key};
-        char* req = build_resp_request("RGET", 1, args);
+        char req[REQ_BUF_SIZE];
+        if (build_resp_request(req, sizeof(req), "RGET", 1, args) < 0)
+            exit(1);
         testcase_raw(connfd, req, expected, "RGET-King-Teacher", 0);
-        free(req);
     }
 
     // 第三阶段：RMOD Teacher{i} King{i}
@@ -518,9 +540,10 @@ void rbtree_testcase_3w(int connfd) {
         snprintf(value, sizeof(value), "King%d", i);
 
         const char* args[] = {key, value};
-        char* req = build_resp_request("RMOD", 2, args);
+        char req[REQ_BUF_SIZE];
+        if (build_resp_request(req, sizeof(req), "RMOD", 2, args) < 0)
+            exit(1);
         testcase_raw(connfd, req, "+OK\r\n", "RMOD-King-Teacher", 0);
-        free(req);
     }
 
     struct timeval tv_end;
@@ -532,62 +555,62 @@ void rbtree_testcase_3w(int connfd) {
 }
 
 void hash_testcase(int connfd) {
-    char* req = NULL;
+    char req[REQ_BUF_SIZE];
 
     // HSET Teacher King
     const char* args1[] = {"Teacher", "King"};
-    req = build_resp_request("HSET", 2, args1);
+    if (build_resp_request(req, sizeof(req), "HSET", 2, args1) < 0)
+        exit(1);
     testcase_raw(connfd, req, "+OK\r\n", "HSET-Teacher", 0);
-    free(req);
 
     // HGET Teacher
     const char* args2[] = {"Teacher"};
-    req = build_resp_request("HGET", 1, args2);
+    if (build_resp_request(req, sizeof(req), "HGET", 1, args2) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$4\r\nKing\r\n", "HGET-King-Teacher", 0);
-    free(req);
 
     // HMOD Teacher Darren
     const char* args3[] = {"Teacher", "Darren"};
-    req = build_resp_request("HMOD", 2, args3);
+    if (build_resp_request(req, sizeof(req), "HMOD", 2, args3) < 0)
+        exit(1);
     testcase_raw(connfd, req, "+OK\r\n", "HMOD-D-Teacher", 0);
-    free(req);
 
     // HGET Teacher (should return Darren)
     const char* args4[] = {"Teacher"};
-    req = build_resp_request("HGET", 1, args4);
+    if (build_resp_request(req, sizeof(req), "HGET", 1, args4) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$6\r\nDarren\r\n", "HGET-Darren-Teacher", 0);
-    free(req);
 
     // HEXIST Teacher
     const char* args5[] = {"Teacher"};
-    req = build_resp_request("HEXIST", 1, args5);
+    if (build_resp_request(req, sizeof(req), "HEXIST", 1, args5) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$5\r\nEXIST\r\n", "HEXIST-Teacher", 0); // RESP 整数存在为 1
-    free(req);
 
     // HDEL Teacher
     const char* args6[] = {"Teacher"};
-    req = build_resp_request("HDEL", 1, args6);
+    if (build_resp_request(req, sizeof(req), "HDEL", 1, args6) < 0)
+        exit(1);
     testcase_raw(connfd, req, "+OK\r\n", "HDEL-Teacher", 0);
-    free(req);
 
     // 再 GET 应返回 NO EXIST（根据你希望的格式）
     const char* args7[] = {"Teacher"};
-    req = build_resp_request("HGET", 1, args7);
+    if (build_resp_request(req, sizeof(req), "HGET", 1, args7) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "HGET-K-Teacher",
                  0); // 假设你返回 $8\r\nNO EXIST\r\n
-    free(req);
 
     // HMOD 不存在的键
     const char* args8[] = {"Teacher", "KING"};
-    req = build_resp_request("HMOD", 2, args8);
+    if (build_resp_request(req, sizeof(req), "HMOD", 2, args8) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "HMOD-K-Teacher", 0);
-    free(req);
 
     // HEXIST 不存在的键
     const char* args9[] = {"Teacher"};
-    req = build_resp_request("HEXIST", 1, args9);
+    if (build_resp_request(req, sizeof(req), "HEXIST", 1, args9) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "HEXIST-Teacher", 0);
-    free(req);
 }
 
 void hash_testcase_pth(int connfd, int thread_id) {
@@ -602,57 +625,66 @@ void hash_testcase_pth(int connfd, int thread_id) {
 
         // HSET key King
         const char* args1[] = {key, "King"};
-        char* req1 = build_resp_request("HSET", 2, args1);
+        char req1[REQ_BUF_SIZE];
+        if (build_resp_request(req1, sizeof(req1), "HSET", 2, args1) < 0)
+            exit(1);
         testcase_raw(connfd, req1, "+OK\r\n", "HSET-Teacher", thread_id);
-        free(req1);
 
         // HGET key
         const char* args2[] = {key};
-        char* req2 = build_resp_request("HGET", 1, args2);
+        char req2[REQ_BUF_SIZE];
+        if (build_resp_request(req2, sizeof(req2), "HGET", 1, args2) < 0)
+            exit(1);
         testcase_raw(connfd, req2, "$4\r\nKing\r\n", "HGET-Teacher", thread_id);
-        free(req2);
 
         // HMOD key Darren
         const char* args3[] = {key, "Darren"};
-        char* req3 = build_resp_request("HMOD", 2, args3);
+        char req3[REQ_BUF_SIZE];
+        if (build_resp_request(req3, sizeof(req3), "HMOD", 2, args3) < 0)
+            exit(1);
         testcase_raw(connfd, req3, "+OK\r\n", "HMOD-Teacher", thread_id);
-        free(req3);
 
         // HGET key (should return Darren)
         const char* args4[] = {key};
-        char* req4 = build_resp_request("HGET", 1, args4);
+        char req4[REQ_BUF_SIZE];
+        if (build_resp_request(req4, sizeof(req4), "HGET", 1, args4) < 0)
+            exit(1);
         testcase_raw(connfd, req4, "$6\r\nDarren\r\n", "HGET-Teacher", thread_id);
-        free(req4);
 
         // HEXIST key
         const char* args5[] = {key};
-        char* req5 = build_resp_request("HEXIST", 1, args5);
+        char req5[REQ_BUF_SIZE];
+        if (build_resp_request(req5, sizeof(req5), "HEXIST", 1, args5) < 0)
+            exit(1);
         testcase_raw(connfd, req5, "$5\r\nEXIST\r\n", "HEXIST-Teacher", thread_id);
-        free(req5);
 
         // HDEL key
         const char* args6[] = {key};
-        char* req6 = build_resp_request("HDEL", 1, args6);
+        char req6[REQ_BUF_SIZE];
+        if (build_resp_request(req6, sizeof(req6), "HDEL", 1, args6) < 0)
+            exit(1);
         testcase_raw(connfd, req6, "+OK\r\n", "HDEL-Teacher", thread_id);
-        free(req6);
 
         // HGET key (should return NO EXIST)
         const char* args7[] = {key};
-        char* req7 = build_resp_request("HGET", 1, args7);
+        char req7[REQ_BUF_SIZE];
+        if (build_resp_request(req7, sizeof(req7), "HGET", 1, args7) < 0)
+            exit(1);
         testcase_raw(connfd, req7, "$8\r\nNO EXIST\r\n", "HGET-Teacher", thread_id);
-        free(req7);
 
         // HMOD key KING (key not exist)
         const char* args8[] = {key, "KING"};
-        char* req8 = build_resp_request("HMOD", 2, args8);
+        char req8[REQ_BUF_SIZE];
+        if (build_resp_request(req8, sizeof(req8), "HMOD", 2, args8) < 0)
+            exit(1);
         testcase_raw(connfd, req8, "$8\r\nNO EXIST\r\n", "HMOD-Teacher", thread_id);
-        free(req8);
 
         // HEXIST key (key not exist)
         const char* args9[] = {key};
-        char* req9 = build_resp_request("HEXIST", 1, args9);
+        char req9[REQ_BUF_SIZE];
+        if (build_resp_request(req9, sizeof(req9), "HEXIST", 1, args9) < 0)
+            exit(1);
         testcase_raw(connfd, req9, "$8\r\nNO EXIST\r\n", "HEXIST-Teacher", thread_id);
-        free(req9);
     }
 
     gettimeofday(&tv_end, NULL);
@@ -677,9 +709,10 @@ void hash_testcase_3w(int connfd) {
         snprintf(value, sizeof(value), "King%d", i);
 
         const char* args[] = {key, value};
-        char* req = build_resp_request("HSET", 2, args);
+        char req[REQ_BUF_SIZE];
+        if (build_resp_request(req, sizeof(req), "HSET", 2, args) < 0)
+            exit(1);
         testcase_raw(connfd, req, "+OK\r\n", "HSET-Teacher", 0);
-        free(req);
     }
 
     // 第二阶段：HGET Teacher{i}  -> 期望返回 King{i} (RESP bulk string)
@@ -694,9 +727,10 @@ void hash_testcase_3w(int connfd) {
         snprintf(expected, sizeof(expected), "$%d\r\n%s\r\n", len, value);
 
         const char* args[] = {key};
-        char* req = build_resp_request("HGET", 1, args);
+        char req[REQ_BUF_SIZE];
+        if (build_resp_request(req, sizeof(req), "HGET", 1, args) < 0)
+            exit(1);
         testcase_raw(connfd, req, expected, "HGET-King-Teacher", 0);
-        free(req);
     }
 
     // 第三阶段：HMOD Teacher{i} King{i}
@@ -706,9 +740,10 @@ void hash_testcase_3w(int connfd) {
         snprintf(value, sizeof(value), "King%d", i);
 
         const char* args[] = {key, value};
-        char* req = build_resp_request("HMOD", 2, args);
+        char req[REQ_BUF_SIZE];
+        if (build_resp_request(req, sizeof(req), "HMOD", 2, args) < 0)
+            exit(1);
         testcase_raw(connfd, req, "+OK\r\n", "HMOD-King-Teacher", 0);
-        free(req);
     }
 
     struct timeval tv_end;
@@ -720,64 +755,64 @@ void hash_testcase_3w(int connfd) {
 }
 
 void skiptable_testcase(int connfd) {
-    char* req = NULL;
+    char req[REQ_BUF_SIZE];
 
     // const char* args1[] = {"SSET","Teacher", "King","SEXIST","Teacher"};
 
     // SSET Teacher King
     const char* args1[] = {"Teacher", "King"};
-    req = build_resp_request("SSET", 2, args1);
+    if (build_resp_request(req, sizeof(req), "SSET", 2, args1) < 0)
+        exit(1);
     testcase_raw(connfd, req, "+OK\r\n", "SSET-Teacher", 0);
-    free(req);
 
     // SGET Teacher
     const char* args2[] = {"Teacher"};
-    req = build_resp_request("SGET", 1, args2);
+    if (build_resp_request(req, sizeof(req), "SGET", 1, args2) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$4\r\nKing\r\n", "SGET-King-Teacher", 0);
-    free(req);
 
     // SMOD Teacher Darren
     const char* args3[] = {"Teacher", "Darren"};
-    req = build_resp_request("SMOD", 2, args3);
+    if (build_resp_request(req, sizeof(req), "SMOD", 2, args3) < 0)
+        exit(1);
     testcase_raw(connfd, req, "+OK\r\n", "SMOD-D-Teacher", 0);
-    free(req);
 
     // SGET Teacher (should return Darren)
     const char* args4[] = {"Teacher"};
-    req = build_resp_request("SGET", 1, args4);
+    if (build_resp_request(req, sizeof(req), "SGET", 1, args4) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$6\r\nDarren\r\n", "SGET-Darren-Teacher", 0);
-    free(req);
 
     // SEXIST Teacher
     const char* args5[] = {"Teacher"};
-    req = build_resp_request("SEXIST", 1, args5);
+    if (build_resp_request(req, sizeof(req), "SEXIST", 1, args5) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$5\r\nEXIST\r\n", "SEXIST-Teacher", 0); // RESP 整数存在为 1
-    free(req);
 
     // SDEL Teacher
     const char* args6[] = {"Teacher"};
-    req = build_resp_request("SDEL", 1, args6);
+    if (build_resp_request(req, sizeof(req), "SDEL", 1, args6) < 0)
+        exit(1);
     testcase_raw(connfd, req, "+OK\r\n", "SDEL-Teacher", 0);
-    free(req);
 
     // 再 GET 应返回 NO EXIST（根据你希望的格式）
     const char* args7[] = {"Teacher"};
-    req = build_resp_request("SGET", 1, args7);
+    if (build_resp_request(req, sizeof(req), "SGET", 1, args7) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "SGET-K-Teacher",
                  0); // 假设你返回 $8\r\nNO EXIST\r\n
-    free(req);
 
     // SMOD 不存在的键
     const char* args8[] = {"Teacher", "KING"};
-    req = build_resp_request("SMOD", 2, args8);
+    if (build_resp_request(req, sizeof(req), "SMOD", 2, args8) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "SMOD-K-Teacher", 0);
-    free(req);
 
     // SEXIST 不存在的键
     const char* args9[] = {"Teacher"};
-    req = build_resp_request("SEXIST", 1, args9);
+    if (build_resp_request(req, sizeof(req), "SEXIST", 1, args9) < 0)
+        exit(1);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "SEXIST-Teacher", 0);
-    free(req);
 }
 
 void skiptable_testcase_pth(int connfd, int thread_id) {
@@ -792,57 +827,66 @@ void skiptable_testcase_pth(int connfd, int thread_id) {
 
         // SSET key King
         const char* args1[] = {key, "King"};
-        char* req1 = build_resp_request("SSET", 2, args1);
+        char req1[REQ_BUF_SIZE];
+        if (build_resp_request(req1, sizeof(req1), "SSET", 2, args1) < 0)
+            exit(1);
         testcase_raw(connfd, req1, "+OK\r\n", "SSET-Teacher", thread_id);
-        free(req1);
 
         // SGET key
         const char* args2[] = {key};
-        char* req2 = build_resp_request("SGET", 1, args2);
+        char req2[REQ_BUF_SIZE];
+        if (build_resp_request(req2, sizeof(req2), "SGET", 1, args2) < 0)
+            exit(1);
         testcase_raw(connfd, req2, "$4\r\nKing\r\n", "SGET-Teacher", thread_id);
-        free(req2);
 
         // SMOD key Darren
         const char* args3[] = {key, "Darren"};
-        char* req3 = build_resp_request("SMOD", 2, args3);
+        char req3[REQ_BUF_SIZE];
+        if (build_resp_request(req3, sizeof(req3), "SMOD", 2, args3) < 0)
+            exit(1);
         testcase_raw(connfd, req3, "+OK\r\n", "SMOD-Teacher", thread_id);
-        free(req3);
 
         // SGET key (should return Darren)
         const char* args4[] = {key};
-        char* req4 = build_resp_request("SGET", 1, args4);
+        char req4[REQ_BUF_SIZE];
+        if (build_resp_request(req4, sizeof(req4), "SGET", 1, args4) < 0)
+            exit(1);
         testcase_raw(connfd, req4, "$6\r\nDarren\r\n", "SGET-Teacher", thread_id);
-        free(req4);
 
         // SEXIST key
         const char* args5[] = {key};
-        char* req5 = build_resp_request("SEXIST", 1, args5);
+        char req5[REQ_BUF_SIZE];
+        if (build_resp_request(req5, sizeof(req5), "SEXIST", 1, args5) < 0)
+            exit(1);
         testcase_raw(connfd, req5, "$5\r\nEXIST\r\n", "SEXIST-Teacher", thread_id);
-        free(req5);
 
         // SDEL key
         const char* args6[] = {key};
-        char* req6 = build_resp_request("SDEL", 1, args6);
+        char req6[REQ_BUF_SIZE];
+        if (build_resp_request(req6, sizeof(req6), "SDEL", 1, args6) < 0)
+            exit(1);
         testcase_raw(connfd, req6, "+OK\r\n", "SDEL-Teacher", thread_id);
-        free(req6);
 
         // SGET key (should return NO EXIST)
         const char* args7[] = {key};
-        char* req7 = build_resp_request("SGET", 1, args7);
+        char req7[REQ_BUF_SIZE];
+        if (build_resp_request(req7, sizeof(req7), "SGET", 1, args7) < 0)
+            exit(1);
         testcase_raw(connfd, req7, "$8\r\nNO EXIST\r\n", "SGET-K-Teacher", thread_id);
-        free(req7);
 
         // SMOD key KING (key not exist)
         const char* args8[] = {key, "KING"};
-        char* req8 = build_resp_request("SMOD", 2, args8);
+        char req8[REQ_BUF_SIZE];
+        if (build_resp_request(req8, sizeof(req8), "SMOD", 2, args8) < 0)
+            exit(1);
         testcase_raw(connfd, req8, "$8\r\nNO EXIST\r\n", "SMOD-K-Teacher", thread_id);
-        free(req8);
 
         // SEXIST key (key not exist)
         const char* args9[] = {key};
-        char* req9 = build_resp_request("SEXIST", 1, args9);
+        char req9[REQ_BUF_SIZE];
+        if (build_resp_request(req9, sizeof(req9), "SEXIST", 1, args9) < 0)
+            exit(1);
         testcase_raw(connfd, req9, "$8\r\nNO EXIST\r\n", "SEXIST-Teacher", thread_id);
-        free(req9);
     }
 
     gettimeofday(&tv_end, NULL);
@@ -867,9 +911,10 @@ void skiptable_testcase_3w(int connfd) {
         snprintf(value, sizeof(value), "King%d", i);
 
         const char* args[] = {key, value};
-        char* req = build_resp_request("SSET", 2, args);
+        char req[REQ_BUF_SIZE];
+        if (build_resp_request(req, sizeof(req), "SSET", 2, args) < 0)
+            exit(1);
         testcase_raw(connfd, req, "+OK\r\n", "SSET-Teacher", 0);
-        free(req);
     }
 
     // 第二阶段：SGET Teacher{i}  -> 期望返回 King{i} (RESP bulk string)
@@ -884,9 +929,10 @@ void skiptable_testcase_3w(int connfd) {
         snprintf(expected, sizeof(expected), "$%d\r\n%s\r\n", len, value);
 
         const char* args[] = {key};
-        char* req = build_resp_request("SGET", 1, args);
+        char req[REQ_BUF_SIZE];
+        if (build_resp_request(req, sizeof(req), "SGET", 1, args) < 0)
+            exit(1);
         testcase_raw(connfd, req, expected, "SGET-King-Teacher", 0);
-        free(req);
     }
 
     // 第三阶段：SMOD Teacher{i} King{i}
@@ -896,9 +942,10 @@ void skiptable_testcase_3w(int connfd) {
         snprintf(value, sizeof(value), "King%d", i);
 
         const char* args[] = {key, value};
-        char* req = build_resp_request("SMOD", 2, args);
+        char req[REQ_BUF_SIZE];
+        if (build_resp_request(req, sizeof(req), "SMOD", 2, args) < 0)
+            exit(1);
         testcase_raw(connfd, req, "+OK\r\n", "SMOD-King-Teacher", 0);
-        free(req);
     }
 
     struct timeval tv_end;

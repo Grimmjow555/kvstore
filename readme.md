@@ -130,7 +130,7 @@ log_level info
 role master
 master_ip 127.0.0.1
 master_port 19001
-persistence_mode both
+persistence_mode none
 ```
 
 字段说明：
@@ -140,7 +140,7 @@ persistence_mode both
 - `role`：`master` 或 `replica`（也接受 `slave`、`0`、`1`）。
 - `master_ip` / `master_port`：角色为 `replica` 时使用的主节点地址与端口。
 - `persistence_mode`：`none`、`rdb`、`aof` 或 `both`；也可以用 `rdb on/off`、
-  `aof on/off` 分别控制。
+  `aof on/off` 分别控制。默认为 `none`，即 RDB 与 AOF 都不开启，需要时再显式打开。
 
 配置文件加载后，命令行开关可以覆盖其中的值，旧的位置参数方式仍兼容：
 
