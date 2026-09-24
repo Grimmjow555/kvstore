@@ -13,6 +13,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -139,16 +140,36 @@ static int send_all(int fd, const char* data, size_t len) {
 }
 
 // 发送自定义复制帧：4 字节网络字节序长度 + RESP 负载。
+// 长度头与负载合并到同一缓冲区后一次发出，避免拆成两个小包写入触发 TCP 延迟。
 static int send_frame(int fd, const char* data, size_t len) {
     if (len > UINT32_MAX) {
         return -1;
     }
 
     uint32_t net_len = htonl((uint32_t)len);
-    if (send_all(fd, (const char*)&net_len, sizeof(net_len)) < 0) {
-        return -1;
+    size_t total_len = sizeof(net_len) + len;
+
+    char stack_buf[1024];
+    char* frame = stack_buf;
+    if (total_len > sizeof(stack_buf)) {
+        frame = (char*)malloc(total_len);
+        if (frame == NULL) {
+            return -1;
+        }
     }
-    return send_all(fd, data, len);
+
+    memcpy(frame, &net_len, sizeof(net_len));
+    if (len > 0) {
+        memcpy(frame + sizeof(net_len), data, len);
+    }
+
+    int rc = send_all(fd, frame, total_len);
+
+    if (frame != stack_buf) {
+        free(frame);
+    }
+
+    return rc;
 }
 
 // TCP recv() 可能只接收部分数据，因此循环直到读取指定长度。

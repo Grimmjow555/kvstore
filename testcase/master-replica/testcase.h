@@ -2,6 +2,7 @@
 
 #include <arpa/inet.h>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -27,15 +28,29 @@ int send_msg(int connfd, const char* msg, int length) {
     if (msg == NULL || length < 0)
         return -1;
 
-    // 将长度转换为网络字节序
+    // 长度头与消息体合并到同一缓冲区后一次 send_all 发出，
+    // 避免拆成两个小包写入时被 TCP 小包延迟拖慢。
     uint32_t net_len = htonl((uint32_t)length);
-    if (send_all(connfd, &net_len, sizeof(net_len)) != 0) {
-        return -1; // 头部发送失败
+    size_t total_len = sizeof(net_len) + (size_t)length;
+
+    char stack_buf[512];
+    char* frame = stack_buf;
+    if (total_len > sizeof(stack_buf)) {
+        frame = (char*)malloc(total_len);
+        if (frame == NULL)
+            return -1;
     }
-    if (send_all(connfd, msg, length) != 0) {
-        return -1; // 数据发送失败
-    }
-    return 0; // 成功
+
+    memcpy(frame, &net_len, sizeof(net_len));
+    if (length > 0)
+        memcpy(frame + sizeof(net_len), msg, (size_t)length);
+
+    int rc = send_all(connfd, frame, total_len);
+
+    if (frame != stack_buf)
+        free(frame);
+
+    return rc; // 0 表示成功
 }
 
 // 辅助函数：确保完整接收指定长度的数据

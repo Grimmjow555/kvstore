@@ -194,6 +194,70 @@ static bool parse_persistence_mode(const std::string& value, int* rdb, int* aof)
     return true;
 }
 
+static bool parse_allocator_mode(const std::string& value, int* out) {
+    if (out == nullptr) {
+        return false;
+    }
+
+    std::string lower = to_lower(trim(value));
+    if (lower.empty()) {
+        return false;
+    }
+
+    // 不使用内存池：直接走系统 malloc/free。
+    if (lower == "malloc" || lower == "system" || lower == "libc" || lower == "glibc" ||
+        lower == "none" || lower == "off" || lower == "false" || lower == "no" ||
+        lower == "disabled" || lower == "no_pool" || lower == "nopool") {
+        *out = KVS_ALLOC_MALLOC;
+        return true;
+    }
+
+    if (lower == "jemalloc" || lower == "je" || lower == "jemalloc2") {
+        *out = KVS_ALLOC_JEMALLOC;
+        return true;
+    }
+
+    // 内置 slab 内存池；on/true 等写法用于兼容 memory_pool on/off 风格的配置。
+    if (lower == "memorypool" || lower == "mempool" || lower == "pool" ||
+        lower == "slab" || lower == "on" || lower == "true" || lower == "yes" ||
+        lower == "enabled") {
+        *out = KVS_ALLOC_MEMORYPOOL;
+        return true;
+    }
+
+    return false;
+}
+
+static bool parse_network_architecture(const std::string& value, int* out) {
+    if (out == nullptr) {
+        return false;
+    }
+
+    std::string lower = to_lower(trim(value));
+    if (lower.empty()) {
+        return false;
+    }
+
+    if (lower == "reactor" || lower == "epoll" || lower == "event_loop" ||
+        lower == "eventloop") {
+        *out = KVS_NETWORK_REACTOR;
+        return true;
+    }
+
+    if (lower == "ntyco" || lower == "coroutine" || lower == "coro" || lower == "nty") {
+        *out = KVS_NETWORK_NTYCO;
+        return true;
+    }
+
+    if (lower == "proactor" || lower == "io_uring" || lower == "io-uring" ||
+        lower == "uring") {
+        *out = KVS_NETWORK_PROACTOR;
+        return true;
+    }
+
+    return false;
+}
+
 static void set_bind_ip(const std::string& value) {
     std::string ip = trim(value);
     if (ip.empty() || ip == "*") {
@@ -292,6 +356,27 @@ static int apply_config_key(const std::string& raw_key, const std::string& raw_v
         return 0;
     }
 
+    if (key == "memory_allocator" || key == "allocator" || key == "malloc_allocator" ||
+        key == "memory_pool" || key == "mempool") {
+        int parsed = 0;
+        if (!parse_allocator_mode(value, &parsed)) {
+            return -1;
+        }
+        g_config.allocator = parsed;
+        return 0;
+    }
+
+    if (key == "network_architecture" || key == "network_arch" || key == "network" ||
+        key == "net" || key == "network_model" || key == "network_framework" ||
+        key == "io_engine" || key == "io_model") {
+        int parsed = 0;
+        if (!parse_network_architecture(value, &parsed)) {
+            return -1;
+        }
+        g_config.network = parsed;
+        return 0;
+    }
+
     // 未知键不视为致命错误，便于后续扩展配置项。
     return 0;
 }
@@ -307,6 +392,12 @@ void kvs_config_set_defaults(void) {
     // 默认关闭 RDB 与 AOF，需要时通过配置文件或命令行开关显式开启。
     g_config.rdb_enabled = 0;
     g_config.aof_enabled = 0;
+    // 默认沿用内置 slab 内存池；需要时可在配置文件中改为 malloc 或 jemalloc。
+    g_config.allocator = KVS_ALLOC_MEMORYPOOL;
+
+    // 默认网络框架为 NtyCo；kvstore.conf 的 network_architecture
+    // 或命令行 --network 可在启动时覆盖。
+    g_config.network = KVS_NETWORK_NTYCO;
 }
 
 int kvs_config_load(const char* filename) {
@@ -486,6 +577,20 @@ int kvs_config_parse_switches(int* argc, char*** argv) {
                 return -1;
             }
             match = 1;
+        } else if (get_option_value(args, input_count, i, "--memory-allocator", &value,
+                                    &consumed) == 0) {
+            if (!parse_allocator_mode(value == nullptr ? "" : value, &g_config.allocator)) {
+                return -1;
+            }
+            match = 1;
+        } else if (get_option_value(args, input_count, i, "--network", &value, &consumed) ==
+                       0 ||
+                   get_option_value(args, input_count, i, "--network-architecture", &value,
+                                    &consumed) == 0) {
+            if (!parse_network_architecture(value == nullptr ? "" : value, &g_config.network)) {
+                return -1;
+            }
+            match = 1;
         }
 
         if (match) {
@@ -521,6 +626,34 @@ int kvs_config_master_port(void) { return g_config.master_port; }
 int kvs_config_rdb_enabled(void) { return g_config.rdb_enabled; }
 
 int kvs_config_aof_enabled(void) { return g_config.aof_enabled; }
+
+int kvs_config_allocator(void) { return g_config.allocator; }
+
+const char* kvs_config_allocator_name(void) {
+    switch (g_config.allocator) {
+    case KVS_ALLOC_JEMALLOC:
+        return "jemalloc";
+    case KVS_ALLOC_MEMORYPOOL:
+        return "memorypool";
+    case KVS_ALLOC_MALLOC:
+    default:
+        return "malloc";
+    }
+}
+
+int kvs_config_network(void) { return g_config.network; }
+
+const char* kvs_config_network_name(void) {
+    switch (g_config.network) {
+    case KVS_NETWORK_REACTOR:
+        return "reactor";
+    case KVS_NETWORK_PROACTOR:
+        return "proactor";
+    case KVS_NETWORK_NTYCO:
+    default:
+        return "ntyco";
+    }
+}
 
 void kvs_log(int level, const char* fmt, ...) {
     if (fmt == nullptr) {

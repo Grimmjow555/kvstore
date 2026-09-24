@@ -15,12 +15,9 @@
 #define REQ_BUF_SIZE 256 // 请求内容较短，直接在栈上构建，避免频繁堆分配
 #define TIME_SUB_MS(tv1, tv2)                                                                      \
     ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
-#ifndef START_NUM
-#define START_NUM 500
-#endif
-#define SET_NUMS 500
+
+#define GET_NUMS 100000
 #define PRINT_PASS 0
-#define INSERT 0 // 测试保存功能
 
 /**
  * @brief 将命令构建为符合 RESP (Redis Serialization Protocol) 协议的请求字符串
@@ -66,8 +63,8 @@ int build_resp_request(char* buf, size_t capacity, const char* cmd, int argc, co
     return (int)offset;
 }
 
-void testcase_raw(int connfd, const char* msg, const char* expected_pattern, const char* casename,
-                  int thread_id) {
+void testcase(int connfd, const char* msg, const char* expected_pattern, const char* casename,
+              int thread_id) {
     if (!msg || !expected_pattern || !casename)
         return;
 
@@ -78,56 +75,13 @@ void testcase_raw(int connfd, const char* msg, const char* expected_pattern, con
 
     if (strcmp(result, expected_pattern) == 0) {
 #if PRINT_PASS
-#if LEVEL3
-        printf("thread[%d]==> PASS ->  %s\n", thread_id, casename);
-#else
         printf("==> PASS ->  %s\n", casename);
 #endif
-#endif
     } else {
-#if LEVEL3
-        printf("thread[%d]==> FAILED -> %s, '%s' != '%s'\n", thread_id, casename, result,
-               expected_pattern);
-#else
         printf("==> FAILED -> %s, '%s' != '%s'\n", casename, result, expected_pattern);
-#endif
         exit(1);
     }
 }
-void testcase(int connfd, const char* msg, const char* pattern, const char* casename,
-              int thread_id) {
-
-    if (!msg || !pattern || !casename)
-        return;
-
-    send_msg(connfd, msg, strlen(msg));
-
-    char result[MAX_MSG_LENGTH] = {0};
-    recv_msg(connfd, result, MAX_MSG_LENGTH);
-
-    if (strcmp(result, pattern) == 0) {
-
-#if PRINT_PASS
-#if LEVEL3
-        printf("thread[%d]==> PASS ->  %s\n", thread_id, casename);
-#else
-        printf("==> PASS ->  %s\n", casename);
-#endif
-#endif
-
-    } else {
-
-#if LEVEL3
-        printf("thread[%d]==> FAILED -> %s, '%s' != '%s' \n", thread_id, casename, result, pattern);
-
-#else
-        printf("==> FAILED -> %s, '%s' != '%s' \n", casename, result, pattern);
-#endif
-
-        exit(1);
-    }
-}
-
 int connect_tcpserver(const char* ip, unsigned short port) {
 
     int connfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -151,26 +105,8 @@ int connect_tcpserver(const char* ip, unsigned short port) {
 void array_testcase(int connfd) {
     char req[REQ_BUF_SIZE];
 
-#if INSERT
-
-    for (int i = 0; i < SET_NUMS / 4; i++) {
-        // SET Teacher King
-        char key[32];
-        int len = sprintf(key, "Teacher%d", i + START_NUM / 4);
-        key[len] = '\0'; // 确保字符串结束
-        char value[32];
-        len = sprintf(value, "King%d", i + START_NUM / 4);
-        value[len] = '\0'; // 确保字符串结束
-        const char* args1[] = {key, value};
-        if (build_resp_request(req, sizeof(req), "SET", 2, args1) < 0)
-            exit(1);
-        testcase_raw(connfd, req, "+OK\r\n", "SET-Teacher", 0);
-    }
-
-#else
-
     // GET 与 SAVE 使用相同数量的数据，逐条验证 RDB 恢复结果
-    for (int i = 0; i < (START_NUM + SET_NUMS) / 4; i++) {
+    for (int i = 0; i < GET_NUMS / 4; i++) {
         char key[32];
         int len = sprintf(key, "Teacher%d", i);
         key[len] = '\0';
@@ -181,32 +117,14 @@ void array_testcase(int connfd) {
         char expected[64];
         snprintf(expected, sizeof(expected), "$%zu\r\nKing%d\r\n",
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
-        testcase_raw(connfd, req, expected, "GET-Teacher", 0);
+        testcase(connfd, req, expected, "GET-Teacher", 0);
     }
-
-#endif
 }
 
 void rbtree_testcase(int connfd) {
     char req[REQ_BUF_SIZE];
 
-#if INSERT
-    for (int i = 0; i < SET_NUMS / 4; i++) {
-        char key[32];
-        int len = sprintf(key, "Teacher%d", i + START_NUM / 4);
-        key[len] = '\0';
-        char value[32];
-        len = sprintf(value, "King%d", i + START_NUM / 4);
-        value[len] = '\0';
-        const char* args[] = {key, value};
-        if (build_resp_request(req, sizeof(req), "RSET", 2, args) < 0)
-            exit(1);
-        testcase_raw(connfd, req, "+OK\r\n", "RSET-Teacher", 0);
-    }
-
-#else
-
-    for (int i = 0; i < (START_NUM + SET_NUMS) / 4; i++) {
+    for (int i = 0; i < GET_NUMS / 4; i++) {
         char key[32];
         int len = sprintf(key, "Teacher%d", i);
         key[len] = '\0';
@@ -217,31 +135,14 @@ void rbtree_testcase(int connfd) {
         char expected[64];
         snprintf(expected, sizeof(expected), "$%zu\r\nKing%d\r\n",
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
-        testcase_raw(connfd, req, expected, "RGET-Teacher", 0);
+        testcase(connfd, req, expected, "RGET-Teacher", 0);
     }
-#endif
 }
 
 void hash_testcase(int connfd) {
     char req[REQ_BUF_SIZE];
 
-#if INSERT
-    for (int i = 0; i < SET_NUMS / 4; i++) {
-        char key[32];
-        int len = sprintf(key, "Teacher%d", i + START_NUM / 4);
-        key[len] = '\0';
-        char value[32];
-        len = sprintf(value, "King%d", i + START_NUM / 4);
-        value[len] = '\0';
-        const char* args[] = {key, value};
-        if (build_resp_request(req, sizeof(req), "HSET", 2, args) < 0)
-            exit(1);
-        testcase_raw(connfd, req, "+OK\r\n", "HSET-Teacher", 0);
-    }
-
-#else
-
-    for (int i = 0; i < (START_NUM + SET_NUMS) / 4; i++) {
+    for (int i = 0; i < GET_NUMS / 4; i++) {
         char key[32];
         int len = sprintf(key, "Teacher%d", i);
         key[len] = '\0';
@@ -252,32 +153,16 @@ void hash_testcase(int connfd) {
         char expected[64];
         snprintf(expected, sizeof(expected), "$%zu\r\nKing%d\r\n",
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
-        testcase_raw(connfd, req, expected, "HGET-Teacher", 0);
+        testcase(connfd, req, expected, "HGET-Teacher", 0);
     }
-#endif
 }
 
 void skiptable_testcase(int connfd) {
     char req[REQ_BUF_SIZE];
 
     // const char* args1[] = {"SSET","Teacher", "King","SEXIST","Teacher"};
-#if INSERT
-    for (int i = 0; i < SET_NUMS / 4; i++) {
-        char key[32];
-        int len = sprintf(key, "Teacher%d", i + START_NUM / 4);
-        key[len] = '\0';
-        char value[32];
-        len = sprintf(value, "King%d", i + START_NUM / 4);
-        value[len] = '\0';
-        const char* args[] = {key, value};
-        if (build_resp_request(req, sizeof(req), "SSET", 2, args) < 0)
-            exit(1);
-        testcase_raw(connfd, req, "+OK\r\n", "SSET-Teacher", 0);
-    }
 
-#else
-
-    for (int i = 0; i < (START_NUM + SET_NUMS) / 4; i++) {
+    for (int i = 0; i < GET_NUMS / 4; i++) {
         char key[32];
         int len = sprintf(key, "Teacher%d", i);
         key[len] = '\0';
@@ -288,9 +173,8 @@ void skiptable_testcase(int connfd) {
         char expected[64];
         snprintf(expected, sizeof(expected), "$%zu\r\nKing%d\r\n",
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
-        testcase_raw(connfd, req, expected, "SGET-Teacher", 0);
+        testcase(connfd, req, expected, "SGET-Teacher", 0);
     }
-#endif
 }
 
 //   ./test 192.168.234.135  2000 1
@@ -308,8 +192,6 @@ int main(int argc, char* argv[]) {
 
     int connfd = connect_tcpserver(ip, port);
 
-#if INSERT
-
     rbtree_testcase(connfd);
 
     array_testcase(connfd);
@@ -318,16 +200,7 @@ int main(int argc, char* argv[]) {
 
     skiptable_testcase(connfd);
 
-#else
+    printf("***get 10w test case finished***\n");
 
-    rbtree_testcase(connfd);
-
-    array_testcase(connfd);
-
-    hash_testcase(connfd);
-
-    skiptable_testcase(connfd);
-
-#endif
     return 0;
 }

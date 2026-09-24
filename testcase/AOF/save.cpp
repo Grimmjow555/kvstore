@@ -15,7 +15,7 @@
 #define REQ_BUF_SIZE 256 // 请求内容较短，直接在栈上构建，避免频繁堆分配
 #define TIME_SUB_MS(tv1, tv2)                                                                      \
     ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
-#define SET_NUMS 100
+#define SET_NUMS 100000
 #define PRINT_PASS 0
 #define SAVE 1 // 测试保存功能
 
@@ -63,8 +63,8 @@ int build_resp_request(char* buf, size_t capacity, const char* cmd, int argc, co
     return (int)offset;
 }
 
-void testcase_raw(int connfd, const char* msg, const char* expected_pattern, const char* casename,
-                  int thread_id) {
+void testcase(int connfd, const char* msg, const char* expected_pattern, const char* casename,
+              int thread_id) {
     if (!msg || !expected_pattern || !casename)
         return;
 
@@ -78,33 +78,7 @@ void testcase_raw(int connfd, const char* msg, const char* expected_pattern, con
         printf("==> PASS ->  %s\n", casename);
 #endif
     } else {
-
         printf("==> FAILED -> %s, '%s' != '%s'\n", casename, result, expected_pattern);
-
-        exit(1);
-    }
-}
-void testcase(int connfd, const char* msg, const char* pattern, const char* casename,
-              int thread_id) {
-
-    if (!msg || !pattern || !casename)
-        return;
-
-    send_msg(connfd, msg, strlen(msg));
-
-    char result[MAX_MSG_LENGTH] = {0};
-    recv_msg(connfd, result, MAX_MSG_LENGTH);
-
-    if (strcmp(result, pattern) == 0) {
-
-#if PRINT_PASS
-        printf("==> PASS ->  %s\n", casename);
-#endif
-
-    } else {
-
-        printf("==> FAILED -> %s, '%s' != '%s' \n", casename, result, pattern);
-
         exit(1);
     }
 }
@@ -145,7 +119,7 @@ void array_testcase(int connfd) {
         const char* args1[] = {key, value};
         if (build_resp_request(req, sizeof(req), "SET", 2, args1) < 0)
             exit(1);
-        testcase_raw(connfd, req, "+OK\r\n", "SET-Teacher", 0);
+        testcase(connfd, req, "+OK\r\n", "SET-Teacher", 0);
     }
 
 #else
@@ -162,7 +136,7 @@ void array_testcase(int connfd) {
         char expected[64];
         snprintf(expected, sizeof(expected), "$%zu\r\nKing%d\r\n",
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
-        testcase_raw(connfd, req, expected, "GET-Teacher", 0);
+        testcase(connfd, req, expected, "GET-Teacher", 0);
     }
 
 #endif
@@ -182,7 +156,7 @@ void rbtree_testcase(int connfd) {
         const char* args[] = {key, value};
         if (build_resp_request(req, sizeof(req), "RSET", 2, args) < 0)
             exit(1);
-        testcase_raw(connfd, req, "+OK\r\n", "RSET-Teacher", 0);
+        testcase(connfd, req, "+OK\r\n", "RSET-Teacher", 0);
     }
 
 #else
@@ -198,7 +172,7 @@ void rbtree_testcase(int connfd) {
         char expected[64];
         snprintf(expected, sizeof(expected), "$%zu\r\nKing%d\r\n",
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
-        testcase_raw(connfd, req, expected, "RGET-Teacher", 0);
+        testcase(connfd, req, expected, "RGET-Teacher", 0);
     }
 #endif
 }
@@ -217,7 +191,7 @@ void hash_testcase(int connfd) {
         const char* args[] = {key, value};
         if (build_resp_request(req, sizeof(req), "HSET", 2, args) < 0)
             exit(1);
-        testcase_raw(connfd, req, "+OK\r\n", "HSET-Teacher", 0);
+        testcase(connfd, req, "+OK\r\n", "HSET-Teacher", 0);
     }
 
 #else
@@ -233,7 +207,7 @@ void hash_testcase(int connfd) {
         char expected[64];
         snprintf(expected, sizeof(expected), "$%zu\r\nKing%d\r\n",
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
-        testcase_raw(connfd, req, expected, "HGET-Teacher", 0);
+        testcase(connfd, req, expected, "HGET-Teacher", 0);
     }
 #endif
 }
@@ -253,7 +227,7 @@ void skiptable_testcase(int connfd) {
         const char* args[] = {key, value};
         if (build_resp_request(req, sizeof(req), "SSET", 2, args) < 0)
             exit(1);
-        testcase_raw(connfd, req, "+OK\r\n", "SSET-Teacher", 0);
+        testcase(connfd, req, "+OK\r\n", "SSET-Teacher", 0);
     }
 
 #else
@@ -269,7 +243,7 @@ void skiptable_testcase(int connfd) {
         char expected[64];
         snprintf(expected, sizeof(expected), "$%zu\r\nKing%d\r\n",
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
-        testcase_raw(connfd, req, expected, "SGET-Teacher", 0);
+        testcase(connfd, req, expected, "SGET-Teacher", 0);
     }
 #endif
 }
@@ -296,7 +270,7 @@ int main(int argc, char* argv[]) {
     char req[REQ_BUF_SIZE];
     if (build_resp_request(req, sizeof(req), "AOF CLEAR", 0, args_save) < 0)
         exit(1);
-    testcase_raw(connfd, req, "+OK\r\n", "AOF CLEAR", 0);
+    testcase(connfd, req, "+OK\r\n", "AOF CLEAR", 0);
 
     rbtree_testcase(connfd);
 
@@ -314,7 +288,7 @@ int main(int argc, char* argv[]) {
     char req[REQ_BUF_SIZE];
     if (build_resp_request(req, sizeof(req), "AOF LOAD", 0, args_load) < 0)
         exit(1);
-    testcase_raw(connfd, req, "+OK\r\n", "AOF LOAD", 0);
+    testcase(connfd, req, "+OK\r\n", "AOF LOAD", 0);
 
     rbtree_testcase(connfd);
 
@@ -324,7 +298,7 @@ int main(int argc, char* argv[]) {
 
     skiptable_testcase(connfd);
 
-    printf("test success\n");
+    printf("***AOF TEST SUCCESS***\n");
 
 #endif
     return 0;

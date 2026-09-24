@@ -10,7 +10,7 @@ struct kvs_array_item_t {
     //包含两个指针，共16字节，根据这两个指针可以找到两个字符串
 };
 
-#define KVS_ARRAY_SIZE 10240
+#define KVS_ARRAY_SIZE 40960
 
 struct kvs_array_t {
     kvs_array_item_t* table; //指针，同时也是数组的首地址

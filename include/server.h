@@ -34,7 +34,8 @@ struct conn {
 
     conn() : fd(-1), rlength(0), wlength(0) {
         rbuffer.resize(BUFFER_LENGTH);
-        wbuffer.resize(MAX_ALLOWED_LEN);
+        // 额外预留 4 字节：发送时把长度头直接写在响应体前面，一次 send 发出
+        wbuffer.resize(MAX_ALLOWED_LEN + 4);
     }
 };
 

@@ -12,7 +12,9 @@
 #include "network.h"
 #include <arpa/inet.h>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -33,29 +35,196 @@ extern kvs_hash_t global_hash;
 extern kvs_skiptable_t global_skiptable;
 #endif
 
+namespace {
+
+typedef void* (*kvs_alloc_fn)(size_t);
+typedef void* (*kvs_calloc_fn)(size_t, size_t);
+typedef void (*kvs_free_fn)(void*);
+
+// libc 分配器：jemalloc 链接进进程后会接管全局 malloc 符号，为了在
+// memory_allocator=malloc 时仍然确定地使用 glibc 的 malloc/free，这里从
+// libc.so.6 里单独取出这几个符号。
+static void* g_libc_handle = nullptr;
+static kvs_alloc_fn g_libc_malloc = nullptr;
+static kvs_calloc_fn g_libc_calloc = nullptr;
+static kvs_free_fn g_libc_free = nullptr;
+
+// jemalloc 分配器：CMake 构建时链接 libjemalloc，运行期再用
+// dlsym(RTLD_DEFAULT) 取出实际生效的符号。
+static kvs_alloc_fn g_jemalloc_malloc = nullptr;
+static kvs_calloc_fn g_jemalloc_calloc = nullptr;
+static kvs_free_fn g_jemalloc_free = nullptr;
+
+// 在 kvs_allocator_init() 之前一律走系统 malloc，避免初始化早期出现跨分配器释放。
+static int g_kvs_allocator = KVS_ALLOC_MALLOC;
+
+static bool kvs_symbol_comes_from(const void* symbol, const char* library_name) {
+    if (symbol == nullptr || library_name == nullptr) {
+        return false;
+    }
+
+    Dl_info info;
+    memset(&info, 0, sizeof(info));
+    if (dladdr(symbol, &info) == 0 || info.dli_fname == nullptr) {
+        return false;
+    }
+
+    return strstr(info.dli_fname, library_name) != nullptr;
+}
+
+static int kvs_allocator_load_libc(void) {
+    g_libc_handle = dlopen("libc.so.6", RTLD_NOW | RTLD_LOCAL);
+    if (g_libc_handle == nullptr) {
+        kvs_log(KVS_LOG_WARN,
+                "memory_allocator=malloc could not load libc.so.6, falling back to the "
+                "process-wide malloc: %s",
+                dlerror());
+        return -1;
+    }
+
+    g_libc_malloc = reinterpret_cast<kvs_alloc_fn>(dlsym(g_libc_handle, "malloc"));
+    g_libc_calloc = reinterpret_cast<kvs_calloc_fn>(dlsym(g_libc_handle, "calloc"));
+    g_libc_free = reinterpret_cast<kvs_free_fn>(dlsym(g_libc_handle, "free"));
+
+    if (g_libc_malloc == nullptr || g_libc_calloc == nullptr || g_libc_free == nullptr) {
+        kvs_log(KVS_LOG_WARN,
+                "memory_allocator=malloc could not resolve libc malloc/calloc/free, "
+                "falling back to the process-wide allocator");
+        dlclose(g_libc_handle);
+        g_libc_handle = nullptr;
+        g_libc_malloc = nullptr;
+        g_libc_calloc = nullptr;
+        g_libc_free = nullptr;
+        return -1;
+    }
+
+    Dl_info info;
+    memset(&info, 0, sizeof(info));
+    if (dladdr(reinterpret_cast<const void*>(g_libc_malloc), &info) != 0) {
+        kvs_log(KVS_LOG_DEBUG, "memory_allocator=malloc uses %s", info.dli_fname);
+    }
+    return 0;
+}
+
+static int kvs_allocator_load_jemalloc(void) {
+    void* sym = dlsym(RTLD_DEFAULT, "malloc");
+    if (!kvs_symbol_comes_from(sym, "jemalloc")) {
+        kvs_log(KVS_LOG_ERROR,
+                "memory_allocator=jemalloc but this binary is not linked with jemalloc; "
+                "install libjemalloc and rebuild, or pass -DJEMALLOC_LIBRARY=<path>");
+        return -1;
+    }
+
+    g_jemalloc_malloc = reinterpret_cast<kvs_alloc_fn>(dlsym(RTLD_DEFAULT, "malloc"));
+    g_jemalloc_calloc = reinterpret_cast<kvs_calloc_fn>(dlsym(RTLD_DEFAULT, "calloc"));
+    g_jemalloc_free = reinterpret_cast<kvs_free_fn>(dlsym(RTLD_DEFAULT, "free"));
+
+    if (g_jemalloc_malloc == nullptr || g_jemalloc_calloc == nullptr ||
+        g_jemalloc_free == nullptr) {
+        kvs_log(KVS_LOG_ERROR, "memory_allocator=jemalloc but malloc/calloc/free is missing");
+        g_jemalloc_malloc = nullptr;
+        g_jemalloc_calloc = nullptr;
+        g_jemalloc_free = nullptr;
+        return -1;
+    }
+
+    Dl_info info;
+    memset(&info, 0, sizeof(info));
+    if (dladdr(reinterpret_cast<const void*>(g_jemalloc_malloc), &info) != 0) {
+        kvs_log(KVS_LOG_DEBUG, "memory_allocator=jemalloc uses %s", info.dli_fname);
+    }
+    return 0;
+}
+
+// 根据配置选择实际分配器。必须在任何 kvs_malloc 之前调用。
+static int kvs_allocator_init(void) {
+    g_kvs_allocator = kvs_config_allocator();
+
+    switch (g_kvs_allocator) {
+    case KVS_ALLOC_MALLOC:
+        // 尽量取出 glibc 的 malloc；失败时退化为进程默认分配器。
+        kvs_allocator_load_libc();
+        return 0;
+    case KVS_ALLOC_JEMALLOC:
+        return kvs_allocator_load_jemalloc();
+    case KVS_ALLOC_MEMORYPOOL:
+#if ENABLE_MEMORYPOOL
+        slab_init();
+        kvs_log(KVS_LOG_DEBUG, "memory_allocator=memorypool uses the built-in slab allocator");
+        return 0;
+#else
+        kvs_log(KVS_LOG_ERROR,
+                "memory_allocator=memorypool but ENABLE_MEMORYPOOL is disabled at build time");
+        return -1;
+#endif
+    default:
+        kvs_log(KVS_LOG_ERROR, "Unknown memory_allocator value: %d", g_kvs_allocator);
+        return -1;
+    }
+}
+
+// 退出清理。不主动 dlclose libc/jemalloc：卸载分配器时若有任何块仍在使用会直接
+// 崩溃，而进程即将退出，把映射交给操作系统回收更安全。
+static void kvs_allocator_destroy(void) {
+#if ENABLE_MEMORYPOOL
+    if (g_kvs_allocator == KVS_ALLOC_MEMORYPOOL) {
+        slab_dest();
+    }
+#endif
+}
+
+} // namespace
+
 void* kvs_malloc(size_t size) {
 #if ENABLE_MEMORYPOOL
-    return slab_alloc(size);
-#else
-    return malloc(size);
+    if (g_kvs_allocator == KVS_ALLOC_MEMORYPOOL) {
+        return slab_alloc(size);
+    }
 #endif
+    if (g_kvs_allocator == KVS_ALLOC_JEMALLOC && g_jemalloc_malloc != nullptr) {
+        return g_jemalloc_malloc(size);
+    }
+    if (g_kvs_allocator == KVS_ALLOC_MALLOC && g_libc_malloc != nullptr) {
+        return g_libc_malloc(size);
+    }
+    return malloc(size);
 }
 
 void* kvs_calloc(size_t size) {
 #if ENABLE_MEMORYPOOL
-    return slab_calloc(size);
-#else
-    return calloc(1, size);
+    if (g_kvs_allocator == KVS_ALLOC_MEMORYPOOL) {
+        return slab_calloc(size);
+    }
 #endif
+    if (g_kvs_allocator == KVS_ALLOC_JEMALLOC && g_jemalloc_calloc != nullptr) {
+        return g_jemalloc_calloc(1, size);
+    }
+    if (g_kvs_allocator == KVS_ALLOC_MALLOC && g_libc_calloc != nullptr) {
+        return g_libc_calloc(1, size);
+    }
+    return calloc(1, size);
 }
 
 void kvs_free(void* ptr) {
+    if (ptr == nullptr) {
+        return;
+    }
+
 #if ENABLE_MEMORYPOOL
-    if (ptr != nullptr)
+    if (g_kvs_allocator == KVS_ALLOC_MEMORYPOOL) {
         slab_free_ptr(ptr);
-#else
-    free(ptr);
+        return;
+    }
 #endif
+    if (g_kvs_allocator == KVS_ALLOC_JEMALLOC && g_jemalloc_free != nullptr) {
+        g_jemalloc_free(ptr);
+        return;
+    }
+    if (g_kvs_allocator == KVS_ALLOC_MALLOC && g_libc_free != nullptr) {
+        g_libc_free(ptr);
+        return;
+    }
+    free(ptr);
 }
 
 const char* command[] = {"SET",      "GET",      "DEL",      "MOD",      "EXIST",
@@ -763,7 +932,9 @@ int kvs_reset_data() {
     // 这里只重置统计信息，不再 slab_dest() + slab_init()：
     // 把 chunk 交还系统会让其它线程（Replica 回放线程）手里正在使用的块变成悬空指针。
     // 引擎数据已由 destroy/init 重建，内存池自身的空闲链表本来就是一致的。
-    slab_reset();
+    if (g_kvs_allocator == KVS_ALLOC_MEMORYPOOL) {
+        slab_reset();
+    }
 #endif
     return init_kvengine();
 }
@@ -831,6 +1002,8 @@ int main(int argc, char* argv[]) {
                "     [--master-ip 127.0.0.1] [--master-port 19001]\n"
                "     [--log-level debug|info|warn|error|off]\n"
                "     [--persistence-mode none|rdb|aof|both]\n"
+               "     [--memory-allocator malloc|jemalloc|memorypool]\n"
+               "     [--network reactor|ntyco|proactor]\n"
                "  Legacy Master : %s <port> 0\n"
                "  Legacy Replica: %s <port> 1 <master_ip> <master_port>\n",
                argv[0], argv[0], argv[0]);
@@ -838,10 +1011,17 @@ int main(int argc, char* argv[]) {
     }
 
     kvs_log(KVS_LOG_INFO,
-            "Configuration: bind=%s port=%d role=%s log_level=%d persistence=rdb:%s,aof:%s",
+            "Configuration: bind=%s port=%d role=%s log_level=%d persistence=rdb:%s,aof:%s "
+            "allocator=%s network=%s",
             bind_ip, port, role == 0 ? "master" : "replica", kvs_config_log_level(),
             kvs_config_rdb_enabled() ? "on" : "off",
-            kvs_config_aof_enabled() ? "on" : "off");
+            kvs_config_aof_enabled() ? "on" : "off", kvs_config_allocator_name(),
+            kvs_config_network_name());
+
+    // 分配器必须在任何 kvs_malloc 之前确定，且运行期间不再改变。
+    if (kvs_allocator_init() != 0) {
+        return -1;
+    }
 
     if (ensure_data_directory() != 0) {
         return -1;
@@ -849,11 +1029,6 @@ int main(int argc, char* argv[]) {
 
     // 初始化 KV Engine
     init_kvengine();
-
-    //初始化内存池
-#if ENABLE_MEMORYPOOL
-    slab_init();
-#endif
 
     // 初始化复制模块
     if (role == 0) {
@@ -902,20 +1077,24 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 启动网络服务
-#if USE_REACTOR
-    // printf("**********USE reactor**********\n");
-    reactor_start(bind_ip, (unsigned short)port, kvs_protocol);
-
-#elif USE_NTYCO
-    // printf("**********USE NtyCo**********\n");
-    ntyco_start(bind_ip, (unsigned short)port, kvs_protocol);
-
-#elif USE_PROACTOR
-    // printf("**********USE proactor**********\n");
-    proactor_start(bind_ip, (unsigned short)port, kvs_protocol);
-
-#endif
+    // 启动网络服务。网络框架由 kvstore.conf 的 network_architecture
+    // （或命令行 --network）在运行时选择，三个后端都编在同一个二进制里；
+    // 默认值仍来自 include/network.h 的编译期宏。
+    switch (kvs_config_network()) {
+    case KVS_NETWORK_REACTOR:
+        kvs_log(KVS_LOG_INFO, "Starting network architecture: reactor (epoll)");
+        reactor_start(bind_ip, (unsigned short)port, kvs_protocol);
+        break;
+    case KVS_NETWORK_PROACTOR:
+        kvs_log(KVS_LOG_INFO, "Starting network architecture: proactor (io_uring)");
+        proactor_start(bind_ip, (unsigned short)port, kvs_protocol);
+        break;
+    case KVS_NETWORK_NTYCO:
+    default:
+        kvs_log(KVS_LOG_INFO, "Starting network architecture: ntyco (coroutine)");
+        ntyco_start(bind_ip, (unsigned short)port, kvs_protocol);
+        break;
+    }
 
 #if AOF_ENABLE
     kvs_aof_close();
@@ -924,8 +1103,6 @@ int main(int argc, char* argv[]) {
     // slab_dest() 会释放全部 chunk，必须确认没有其它线程还在分配/释放内存。
     kvs_replication_destroy();
     destroy_kvengine();
-#if ENABLE_MEMORYPOOL
-    slab_dest();
-#endif
+    kvs_allocator_destroy();
     return 0;
 }

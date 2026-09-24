@@ -6,7 +6,7 @@
 
 - 网络框架：reactor(epoll)、proactor(io_uring)、协程框架 NtyCo
 - 存储引擎：array、rbtree、hash、skiptable
-- 运行时内存分配：jemalloc
+- 运行时内存分配：可在配置文件中选择系统 `malloc`、`jemalloc` 或内置 slab 内存池
 - 协议：RESP
 - 特性：支持特殊字符 key/value、批量命令处理、RDB/AOF 持久化、主从同步
 
@@ -114,8 +114,9 @@ cmake --build build -j$(nproc)
 
 ### 配置文件方式
 
-服务支持从配置文件读取监听地址、端口、日志级别、主从模式和持久化模式。默认会依次尝试加载
-`./kvstore.conf` 和 `../kvstore.conf`，也可以使用 `--config <path>` 显式指定。
+服务支持从配置文件读取监听地址、端口、日志级别、主从模式、持久化模式、内存分配方式和
+网络架构。默认会依次尝试加载 `./kvstore.conf` 和 `../kvstore.conf`，也可以使用
+`--config <path>` 显式指定。
 
 ```bash
 ./build/kvstore --config ../kvstore.conf
@@ -131,6 +132,8 @@ role master
 master_ip 127.0.0.1
 master_port 19001
 persistence_mode none
+memory_allocator memorypool
+network_architecture ntyco
 ```
 
 字段说明：
@@ -141,12 +144,48 @@ persistence_mode none
 - `master_ip` / `master_port`：角色为 `replica` 时使用的主节点地址与端口。
 - `persistence_mode`：`none`、`rdb`、`aof` 或 `both`；也可以用 `rdb on/off`、
   `aof on/off` 分别控制。默认为 `none`，即 RDB 与 AOF 都不开启，需要时再显式打开。
+- `memory_allocator`：内存分配方式，取值如下，默认为 `memorypool`：
+  - `malloc`（也接受 `system`）：存储引擎使用 glibc 的 `malloc`/`calloc`/`free`，
+    不使用内存池。
+  - `jemalloc`：存储引擎使用构建时链接进来的 `libjemalloc`。
+  - `memorypool`（也接受 `slab`）：使用项目内置的 slab 内存池。
+
+  该选项决定 `kvs_malloc` / `kvs_calloc` / `kvs_free` 的底层实现，在进程启动时确定，
+  运行期间不能切换。为支持 `jemalloc` 模式，二进制会链接 `libjemalloc`，它同时会成为
+  进程默认的 `malloc` 实现；`malloc` 模式会显式取 glibc 符号，保证存储引擎数据不经过
+  jemalloc。构建阶段找不到 libjemalloc 时 CMake 会直接报错。
+- `network_architecture`：网络架构，取值如下。三个后端都会编入同一个二进制，可在配置
+  文件中自由选择（也接受 `network`、`net`、`io_engine` 等别名）：
+  - `reactor`（也接受 `epoll`）：reactor 后端，基于 epoll 事件循环。
+  - `ntyco`（也接受 `coroutine`）：NtyCo 协程后端，也是当前编译期默认值。
+  - `proactor`（也接受 `io_uring`）：proactor 后端，基于 io_uring。
+
+  该选项在进程启动时确定，运行期间不能切换；未配置时默认为 `ntyco`。后端选择不再是
+  编译期开关，三个后端始终编入同一个二进制，同一台机器上可以用不同配置文件启动不同
+  架构的实例。
 
 配置文件加载后，命令行开关可以覆盖其中的值，旧的位置参数方式仍兼容：
 
 ```bash
 ./build/kvstore --config ../kvstore.conf --port 7000 --role replica \
-  --master-ip 127.0.0.1 --master-port 19001 --persistence-mode aof
+  --master-ip 127.0.0.1 --master-port 19001 --persistence-mode aof \
+  --memory-allocator jemalloc --network reactor
+```
+
+只切换这一次运行的内存分配方式时，也可以不用改配置文件：
+
+```bash
+./build/kvstore --memory-allocator malloc
+./build/kvstore --memory-allocator jemalloc
+./build/kvstore --memory-allocator memorypool
+```
+
+只切换这一次运行的网络架构时，也可以不用改配置文件：
+
+```bash
+./build/kvstore --network reactor
+./build/kvstore --network ntyco
+./build/kvstore --network proactor
 ```
 
 ## 主从复制与同步
@@ -297,6 +336,10 @@ git submodule update --init --recursive
 ```bash
 sudo apt-get install -y liburing-dev libjemalloc-dev
 ```
+
+liburing 与 jemalloc 都是构建期依赖。CMake 会通过 `find_library(JEMALLOC_LIBRARY ...)`
+查找 jemalloc，找不到时直接报错；安装上面的包，或用
+`cmake -S . -B build -DJEMALLOC_LIBRARY=/path/to/libjemalloc.so` 指定路径。
 
 ### 找不到头文件或链接库
 

@@ -46,9 +46,15 @@ struct conn_ctx {
     int msg_len;         // 解析出的消息体长度
     int data_recv_len;   // 消息体已接收的字节数
 
+    size_t wtotal_len; // 本次响应帧总长度：4 字节长度头 + 响应体
+    size_t wsent_len;  // 已成功发出的字节数，用于发送缓冲区满时的续发
+
     conn_ctx() {
         rbuffer.resize(BUFFER_LENGTH);
-        wbuffer.resize(BUFFER_LENGTH);
+        // 响应缓冲区按最大消息长度分配，并额外预留 4 字节长度头空间
+        wbuffer.resize(MAX_ALLOWED_LEN + 4);
+        wtotal_len = 0;
+        wsent_len = 0;
     }
 };
 
@@ -135,7 +141,7 @@ int set_event_recv(struct io_uring* ring, int clientfd, int flags) {
 int set_event_send(struct io_uring* ring, conn_ctx* ctx, int sendlen, int flags) {
 
     // 参数检查：sendlen 必须为正数，且加上4字节头后不能超过缓冲区
-    if (!ctx || sendlen <= 0 || sendlen + 4 > BUFFER_LENGTH) {
+    if (!ctx || sendlen <= 0 || (size_t)sendlen + sizeof(uint32_t) > ctx->wbuffer.size()) {
         return -1;
     }
 
@@ -152,6 +158,8 @@ int set_event_send(struct io_uring* ring, conn_ctx* ctx, int sendlen, int flags)
 
     // 总发送长度 = 4字节头 + 实际数据长度
     size_t total_len = sizeof(net_len) + sendlen;
+    ctx->wtotal_len = total_len;
+    ctx->wsent_len = 0;
 
     struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
     if (!sqe) {
@@ -241,10 +249,10 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
                 int ret;
                 if (kvs_replication_accept_handshake(ctx->clientfd, ctx->rbuffer.data(),
                                                      ctx->msg_len) == 1) {
-                    ret = snprintf(ctx->wbuffer.data(), ctx->wbuffer.size(), "+OK\r\n");
+                    ret = snprintf(ctx->wbuffer.data(), ctx->wbuffer.size() - 4, "+OK\r\n");
                 } else {
                     ret = kvs_handler(ctx->rbuffer.data(), ctx->msg_len, ctx->wbuffer.data(),
-                                      ctx->wbuffer.size());
+                                      (int)(ctx->wbuffer.size() - 4));
                 }
                 // 转入发送阶段，不要 delete ctx
                 set_event_send(ring, ctx, ret, 0);
@@ -289,11 +297,42 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
     }
 #else
     case EVENT::WRITE: {
-        int sendlen = entries->res - 4;
+        int sendlen = entries->res;
+        if (sendlen <= 0) {
+            // sendlen < 0 为发送出错，sendlen == 0 表示对端已关闭连接
+            kvs_log(KVS_LOG_WARN, "[NETWORK] send error on connection [%d]: %d (%s)",
+                    ctx->clientfd, sendlen,
+                    sendlen < 0 ? strerror(-sendlen) : "connection closed");
+            close(ctx->clientfd);
+            delete ctx;
+            break;
+        }
+
+        ctx->wsent_len += (size_t)sendlen;
+        if (ctx->wsent_len < ctx->wtotal_len) {
+            // 只发出去一部分（通常是发送缓冲区满），继续提交剩余字节
+            struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
+            if (!sqe) {
+                io_uring_submit(ring);
+                sqe = io_uring_get_sqe(ring);
+            }
+            if (!sqe) {
+                kvs_log(KVS_LOG_WARN, "[NETWORK] no sqe to resend, close connection [%d]",
+                        ctx->clientfd);
+                close(ctx->clientfd);
+                delete ctx;
+                break;
+            }
+            io_uring_prep_send(sqe, ctx->clientfd, ctx->wbuffer.data() + ctx->wsent_len,
+                               ctx->wtotal_len - ctx->wsent_len, 0);
+            sqe->user_data = (__u64)(uintptr_t)ctx;
+            break; // 保留 ctx，等待下一次 WRITE 完成事件
+        }
 
         kvs_replication_finish_handshake(ctx->clientfd);
         set_event_recv(ring, ctx->clientfd, 0);
-        // printf("sendback to connection --> %d: [%d]%s\n", ctx->clientfd, sendlen, ctx->wbuffer);
+        // printf("sendback to connection --> %d: [%zu]%s\n", ctx->clientfd,
+        //        ctx->wsent_len - 4, ctx->wbuffer.data());
 
         delete ctx;
         break;

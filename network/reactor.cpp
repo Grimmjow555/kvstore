@@ -19,7 +19,9 @@ static msg_handler kvs_handler;
 int kvs_request(struct conn* c) {
     // printf("[kvs_request]recv %d: %s\n", c->rlength, c->rbuffer);
 
-    c->wlength = kvs_handler(c->rbuffer.data(), c->rlength, c->wbuffer.data(), c->wbuffer.size());
+    // 容量留出 4 字节：发送时在响应体前面补长度头，一次 send 发完
+    c->wlength = kvs_handler(c->rbuffer.data(), c->rlength, c->wbuffer.data(),
+                             c->wbuffer.size() - 4);
 
     return 0;
 }
@@ -193,7 +195,7 @@ int recv_cb(int clientfd) {
     int is_replica = kvs_replication_accept_handshake(clientfd, buffer, msg_len) == 1;
     if (is_replica) {
         conn_list[clientfd].wlength = snprintf(conn_list[clientfd].wbuffer.data(),
-                                               conn_list[clientfd].wbuffer.size(), "+OK\r\n");
+                                               conn_list[clientfd].wbuffer.size() - 4, "+OK\r\n");
     } else {
         // printf("[%d]RECV: %s\n", conn_list[clientfd].rlength, conn_list[clientfd].rbuffer);
 
@@ -207,20 +209,25 @@ int recv_cb(int clientfd) {
 }
 
 int send_cb(int clientfd) {
-    // 1. 发送 4 字节长度头（网络字节序）
+    struct conn* c = &conn_list[clientfd];
+
+    // 把响应体后移 4 字节，在头部补上长度头，长度头与响应体一次 send 发完，
+    // 避免拆成两个小包写入时被 TCP 小包延迟拖慢。
     uint32_t net_len = htonl(conn_list[clientfd].wlength);
-    ssize_t n = send(clientfd, &net_len, sizeof(net_len), 0);
-    if (n <= 0) {
-        kvs_log(KVS_LOG_WARN, "[NETWORK] send header error: errno %d %s", errno, strerror(errno));
+    size_t total_len = sizeof(net_len) + (size_t)c->wlength;
+    if (c->wlength < 0 || total_len > c->wbuffer.size()) {
+        kvs_log(KVS_LOG_WARN, "[NETWORK] invalid response length: %d", c->wlength);
         epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
         close(clientfd);
         return -1;
     }
 
-    // 2. 发送消息体
-    n = send(clientfd, conn_list[clientfd].wbuffer.data(), conn_list[clientfd].wlength, 0);
+    memmove(c->wbuffer.data() + sizeof(net_len), c->wbuffer.data(), (size_t)c->wlength);
+    memcpy(c->wbuffer.data(), &net_len, sizeof(net_len));
+
+    ssize_t n = send(clientfd, c->wbuffer.data(), total_len, 0);
     if (n <= 0) {
-        kvs_log(KVS_LOG_WARN, "[NETWORK] send body error: errno %d %s", errno, strerror(errno));
+        kvs_log(KVS_LOG_WARN, "[NETWORK] send error: errno %d %s", errno, strerror(errno));
         epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
         close(clientfd);
         return -1;
@@ -231,7 +238,7 @@ int send_cb(int clientfd) {
     // 发送完成，重新监听读事件
     set_event(clientfd, EPOLLIN, 0);
 
-    return n;
+    return (int)n;
 }
 
 #else

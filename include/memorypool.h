@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+// 编译期开关：是否把内置 slab 分配器编进二进制。
+// 是否真正使用它由运行期配置 memory_allocator 决定（malloc / jemalloc / memorypool）。
 #define ENABLE_MEMORYPOOL 1
 
 #if ENABLE_MEMORYPOOL

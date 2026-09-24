@@ -8,7 +8,10 @@
 
 - 网络框架：reactor（epoll）、proactor（io_uring）、协程框架 NtyCo，通过编译期宏选择。
 - 存储引擎：array、rbtree、hash、skiptable，分别对应一套 `SET/GET/DEL/MOD/EXIST` 风格命令。
-- 内存分配：业务代码统一走 `kvs_malloc` / `kvs_free`，当前底层为 `malloc` / `free`。
+- 内存分配：业务代码统一走 `kvs_malloc` / `kvs_calloc` / `kvs_free`；底层由配置项
+  `memory_allocator` 在启动时选择系统 `malloc`、构建时链接的 `jemalloc` 或内置 slab 内存池，
+  默认 `memorypool`。三种方式不可在运行期切换。为支持 jemalloc，CMake 会把 `libjemalloc`
+  链接进二进制，它会同时接管进程的 `malloc` 符号；`malloc` 模式显式取 glibc 符号。
 - 持久化：RDB 全量快照 + AOF 增量日志，启动后默认不自动恢复，需通过命令手动触发。
 - 复制：Master/Replica 角色由命令行参数决定，支持握手、全量同步和增量同步。
 
@@ -132,13 +135,15 @@ RESP 解析目前只接受完整的数组和 bulk string；不支持 null bulk s
 - `del` / `mod`：`0` 成功，`>0` 不存在，`<0` 错误。
 - `exist`：`0` 存在，`>0` 不存在，`<0` 错误。
 
-内存所有权：引擎在写入时复制 key/value，由引擎负责释放；调用方传入的字符串不会被接管。因此协议层的 `argv` 在命令执行后仍需单独释放。所有分配应使用 `kvs_malloc` / `kvs_free`。
+内存所有权：引擎在写入时复制 key/value，由引擎负责释放；调用方传入的字符串不会被接管。因此协议层的 `argv` 在命令执行后仍需单独释放。所有分配应使用 `kvs_malloc` / `kvs_calloc` / `kvs_free`，并且必须用同一分配器释放：配置项 `memory_allocator` 决定底层是 `malloc`、`jemalloc` 还是 slab 内存池。
 
 编译期开关：
 
 - 各存储引擎头部有 `ENABLE_ARRAY` / `ENABLE_RBTREE` / `ENABLE_HASH` / `ENABLE_SKIPTABLE`。
+- `include/memorypool.h` 的 `ENABLE_MEMORYPOOL` 只控制是否把 slab 分配器编入二进制；
+  是否实际使用由运行期配置 `memory_allocator` 决定（`malloc` / `jemalloc` / `memorypool`）。
 - `include/aof.h` 有 `AOF_ENABLE`。
-- `include/network.h` 有 `USE_REACTOR` / `USE_NTYCO` / `USE_PROACTOR`，当前 `USE_NTYCO=1`。CMake 会同时编译三个网络源文件，但运行时只走被启用的那一个；切换后必须重新构建并做协议级验证。
+- 网络后端不再用编译期宏选择：CMake 会同时编译 `network/` 下三个源文件，运行时由 `kvstore.conf` 的 `network_architecture`（或命令行 `--network`）选择 reactor / ntyco / proactor，未配置时默认 ntyco。切换后端不需要重新编译，但必须做协议级验证。
 
 修改这些宏时，要同步考虑对应模块是否被 CMake 编译，以及快照/复制逻辑中的 `#if` 条件。
 
