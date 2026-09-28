@@ -8,10 +8,10 @@
 
 - 网络框架：reactor（epoll）、proactor（io_uring）、协程框架 NtyCo，通过编译期宏选择。
 - 存储引擎：array、rbtree、hash、skiptable，分别对应一套 `SET/GET/DEL/MOD/EXIST` 风格命令。
-- 内存分配：业务代码统一走 `kvs_malloc` / `kvs_calloc` / `kvs_free`；底层由配置项
-  `memory_allocator` 在启动时选择系统 `malloc`、构建时链接的 `jemalloc` 或内置 slab 内存池，
-  默认 `memorypool`。三种方式不可在运行期切换。为支持 jemalloc，CMake 会把 `libjemalloc`
-  链接进二进制，它会同时接管进程的 `malloc` 符号；`malloc` 模式显式取 glibc 符号。
+- 内存分配：业务代码统一走 `kvs_malloc` / `kvs_calloc` / `kvs_free`；由
+  `include/memorypool.h` 的编译期宏 `ENABLE_MEMORYPOOL` 选择：`1` 使用内置 slab 内存池，
+  `0` 直接使用系统 `malloc` / `calloc` / `free`（若构建时链接了 jemalloc，则由其接管）。
+  该选择在编译期确定，运行期不能切换。
 - 持久化：RDB 全量快照 + AOF 增量日志，启动后默认不自动恢复，需通过命令手动触发。
 - 复制：Master/Replica 角色由命令行参数决定，支持握手、全量同步和增量同步。
 
@@ -135,13 +135,13 @@ RESP 解析目前只接受完整的数组和 bulk string；不支持 null bulk s
 - `del` / `mod`：`0` 成功，`>0` 不存在，`<0` 错误。
 - `exist`：`0` 存在，`>0` 不存在，`<0` 错误。
 
-内存所有权：引擎在写入时复制 key/value，由引擎负责释放；调用方传入的字符串不会被接管。因此协议层的 `argv` 在命令执行后仍需单独释放。所有分配应使用 `kvs_malloc` / `kvs_calloc` / `kvs_free`，并且必须用同一分配器释放：配置项 `memory_allocator` 决定底层是 `malloc`、`jemalloc` 还是 slab 内存池。
+内存所有权：引擎在写入时复制 key/value，由引擎负责释放；调用方传入的字符串不会被接管。因此协议层的 `argv` 在命令执行后仍需单独释放。所有分配应使用 `kvs_malloc` / `kvs_calloc` / `kvs_free`，并且必须用同一分配器释放：底层由编译期宏 `ENABLE_MEMORYPOOL` 决定是系统 `malloc`/`free` 还是内置 slab 内存池。
 
 编译期开关：
 
 - 各存储引擎头部有 `ENABLE_ARRAY` / `ENABLE_RBTREE` / `ENABLE_HASH` / `ENABLE_SKIPTABLE`。
-- `include/memorypool.h` 的 `ENABLE_MEMORYPOOL` 只控制是否把 slab 分配器编入二进制；
-  是否实际使用由运行期配置 `memory_allocator` 决定（`malloc` / `jemalloc` / `memorypool`）。
+- `include/memorypool.h` 的 `ENABLE_MEMORYPOOL` 决定 `kvs_malloc` / `kvs_calloc` /
+  `kvs_free` 是否使用内置 slab 内存池：`1` 使用，`0` 直接走系统 `malloc` / `calloc` / `free`。
 - `include/aof.h` 有 `AOF_ENABLE`。
 - 网络后端不再用编译期宏选择：CMake 会同时编译 `network/` 下三个源文件，运行时由 `kvstore.conf` 的 `network_architecture`（或命令行 `--network`）选择 reactor / ntyco / proactor，未配置时默认 ntyco。切换后端不需要重新编译，但必须做协议级验证。
 
@@ -177,12 +177,45 @@ AOF 实现位于 `persistence/aof.cpp`：
 
 实现位于 `replication/kvs_replication.cpp`。
 
-- Master 维护最多 `MAX_REPLICAS`（16）个 Replica 连接。
-- Replica 连接后发送握手命令 `*1\r\n$7\r\nREPLICA\r\n`。
-- 握手完成后，Master 遍历四个存储引擎，将数据编码为 `SET` / `RSET` / `HSET` / `SSET` 命令下发，完成全量同步。
-- 正常写命令通过 `kvs_replication_append` 增量广播给已完成全量同步的 Replica。
-- 需要重同步时，Master 发送 `REPLICA_RESET`，随后发送全量快照。
-- Replica 侧由独立线程接收帧并调用 `kvs_protocol` 回放；回放期间设置 replaying 标志。
+- Master 维护最多 `MAX_REPLICAS`（16）个连接槽位，每个槽位记录 fd、状态和已投递序号。
+- Replica 发送握手 `*1\r\n$7\r\nREPLICA\r\n`（外层仍是 4 字节长度前缀帧）；Master 回 `+OK` 后由
+  `kvs_replication_finish_handshake` 启动全量同步。
+- 每次写成功都会把 RESP 命令追加到全局增量日志 backlog（上限 `REPL_BACKLOG_MAX_BYTES`，
+  超出丢弃最老记录，落后过多的副本会被断开重连后重新全量同步）。独立线程
+  `repl_sender_thread` 按每个副本的 `next_seq` 用 `MSG_DONTWAIT` 投递，事件循环不做阻塞发送。
+- 全量同步复用 `kvs_snapshot_serialize()` 的 RDB 二进制内容分片下发，Replica 用
+  `kvs_snapshot_load_buffer()` 加载。快照与 backlog 序号在同一把存储锁内确定
+  （`build_tcp_full_sync_prefix`），保证快照之后落地的写命令仍能补发。
+- 复制帧负载首字节是类型字段，见 `include/kvs_replication.h` 的 `KVS_REPL_FRAME_*`；
+  握手帧与 `+OK` 仍是不带类型的网络层帧，Replica 对未知类型直接忽略（兼容该 `+OK`）。
+- fd 归网络层所有：复制模块只 `shutdown()` 触发断开，网络层在各后端断连路径调用
+  `kvs_replication_remove_replica()` 后再 `close()`，避免 fd 复用把复制帧写进普通客户端。
+- 启动全量同步时不能截断发送线程尚未发完的数据（只能回收已发送部分再追加新前缀），
+  否则对端会卡在半个帧上导致整条流错位。
+- Replica 侧由监督线程负责连接/重连（指数退避）并在连接内回放命令；回放用线程局部
+  `replication_replaying` 标记，避免误伤本地客户端的 AOF 记录。
+- 实时增量由 eBPF 采集（`KVS_ENABLE_EBPF_REALTIME=1`），链路是
+  `kvs_ebpf_notify_write()`（uprobe 挂载点，在存储锁内调用）-> `BPF_PROG_TYPE_KPROBE` 程序读
+  `pt_regs` 里的 `(seq, argc, argv)` 并写 `BPF_MAP_TYPE_RINGBUF` -> 消费线程 -> backlog ->
+  发送线程。程序用裸 `bpf(2)` 加载、`perf_event_open` + `PERF_EVENT_IOC_SET_BPF` attach，
+  不依赖 libbpf/bpftool。触发点用 uprobe 而不是 kprobe：kprobe 只能挂内核函数，既读不到应用层
+  参数，也会在 proactor(io_uring) 后端下漏事件。跨主机可用——eBPF 只负责本机采集，投递仍走
+  TCP/RDMA，不再要求两个进程同内核（这是与已被删除的 `BPF_MAP_TYPE_QUEUE` 方案的本质区别）。
+  ringbuf 队列满时 `reserve` 会失败导致丢事件，因此记录带自增序号，消费线程发现序号缺口就
+  `kvs_replication_resync()`，绝不静默丢命令；参数超过 `KVS_EBPF_EVENT_ARG_MAX`(1024) 或参数
+  多于 3 个的命令不走采集、直接落 backlog，但落之前必须先 `kvs_ebpf_wait_drained()` 排队，
+  否则会插到前序命令前面（全量快照取 `base_seq` 前同理）。任何 attach 失败都自动回退为
+  「写路径直接落 backlog」。改这些常量/接口时需同步 `readme.md`、`setup_ebpf.sh` 与
+  `include/kvs_ebpf.h`。
+- RDMA 只用于全量快照搬运（`KVS_ENABLE_RDMA`，Master 监听 TCP 端口+1）：Replica 先 RDMA 拉快照，
+  再发 TCP 握手，Master 按记录的快照序号补发增量。实现用普通 `IBV_WR_RDMA_WRITE` + 单独一条
+  SEND 通知，**不要改回 `IBV_WR_RDMA_WRITE_WITH_IMM`**：SoftiWARP 下 `ibv_post_send` 会返回
+  ENOSPC(28)。Replica 的 `master_ip` 必须是 RDMA 网卡 IP，回环地址无法 resolve。
+
+存储引擎没有内部锁，所有存储访问必须经过 `kvstore.cpp` 的 `kvs_data_lock()` /
+`kvs_data_unlock()`（可重入锁）。当前加锁点：命令分发 `kvs_filter_protocol`、Replica 回放与
+SNAPSHOT 加载、RDMA 快照序列化、全量快照序列化。锁顺序固定为
+存储锁 -> 复制锁（`g_repl_mutex`），不得反向获取。
 
 避免复制/AOF 回环的核心条件在 `kvstore.cpp` 的写分支中：
 

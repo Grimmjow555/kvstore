@@ -5,10 +5,12 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include "kvs_config.h"
 #include "kvs_replication.h"
+#include "kvs_shutdown.h"
 #include "server.h"
 
 //定义了一个类型别s名msg_handler
@@ -20,8 +22,8 @@ int kvs_request(struct conn* c) {
     // printf("[kvs_request]recv %d: %s\n", c->rlength, c->rbuffer);
 
     // 容量留出 4 字节：发送时在响应体前面补长度头，一次 send 发完
-    c->wlength = kvs_handler(c->rbuffer.data(), c->rlength, c->wbuffer.data(),
-                             c->wbuffer.size() - 4);
+    c->wlength =
+        kvs_handler(c->rbuffer.data(), c->rlength, c->wbuffer.data(), c->wbuffer.size() - 4);
 
     return 0;
 }
@@ -36,8 +38,33 @@ int epfd = 0;
 // struct conn conn_list[CONN_SIZE] = {0};
 std::vector<conn> conn_list(CONN_SIZE);
 
+// 关闭一条客户端连接：摘掉 epoll 注册、关闭 fd，并把该连接占用的收发缓冲区
+// 还给分配器。缓冲区是按连接按需分配的（见 conn::ensure_*），如果断连时只
+// close(fd) 而不释放，这块内存会一直挂在这个 fd 对应的 conn 上，直到该 fd 被
+// 新连接复用，反复连接/断开会持续累积。
+static void close_client_conn(int clientfd) {
+    epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
+    // 关闭前先通知复制模块释放槽位：fd 号可能立刻被下一个连接复用，
+    // 若复制侧仍保留旧映射，增量数据会被写进普通客户端连接。
+    kvs_replication_remove_replica(clientfd);
+    close(clientfd);
+
+    if (clientfd >= 0 && (size_t)clientfd < conn_list.size()) {
+        // swap 一个空 vector 是 C++11 里确定能把容量释放掉的写法，
+        // clear()+shrink_to_fit() 的释放只是非强制建议。
+        std::vector<char>().swap(conn_list[clientfd].rbuffer);
+        std::vector<char>().swap(conn_list[clientfd].wbuffer);
+        conn_list[clientfd].fd = -1;
+        conn_list[clientfd].rlength = 0;
+        conn_list[clientfd].wlength = 0;
+    }
+}
+
 static int init_server(const char* bind_ip, unsigned short port) {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    // 服务重启时避免被上一次残留的 TIME_WAIT 连接占用端口。
+    int reuse = 1;
+    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
     struct sockaddr_in servaddr = {0};
     servaddr.sin_family = AF_INET;
     if (bind_ip == nullptr || bind_ip[0] == '\0' || strcmp(bind_ip, "*") == 0) {
@@ -79,13 +106,8 @@ int event_register(int fd, int event) {
     conn_list[fd].send_callback = send_cb;
     conn_list[fd].rlength = 0;
     conn_list[fd].wlength = 0;
-#if 1
-    std::fill(conn_list[fd].rbuffer.begin(), conn_list[fd].rbuffer.end(), 0);
-    std::fill(conn_list[fd].wbuffer.begin(), conn_list[fd].wbuffer.end(), 0);
-#else
-    memset(conn_list[fd].rbuffer.data(), 0, BUFFER_LENGTH);
-    memset(conn_list[fd].wbuffer.data(), 0, BUFFER_LENGTH);
-#endif
+    // 缓冲区在 recv_cb 首次收到数据时按需扩容，这里不再清空：
+    // 接收缓冲区只会按 rlength 读取，发送缓冲区每次响应都会被重新写入。
 
     set_event(fd, event, 1);
     return 0;
@@ -102,6 +124,13 @@ int accept_cb(int listenfd) {
 
     kvs_log(KVS_LOG_DEBUG, "[NETWORK] accept finished, clientfd: %d", clientfd);
 
+    // 给客户端连接设置接收超时：配合下面的读循环，半包请求不会让事件循环
+    // 永久卡在 recv 上——每次超时都回到循环头检查停止标志。
+    struct timeval recv_timeout;
+    recv_timeout.tv_sec = 0;
+    recv_timeout.tv_usec = KVS_SHUTDOWN_POLL_MS * 1000;
+    setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout));
+
 #if USE_EPOLLET
     event_register(clientfd, EPOLLIN | EPOLLET);
 #else
@@ -112,37 +141,31 @@ int accept_cb(int listenfd) {
 }
 #if 1
 int recv_cb(int clientfd) {
-    // 1. 读取 4 字节长度头
+    // 1. 读取 4 字节长度头。
+    //
+    // 这里把「首次读取」和「补齐半包」合并成同一个循环，并显式处理
+    // EAGAIN/EWOULDBLOCK（SO_RCVTIMEO 到期）与 EINTR：这两种情况下都回到
+    // 循环头检查停止标志，避免客户端只发半个请求时事件循环再也退不出去。
     uint32_t net_len;
-    ssize_t n = recv(clientfd, &net_len, sizeof(net_len), 0);
-    if (n == 0) {
-        kvs_log(KVS_LOG_INFO, "[NETWORK] client disconnect: %d", clientfd);
-        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
-        close(clientfd);
-        return 0;
-    } else if (n < 0) {
-        kvs_log(KVS_LOG_WARN, "[NETWORK] recv header error, errno: %d, %s", errno,
-                strerror(errno));
-        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
-        close(clientfd);
-        return 0;
-    }
-
-    // 确保读满 4 字节（处理半包）
+    ssize_t n = 0;
     while (n < (ssize_t)sizeof(net_len)) {
+        if (g_kvs_shutdown) {
+            // 收到停止请求：不必等这个半包收完，直接断开让服务尽快收尾
+            close_client_conn(clientfd);
+            return 0;
+        }
+
         ssize_t ret = recv(clientfd, (char*)&net_len + n, sizeof(net_len) - n, 0);
         if (ret == 0) {
             kvs_log(KVS_LOG_INFO, "[NETWORK] client disconnect: %d", clientfd);
-            epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
-            close(clientfd);
+            close_client_conn(clientfd);
             return 0;
         } else if (ret < 0) {
-            if (errno == EINTR)
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
                 continue;
             kvs_log(KVS_LOG_WARN, "[NETWORK] recv header error, errno: %d, %s", errno,
                     strerror(errno));
-            epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
-            close(clientfd);
+            close_client_conn(clientfd);
             return 0;
         }
         n += ret;
@@ -153,37 +176,42 @@ int recv_cb(int clientfd) {
     // 检查消息体长度是否超过缓冲区（留一个字节给 '\0'）
     // 检查消息长度是否在允许范围内
     if (msg_len > MAX_ALLOWED_LEN) {
-        kvs_log(KVS_LOG_WARN, "[NETWORK] message too long: %u (max: %u)", msg_len,
-                MAX_ALLOWED_LEN);
+        kvs_log(KVS_LOG_WARN, "[NETWORK] message too long: %u (max: %u)", msg_len, MAX_ALLOWED_LEN);
         // 可选：发送错误响应并继续服务，或直接关闭连接
         const char* err = "-ERR message too long\r\n";
         send(clientfd, err, strlen(err), 0);
-        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
-        close(clientfd);
+        close_client_conn(clientfd);
         return 0;
     }
 
-    // 修改字符串容积以适配消息大小
-    conn_list[clientfd].rbuffer.resize(msg_len + 1);
+    // 按需扩容接收缓冲区（只给真正收到数据的连接分配）
+    if (conn_list[clientfd].ensure_rbuffer((size_t)msg_len + 1) != 0) {
+        kvs_log(KVS_LOG_WARN, "[NETWORK] rbuffer resize failed, msg_len: %u", msg_len);
+        close_client_conn(clientfd);
+        return 0;
+    }
 
     // 2. 读取消息体（循环读满 msg_len 字节）
     char* buffer = conn_list[clientfd].rbuffer.data();
 
     n = 0;
     while (n < (ssize_t)msg_len) {
+        if (g_kvs_shutdown) {
+            close_client_conn(clientfd);
+            return 0;
+        }
+
         ssize_t ret = recv(clientfd, buffer + n, msg_len - n, 0);
         if (ret == 0) {
             kvs_log(KVS_LOG_INFO, "[NETWORK] client disconnect: %d", clientfd);
-            epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
-            close(clientfd);
+            close_client_conn(clientfd);
             return 0;
         } else if (ret < 0) {
-            if (errno == EINTR)
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
                 continue;
             kvs_log(KVS_LOG_WARN, "[NETWORK] recv body error, errno: %d, %s", errno,
                     strerror(errno));
-            epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
-            close(clientfd);
+            close_client_conn(clientfd);
             return 0;
         }
         n += ret;
@@ -191,6 +219,14 @@ int recv_cb(int clientfd) {
 
     buffer[msg_len] = '\0'; // 方便字符串处理
     conn_list[clientfd].rlength = msg_len;
+
+    // 响应缓冲区同样按需分配：分配后 kvs_handler 最多可写 wbuffer.size()-4 字节，
+    // 发送时再在最前面补 4 字节长度头。
+    if (conn_list[clientfd].ensure_wbuffer(MAX_ALLOWED_LEN + 4) != 0) {
+        kvs_log(KVS_LOG_WARN, "[NETWORK] wbuffer resize failed, clientfd: %d", clientfd);
+        close_client_conn(clientfd);
+        return 0;
+    }
 
     int is_replica = kvs_replication_accept_handshake(clientfd, buffer, msg_len) == 1;
     if (is_replica) {
@@ -217,8 +253,7 @@ int send_cb(int clientfd) {
     size_t total_len = sizeof(net_len) + (size_t)c->wlength;
     if (c->wlength < 0 || total_len > c->wbuffer.size()) {
         kvs_log(KVS_LOG_WARN, "[NETWORK] invalid response length: %d", c->wlength);
-        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
-        close(clientfd);
+        close_client_conn(clientfd);
         return -1;
     }
 
@@ -228,8 +263,7 @@ int send_cb(int clientfd) {
     ssize_t n = send(clientfd, c->wbuffer.data(), total_len, 0);
     if (n <= 0) {
         kvs_log(KVS_LOG_WARN, "[NETWORK] send error: errno %d %s", errno, strerror(errno));
-        epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);
-        close(clientfd);
+        close_client_conn(clientfd);
         return -1;
     }
 
@@ -299,15 +333,33 @@ int reactor_start(const char* bind_ip, unsigned short port, msg_handler handler)
     epfd = epoll_create(1);
     int sockfds[PORT_NUMS];
     for (int i = 0; i < PORT_NUMS; ++i) {
-        sockfds[i] = init_server(bind_ip, port + i);
+        int listenfd = init_server(bind_ip, port + i);
+        if (listenfd < 0) {
+            // 监听失败必须退出：继续拿无效 fd 去索引 conn_list 会越界写。
+            kvs_log(KVS_LOG_ERROR, "[NETWORK] listen init failed on port %d", port + i);
+            for (int j = 0; j < i; ++j) {
+                close(sockfds[j]);
+            }
+            return -1;
+        }
+        sockfds[i] = listenfd;
         conn_list[sockfds[i]].fd = sockfds[i];
         conn_list[sockfds[i]].r_action.accept_callback = accept_cb;
         set_event(sockfds[i], EPOLLIN, 1);
     }
 
     struct epoll_event events[1024] = {0};
-    while (1) { // mainloop
-        int nready = epoll_wait(epfd, events, 1024, -1);
+    // 用有限超时轮询而不是 -1 永久阻塞：SIGINT/SIGTERM 可能被投递到复制线程，
+    // 主线程的 epoll_wait 未必收到 EINTR，靠超时保证停止标志一定能被看到。
+    while (!g_kvs_shutdown) { // mainloop
+        int nready = epoll_wait(epfd, events, 1024, KVS_SHUTDOWN_POLL_MS);
+        if (nready < 0) {
+            if (errno == EINTR) {
+                continue; // 回到循环头检查停止标志
+            }
+            kvs_log(KVS_LOG_ERROR, "[NETWORK] epoll_wait failed: %s", strerror(errno));
+            break;
+        }
         for (int i = 0; i < nready; ++i) {
             int connfd = events[i].data.fd;
             if (is_listenfd(sockfds, connfd)) {
@@ -323,4 +375,10 @@ int reactor_start(const char* bind_ip, unsigned short port, msg_handler handler)
             }
         }
     }
+
+    for (int i = 0; i < PORT_NUMS; ++i) {
+        close(sockfds[i]);
+    }
+    kvs_log(KVS_LOG_INFO, "[NETWORK] reactor loop exited");
+    return 0;
 }

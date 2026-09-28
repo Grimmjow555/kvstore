@@ -21,6 +21,7 @@
  *   - cls   ：释放时 O(1) 找到所属 size class，无需扫描、无需调用方传 size；
  *   - magic ：区分"已分配 / 已回收"，从而识别 double free 与野指针。
  */
+#if ENABLE_MEMORYPOOL
 
 // 每次向系统申请的 chunk 大小。越大越省系统调用，越小越省常驻内存。
 #define MP_CHUNK_SIZE (64 * 1024)
@@ -32,7 +33,7 @@
 #define MP_MAGIC_ALLOC 0x4B565350u // 'KVSP'：块处于已分配状态
 #define MP_MAGIC_FREE 0x4B565346u  // 'KVSF'：块位于空闲链表（用于识别 double free）
 
-#define MP_CLASS_COUNT 7
+#define MP_CLASS_COUNT 3
 #define MP_CLASS_LARGE 0xFFFFFFFFu // 超过最大 class 的请求直接走 malloc
 
 typedef struct mp_hdr_s {
@@ -58,7 +59,7 @@ typedef struct mp_chunk_s {
     uint32_t nblocks;
 } mp_chunk_t;
 
-static int mp_class_sizes[MP_CLASS_COUNT] = {16, 32, 64, 128, 256, 512, 1024};
+static int mp_class_sizes[MP_CLASS_COUNT] = {16, 32, 64};
 
 // 线程本地空闲链表：快路径不加锁
 static thread_local mp_bin_t mp_bins[MP_CLASS_COUNT];
@@ -305,3 +306,4 @@ void slab_stats(void) {
         printf("Slab[%4d bytes]: free=%zu\n", mp_class_sizes[i], mp_bins[i].free_count);
     }
 }
+#endif

@@ -5,6 +5,7 @@
 #include "kvs_hash.h"
 #include "kvs_rbtree.h"
 #include "kvs_replication.h"
+#include "kvs_shutdown.h"
 #include "kvs_skiptable.h"
 #include "kvs_snapshot.h"
 #include "kvstore.h"
@@ -12,12 +13,89 @@
 #include "network.h"
 #include <arpa/inet.h>
 #include <cerrno>
-#include <cstdlib>
 #include <cstring>
-#include <dlfcn.h>
+#include <iostream>
+#include <pthread.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+// ==================== 优雅关闭 ====================
+//
+// 三个网络后端的服务循环都是常驻的，收到 SIGINT/SIGTERM 时如果不做处理，
+// 进程会被默认动作直接终止，下面的收尾流程（AOF 落盘 -> 停止复制线程 ->
+// 释放引擎 -> 销毁内存池）不会执行。
+//
+// 信号处理函数必须保持异步信号安全，只允许置位 g_kvs_shutdown；各后端循环
+// 用有限超时轮询该标志（信号可能投递到任意线程，不能依赖 EINTR 一定会打断
+// 事件循环线程）。
+//
+// 兜底语义：置位后同时启动 alarm 定时器，收尾若卡在某个子系统内部
+// （例如第三方 RDMA 库的阻塞调用）就强制退出；再收到一次停止信号同样
+// 立即强制退出，避免出现“按了 Ctrl+C 却永远停不下来”的情况。
+// 收尾超时（秒）：可编译期覆盖，便于测试
+#ifndef KVS_SHUTDOWN_GRACE_SEC
+#define KVS_SHUTDOWN_GRACE_SEC 10
+#endif
+
+volatile sig_atomic_t g_kvs_shutdown = 0;
+
+// 信号处理函数里只能调用异步信号安全的接口：write + _exit 满足，
+// 日志、锁、内存分配都不允许出现在这里。
+#define KVS_SHUTDOWN_FORCE_EXIT(msg_literal)                                                       \
+    do {                                                                                           \
+        static const char kvs_force_exit_msg[] = msg_literal;                                      \
+        ssize_t ignored =                                                                          \
+            write(STDERR_FILENO, kvs_force_exit_msg, sizeof(kvs_force_exit_msg) - 1);              \
+        (void)ignored;                                                                             \
+        _exit(0);                                                                                  \
+    } while (0)
+
+static void kvs_shutdown_signal_handler(int signo) {
+    (void)signo;
+
+    if (g_kvs_shutdown) {
+        // 第二次收到停止信号：不再等收尾，直接退出
+        KVS_SHUTDOWN_FORCE_EXIT("\n[kvstore] 再次收到停止信号，跳过剩余收尾直接退出\n");
+    }
+
+    g_kvs_shutdown = 1;
+    // 兜底定时器：收尾若卡住，到点由 SIGALRM 处理函数强制退出
+    alarm(KVS_SHUTDOWN_GRACE_SEC);
+}
+
+static void kvs_shutdown_alarm_handler(int signo) {
+    (void)signo;
+    KVS_SHUTDOWN_FORCE_EXIT("\n[kvstore] 优雅关闭超时，强制退出\n");
+}
+
+void kvs_shutdown_install_handlers() {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = kvs_shutdown_signal_handler;
+    // 不设 SA_RESTART：让阻塞中的系统调用返回 EINTR，尽快回到循环判断标志。
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
+
+    // 兜底定时器：SIGALRM 到点直接退出，见 kvs_shutdown_alarm_handler
+    struct sigaction sa_alarm;
+    memset(&sa_alarm, 0, sizeof(sa_alarm));
+    sa_alarm.sa_handler = kvs_shutdown_alarm_handler;
+    sigemptyset(&sa_alarm.sa_mask);
+    sa_alarm.sa_flags = 0;
+    sigaction(SIGALRM, &sa_alarm, nullptr);
+
+    // 客户端中途断开时 send/write 会触发 SIGPIPE，默认动作会直接杀死进程。
+    // 各后端的写路径已经按返回 -1 处理断连，这里只需忽略该信号。
+    struct sigaction ign;
+    memset(&ign, 0, sizeof(ign));
+    ign.sa_handler = SIG_IGN;
+    sigemptyset(&ign.sa_mask);
+    ign.sa_flags = 0;
+    sigaction(SIGPIPE, &ign, nullptr);
+}
 
 #if ENABLE_ARRAY
 extern kvs_array_t global_array;
@@ -35,196 +113,51 @@ extern kvs_hash_t global_hash;
 extern kvs_skiptable_t global_skiptable;
 #endif
 
-namespace {
+// ==================== 存储引擎全局锁 ====================
+//
+// 复制模块存在多个访问存储引擎的线程：
+//   - Master：事件循环线程处理客户端命令，RDMA 监听线程生成全量快照；
+//   - Replica：事件循环线程服务本地客户端，复制回放线程应用 Master 命令。
+// 存储引擎本身不加锁，因此统一在这里串行化。
+//
+// 必须是可重入锁：命令分发内部还会调用 kvs_snapshot_load / kvs_aof_replay，
+// 它们又会进入 kvs_filter_protocol。
+static pthread_mutex_t g_data_mutex;
+static pthread_once_t g_data_mutex_once = PTHREAD_ONCE_INIT;
 
-typedef void* (*kvs_alloc_fn)(size_t);
-typedef void* (*kvs_calloc_fn)(size_t, size_t);
-typedef void (*kvs_free_fn)(void*);
-
-// libc 分配器：jemalloc 链接进进程后会接管全局 malloc 符号，为了在
-// memory_allocator=malloc 时仍然确定地使用 glibc 的 malloc/free，这里从
-// libc.so.6 里单独取出这几个符号。
-static void* g_libc_handle = nullptr;
-static kvs_alloc_fn g_libc_malloc = nullptr;
-static kvs_calloc_fn g_libc_calloc = nullptr;
-static kvs_free_fn g_libc_free = nullptr;
-
-// jemalloc 分配器：CMake 构建时链接 libjemalloc，运行期再用
-// dlsym(RTLD_DEFAULT) 取出实际生效的符号。
-static kvs_alloc_fn g_jemalloc_malloc = nullptr;
-static kvs_calloc_fn g_jemalloc_calloc = nullptr;
-static kvs_free_fn g_jemalloc_free = nullptr;
-
-// 在 kvs_allocator_init() 之前一律走系统 malloc，避免初始化早期出现跨分配器释放。
-static int g_kvs_allocator = KVS_ALLOC_MALLOC;
-
-static bool kvs_symbol_comes_from(const void* symbol, const char* library_name) {
-    if (symbol == nullptr || library_name == nullptr) {
-        return false;
-    }
-
-    Dl_info info;
-    memset(&info, 0, sizeof(info));
-    if (dladdr(symbol, &info) == 0 || info.dli_fname == nullptr) {
-        return false;
-    }
-
-    return strstr(info.dli_fname, library_name) != nullptr;
+static void kvs_data_mutex_init() {
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&g_data_mutex, &attr);
+    pthread_mutexattr_destroy(&attr);
 }
 
-static int kvs_allocator_load_libc(void) {
-    g_libc_handle = dlopen("libc.so.6", RTLD_NOW | RTLD_LOCAL);
-    if (g_libc_handle == nullptr) {
-        kvs_log(KVS_LOG_WARN,
-                "memory_allocator=malloc could not load libc.so.6, falling back to the "
-                "process-wide malloc: %s",
-                dlerror());
-        return -1;
-    }
-
-    g_libc_malloc = reinterpret_cast<kvs_alloc_fn>(dlsym(g_libc_handle, "malloc"));
-    g_libc_calloc = reinterpret_cast<kvs_calloc_fn>(dlsym(g_libc_handle, "calloc"));
-    g_libc_free = reinterpret_cast<kvs_free_fn>(dlsym(g_libc_handle, "free"));
-
-    if (g_libc_malloc == nullptr || g_libc_calloc == nullptr || g_libc_free == nullptr) {
-        kvs_log(KVS_LOG_WARN,
-                "memory_allocator=malloc could not resolve libc malloc/calloc/free, "
-                "falling back to the process-wide allocator");
-        dlclose(g_libc_handle);
-        g_libc_handle = nullptr;
-        g_libc_malloc = nullptr;
-        g_libc_calloc = nullptr;
-        g_libc_free = nullptr;
-        return -1;
-    }
-
-    Dl_info info;
-    memset(&info, 0, sizeof(info));
-    if (dladdr(reinterpret_cast<const void*>(g_libc_malloc), &info) != 0) {
-        kvs_log(KVS_LOG_DEBUG, "memory_allocator=malloc uses %s", info.dli_fname);
-    }
-    return 0;
+void kvs_data_lock() {
+    pthread_once(&g_data_mutex_once, kvs_data_mutex_init);
+    pthread_mutex_lock(&g_data_mutex);
 }
 
-static int kvs_allocator_load_jemalloc(void) {
-    void* sym = dlsym(RTLD_DEFAULT, "malloc");
-    if (!kvs_symbol_comes_from(sym, "jemalloc")) {
-        kvs_log(KVS_LOG_ERROR,
-                "memory_allocator=jemalloc but this binary is not linked with jemalloc; "
-                "install libjemalloc and rebuild, or pass -DJEMALLOC_LIBRARY=<path>");
-        return -1;
-    }
-
-    g_jemalloc_malloc = reinterpret_cast<kvs_alloc_fn>(dlsym(RTLD_DEFAULT, "malloc"));
-    g_jemalloc_calloc = reinterpret_cast<kvs_calloc_fn>(dlsym(RTLD_DEFAULT, "calloc"));
-    g_jemalloc_free = reinterpret_cast<kvs_free_fn>(dlsym(RTLD_DEFAULT, "free"));
-
-    if (g_jemalloc_malloc == nullptr || g_jemalloc_calloc == nullptr ||
-        g_jemalloc_free == nullptr) {
-        kvs_log(KVS_LOG_ERROR, "memory_allocator=jemalloc but malloc/calloc/free is missing");
-        g_jemalloc_malloc = nullptr;
-        g_jemalloc_calloc = nullptr;
-        g_jemalloc_free = nullptr;
-        return -1;
-    }
-
-    Dl_info info;
-    memset(&info, 0, sizeof(info));
-    if (dladdr(reinterpret_cast<const void*>(g_jemalloc_malloc), &info) != 0) {
-        kvs_log(KVS_LOG_DEBUG, "memory_allocator=jemalloc uses %s", info.dli_fname);
-    }
-    return 0;
+void kvs_data_unlock() {
+    pthread_once(&g_data_mutex_once, kvs_data_mutex_init);
+    pthread_mutex_unlock(&g_data_mutex);
 }
-
-// 根据配置选择实际分配器。必须在任何 kvs_malloc 之前调用。
-static int kvs_allocator_init(void) {
-    g_kvs_allocator = kvs_config_allocator();
-
-    switch (g_kvs_allocator) {
-    case KVS_ALLOC_MALLOC:
-        // 尽量取出 glibc 的 malloc；失败时退化为进程默认分配器。
-        kvs_allocator_load_libc();
-        return 0;
-    case KVS_ALLOC_JEMALLOC:
-        return kvs_allocator_load_jemalloc();
-    case KVS_ALLOC_MEMORYPOOL:
-#if ENABLE_MEMORYPOOL
-        slab_init();
-        kvs_log(KVS_LOG_DEBUG, "memory_allocator=memorypool uses the built-in slab allocator");
-        return 0;
-#else
-        kvs_log(KVS_LOG_ERROR,
-                "memory_allocator=memorypool but ENABLE_MEMORYPOOL is disabled at build time");
-        return -1;
-#endif
-    default:
-        kvs_log(KVS_LOG_ERROR, "Unknown memory_allocator value: %d", g_kvs_allocator);
-        return -1;
-    }
-}
-
-// 退出清理。不主动 dlclose libc/jemalloc：卸载分配器时若有任何块仍在使用会直接
-// 崩溃，而进程即将退出，把映射交给操作系统回收更安全。
-static void kvs_allocator_destroy(void) {
-#if ENABLE_MEMORYPOOL
-    if (g_kvs_allocator == KVS_ALLOC_MEMORYPOOL) {
-        slab_dest();
-    }
-#endif
-}
-
-} // namespace
 
 void* kvs_malloc(size_t size) {
 #if ENABLE_MEMORYPOOL
-    if (g_kvs_allocator == KVS_ALLOC_MEMORYPOOL) {
-        return slab_alloc(size);
-    }
-#endif
-    if (g_kvs_allocator == KVS_ALLOC_JEMALLOC && g_jemalloc_malloc != nullptr) {
-        return g_jemalloc_malloc(size);
-    }
-    if (g_kvs_allocator == KVS_ALLOC_MALLOC && g_libc_malloc != nullptr) {
-        return g_libc_malloc(size);
-    }
+    return slab_alloc(size);
+#else
     return malloc(size);
-}
-
-void* kvs_calloc(size_t size) {
-#if ENABLE_MEMORYPOOL
-    if (g_kvs_allocator == KVS_ALLOC_MEMORYPOOL) {
-        return slab_calloc(size);
-    }
 #endif
-    if (g_kvs_allocator == KVS_ALLOC_JEMALLOC && g_jemalloc_calloc != nullptr) {
-        return g_jemalloc_calloc(1, size);
-    }
-    if (g_kvs_allocator == KVS_ALLOC_MALLOC && g_libc_calloc != nullptr) {
-        return g_libc_calloc(1, size);
-    }
-    return calloc(1, size);
 }
 
 void kvs_free(void* ptr) {
-    if (ptr == nullptr) {
-        return;
-    }
-
 #if ENABLE_MEMORYPOOL
-    if (g_kvs_allocator == KVS_ALLOC_MEMORYPOOL) {
+    if (ptr != nullptr)
         slab_free_ptr(ptr);
-        return;
-    }
-#endif
-    if (g_kvs_allocator == KVS_ALLOC_JEMALLOC && g_jemalloc_free != nullptr) {
-        g_jemalloc_free(ptr);
-        return;
-    }
-    if (g_kvs_allocator == KVS_ALLOC_MALLOC && g_libc_free != nullptr) {
-        g_libc_free(ptr);
-        return;
-    }
+#else
     free(ptr);
+#endif
 }
 
 const char* command[] = {"SET",      "GET",      "DEL",      "MOD",      "EXIST",
@@ -275,8 +208,6 @@ enum KVS_CMD {
     KVS_CMD_COUNT,
 };
 
-const char* response[] = {};
-
 /**
  * @brief 解析 RESP (REdis Serialization Protocol) 协议中的数组命令。
  *        该函数将客户端发送的 RESP 数组格式的命令（如 "*2\r\n$3\r\nSET\r\n$3\r\nkey\r\n"）
@@ -311,7 +242,7 @@ char** resp_parse_command(char* buffer, int* argc, int* consumed) {
     *consumed = (int)(p - buffer);
 
     // 5. 为 argv 数组分配内存（参数个数 + 1 个 NULL 结尾）
-    char** argv = (char**)malloc((param_count + 1) * sizeof(char*));
+    char** argv = (char**)kvs_malloc((param_count + 1) * sizeof(char*));
     if (!argv)
         return NULL;
 
@@ -319,7 +250,7 @@ char** resp_parse_command(char* buffer, int* argc, int* consumed) {
     for (int i = 0; i < param_count; i++) {
         // 6.1 检查当前参数是否以 '$' 开头（批量字符串）
         if (*p != '$') {
-            free(argv);
+            kvs_free(argv);
             return NULL;
         }
 
@@ -331,19 +262,19 @@ char** resp_parse_command(char* buffer, int* argc, int* consumed) {
 
         // 6.4 处理 null 批量字符串（长度为 -1），本函数不支持
         if (len < 0) {
-            free(argv);
+            kvs_free(argv);
             return NULL;
         }
 
         // 6.5 为当前参数值分配内存（len + 1 字节，用于存放 '\0'）
-        char* data = (char*)malloc(len + 1);
+        char* data = (char*)kvs_malloc(len + 1);
         if (!data) {
             // 分配失败，释放已分配的 argv 及其它已分配的数据
             // 注意：前面 i 个参数已分配，需要释放
             for (int j = 0; j < i; j++) {
-                free(argv[j]);
+                kvs_free(argv[j]);
             }
-            free(argv);
+            kvs_free(argv);
             return NULL;
         }
 
@@ -376,6 +307,11 @@ char** resp_parse_command(char* buffer, int* argc, int* consumed) {
 int kvs_filter_protocol(char* tokens[], int count, char* response, int response_size) {
     if (tokens == nullptr || count == 0 || response == nullptr)
         return -1;
+
+    // 整个命令（含持久化、复制入队）都在存储锁内完成，保证 Replica 回放
+    // 线程与本地客户端线程不会并发修改 rbtree/skiptable 等非线程安全结构。
+    kvs_data_lock();
+
     int cmd = KVS_CMD_START;
     for (cmd = KVS_CMD_START; cmd < KVS_CMD_COUNT; ++cmd) {
         if (strcmp(tokens[0], command[cmd]) == 0) {
@@ -828,6 +764,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     }
     }
 
+    kvs_data_unlock();
     return length;
 }
 
@@ -854,7 +791,7 @@ int kvs_protocol(char* msg, int length, char* response, int response_size) {
 
         // 动态分配临时缓冲区，至少保证能容纳任何单条命令的响应（可设一个合理上限）
         // 这里假设单条命令响应不会超过 remaining，否则会截断
-        char* tmp_resp = (char*)malloc(remaining);
+        char* tmp_resp = (char*)kvs_malloc(remaining);
         if (!tmp_resp)
             break;
 
@@ -865,17 +802,17 @@ int kvs_protocol(char* msg, int length, char* response, int response_size) {
         } else if (len >= remaining) {
             // 响应被截断，根据业务可选择断开或返回错误
             // 这里简单处理为返回错误
-            free(tmp_resp);
+            kvs_free(tmp_resp);
             for (int i = 0; i < argc; i++)
-                free(argv[i]);
-            free(argv);
+                kvs_free(argv[i]);
+            kvs_free(argv);
             break;
         }
-        free(tmp_resp);
+        kvs_free(tmp_resp);
 
         for (int i = 0; i < argc; i++)
-            free(argv[i]);
-        free(argv);
+            kvs_free(argv[i]);
+        kvs_free(argv);
         msg_used += consumed;
     }
     return resp_offset;
@@ -932,9 +869,7 @@ int kvs_reset_data() {
     // 这里只重置统计信息，不再 slab_dest() + slab_init()：
     // 把 chunk 交还系统会让其它线程（Replica 回放线程）手里正在使用的块变成悬空指针。
     // 引擎数据已由 destroy/init 重建，内存池自身的空闲链表本来就是一致的。
-    if (g_kvs_allocator == KVS_ALLOC_MEMORYPOOL) {
-        slab_reset();
-    }
+    slab_reset();
 #endif
     return init_kvengine();
 }
@@ -956,6 +891,10 @@ static int ensure_data_directory() {
 // ./kvstore 9999 0
 // ./kvstore 2000 1 39.97.42.225 9999
 int main(int argc, char* argv[]) {
+
+    // 尽早安装信号处理：保证 SIGINT/SIGTERM 只置停止标志，
+    // 由网络服务循环退出后统一走下面的收尾流程。
+    kvs_shutdown_install_handlers();
 
     kvs_config_set_defaults();
     if (kvs_config_parse_switches(&argc, &argv) != 0) {
@@ -990,11 +929,10 @@ int main(int argc, char* argv[]) {
         master_port = atoi(argv[4]);
     }
 
-    if (port <= 0 || port > 65535 || (role != 0 && role != 1) ||
-        bind_ip == nullptr || bind_ip[0] == '\0' ||
-        bind_ip_valid != 1 ||
+    if (port <= 0 || port > 65535 || (role != 0 && role != 1) || bind_ip == nullptr ||
+        bind_ip[0] == '\0' || bind_ip_valid != 1 ||
         (role == KVS_ROLE_REPLICA && (master_ip == nullptr || master_ip[0] == '\0' ||
-                                     master_port <= 0 || master_port > 65535))) {
+                                      master_port <= 0 || master_port > 65535))) {
         printf("Usage:\n"
                "  %s [--config kvstore.conf]\n"
                "     [--bind 0.0.0.0] [--port 9999]\n"
@@ -1002,7 +940,6 @@ int main(int argc, char* argv[]) {
                "     [--master-ip 127.0.0.1] [--master-port 19001]\n"
                "     [--log-level debug|info|warn|error|off]\n"
                "     [--persistence-mode none|rdb|aof|both]\n"
-               "     [--memory-allocator malloc|jemalloc|memorypool]\n"
                "     [--network reactor|ntyco|proactor]\n"
                "  Legacy Master : %s <port> 0\n"
                "  Legacy Replica: %s <port> 1 <master_ip> <master_port>\n",
@@ -1012,16 +949,10 @@ int main(int argc, char* argv[]) {
 
     kvs_log(KVS_LOG_INFO,
             "Configuration: bind=%s port=%d role=%s log_level=%d persistence=rdb:%s,aof:%s "
-            "allocator=%s network=%s",
+            "network=%s",
             bind_ip, port, role == 0 ? "master" : "replica", kvs_config_log_level(),
-            kvs_config_rdb_enabled() ? "on" : "off",
-            kvs_config_aof_enabled() ? "on" : "off", kvs_config_allocator_name(),
+            kvs_config_rdb_enabled() ? "on" : "off", kvs_config_aof_enabled() ? "on" : "off",
             kvs_config_network_name());
-
-    // 分配器必须在任何 kvs_malloc 之前确定，且运行期间不再改变。
-    if (kvs_allocator_init() != 0) {
-        return -1;
-    }
 
     if (ensure_data_directory() != 0) {
         return -1;
@@ -1030,19 +961,23 @@ int main(int argc, char* argv[]) {
     // 初始化 KV Engine
     init_kvengine();
 
+    //初始化内存池
+#if ENABLE_MEMORYPOOL
+
+    slab_init();
+#endif
+
     // 初始化复制模块
     if (role == 0) {
         kvs_replication_init(KVS_ROLE_MASTER);
-        // 优先创建本地 eBPF 实时同步队列；失败时后续增量同步自动回退 TCP。
-        if (kvs_ebpf_master_init((unsigned short)port) != 0) {
-            kvs_log(KVS_LOG_WARN,
-                    "eBPF realtime sync unavailable, falling back to TCP realtime sync");
-        }
+#if !KVS_ENABLE_EBPF_REALTIME
+        kvs_log(KVS_LOG_INFO,
+                "eBPF realtime sync disabled, replication uses backlog + sender thread");
+#endif
 #ifdef KVS_ENABLE_RDMA
         if (kvs_replication_start_rdma_listener((unsigned short)port) != 0) {
             // RDMA 设备不可用时不要阻止服务启动，自动回退到 TCP 全量同步。
-            kvs_log(KVS_LOG_WARN,
-                    "RDMA listener unavailable, falling back to TCP full sync");
+            kvs_log(KVS_LOG_WARN, "RDMA listener unavailable, falling back to TCP full sync");
         }
 #endif
         if (kvs_config_aof_enabled() && kvs_aof_init("../data/append.aof") != 0) {
@@ -1051,30 +986,21 @@ int main(int argc, char* argv[]) {
         }
     } else {
         kvs_replication_init(KVS_ROLE_REPLICA);
+        // 位置参数形式（./kvstore <port> 1 <master_ip> <master_port>）只在 main 里
+        // 覆盖了局部变量，这里必须把最终地址同步给复制模块。
+        kvs_replication_set_master_addr(master_ip, master_port);
     }
 
     // Replica 连接 Master
     if (role == KVS_ROLE_REPLICA) {
-        int fd = kvs_replication_connect_master(master_ip, master_port);
-
-        if (fd < 0) {
-            kvs_log(KVS_LOG_ERROR, "Failed to connect master %s:%d", master_ip, master_port);
-            return -1;
-        }
-
-#ifdef KVS_ENABLE_RDMA
-        // 先通过 RDMA 完成已有数据的全量同步，再发送 TCP 握手进入增量同步。
-        if (kvs_replication_rdma_full_sync(master_ip, master_port) != 0) {
-            // Master 可能同样因没有 RDMA 设备而回退为 TCP 全量同步。
-            kvs_log(KVS_LOG_WARN,
-                    "RDMA full sync unavailable, falling back to TCP full sync");
-        }
-#endif
-
+        // 连接、RDMA 全量、握手、断线重连全部交给复制监督线程，
+        // 网络服务不必等 Master 就绪即可启动。
         if (kvs_replication_start() != 0) {
             kvs_log(KVS_LOG_ERROR, "Failed to start replication");
             return -1;
         }
+        kvs_log(KVS_LOG_INFO, "Replica replication started in background, master=%s:%d", master_ip,
+                master_port);
     }
 
     // 启动网络服务。网络框架由 kvstore.conf 的 network_architecture
@@ -1097,12 +1023,18 @@ int main(int argc, char* argv[]) {
     }
 
 #if AOF_ENABLE
+    kvs_log(KVS_LOG_INFO, "Shutdown requested, flushing AOF and stopping replication");
     kvs_aof_close();
+#else
+    kvs_log(KVS_LOG_INFO, "Shutdown requested, stopping replication");
 #endif
     // 先停止复制线程、释放引擎数据，最后才销毁内存池：
     // slab_dest() 会释放全部 chunk，必须确认没有其它线程还在分配/释放内存。
     kvs_replication_destroy();
     destroy_kvengine();
-    kvs_allocator_destroy();
+#if ENABLE_MEMORYPOOL
+    slab_dest();
+#endif
+    kvs_log(KVS_LOG_INFO, "Shutdown finished");
     return 0;
 }

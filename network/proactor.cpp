@@ -1,5 +1,6 @@
 #include "kvs_config.h"
 #include "kvs_replication.h"
+#include "kvs_shutdown.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <iostream>
@@ -61,6 +62,9 @@ struct conn_ctx {
 static int init_server(const char* bind_ip, unsigned short port) {
 
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    // 服务重启时避免被上一次残留的 TIME_WAIT 连接占用端口。
+    int reuse = 1;
+    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
     struct sockaddr_in servaddr;
     memset(&servaddr, 0, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
@@ -199,6 +203,7 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
     case EVENT::READ: {
         int recvlen = entries->res;
         if (recvlen <= 0) {
+            kvs_replication_remove_replica(ctx->clientfd);
             close(ctx->clientfd);
             kvs_log(KVS_LOG_INFO, "[NETWORK] connection [%d] break", ctx->clientfd);
             delete ctx;
@@ -220,6 +225,7 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
                 if (msg_len > MAX_ALLOWED_LEN) {
                     kvs_log(KVS_LOG_WARN, "[NETWORK] message too long: %u (max: %u)", msg_len,
                             MAX_ALLOWED_LEN);
+                    kvs_replication_remove_replica(ctx->clientfd);
                     close(ctx->clientfd);
                     delete ctx;
                     break;
@@ -303,6 +309,7 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
             kvs_log(KVS_LOG_WARN, "[NETWORK] send error on connection [%d]: %d (%s)",
                     ctx->clientfd, sendlen,
                     sendlen < 0 ? strerror(-sendlen) : "connection closed");
+            kvs_replication_remove_replica(ctx->clientfd);
             close(ctx->clientfd);
             delete ctx;
             break;
@@ -319,6 +326,7 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
             if (!sqe) {
                 kvs_log(KVS_LOG_WARN, "[NETWORK] no sqe to resend, close connection [%d]",
                         ctx->clientfd);
+                kvs_replication_remove_replica(ctx->clientfd);
                 close(ctx->clientfd);
                 delete ctx;
                 break;
@@ -370,7 +378,9 @@ int proactor_start(const char* bind_ip, unsigned short port, msg_handler handler
 
     set_event_accept(&ring, listenfd, 0);
 
-    while (1) {
+    // 用带超时的等待而不是永久阻塞：SIGINT/SIGTERM 可能被投递到复制线程，
+    // 主线程未必收到 EINTR，靠超时保证停止标志一定能被看到。
+    while (!g_kvs_shutdown) {
 
         // 1. 先尝试非阻塞批量获取所有已完成的 CQE
 
@@ -386,16 +396,24 @@ int proactor_start(const char* bind_ip, unsigned short port, msg_handler handler
         } else {
             io_uring_submit(&ring); // 提交SQ队列
 
-            // 2. 没有已完成的事件，阻塞等待一个事件
+            // 2. 没有已完成的事件，带超时等待一个事件（超时后回到循环头检查停止标志）
 
             struct io_uring_cqe* cqe;
-            int ret = io_uring_wait_cqe(&ring, &cqe); // 阻塞，等待完成队列就绪
+            struct __kernel_timespec ts;
+            ts.tv_sec = KVS_SHUTDOWN_POLL_MS / 1000;
+            ts.tv_nsec = (long)(KVS_SHUTDOWN_POLL_MS % 1000) * 1000000L;
+            int ret = io_uring_wait_cqe_timeout(&ring, &cqe, &ts);
             if (ret < 0) {
-                // 处理错误（如 -EINTR）
+                // -ETIME 是正常超时，-EINTR 是信号：都回到循环头检查停止标志
                 continue;
             }
             handle_cqe(&ring, cqe, listenfd);
             io_uring_cqe_seen(&ring, cqe);
         }
     }
+
+    close(listenfd);
+    io_uring_queue_exit(&ring);
+    kvs_log(KVS_LOG_INFO, "[NETWORK] proactor loop exited");
+    return 0;
 }

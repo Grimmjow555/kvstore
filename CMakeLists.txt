@@ -27,13 +27,13 @@ if(NOT URING_LIBRARY)
 endif()
 
 # 查找 jemalloc
-find_library(JEMALLOC_LIBRARY
-    NAMES jemalloc
-    HINTS /usr/local/lib /usr/lib
-)
-if(NOT JEMALLOC_LIBRARY)
-    message(FATAL_ERROR "jemalloc not found. Please install jemalloc or specify its path.")
-endif()
+# find_library(JEMALLOC_LIBRARY
+#     NAMES jemalloc
+#     HINTS /usr/local/lib /usr/lib
+# )
+# if(NOT JEMALLOC_LIBRARY)
+#     message(FATAL_ERROR "jemalloc not found. Please install jemalloc or specify its path.")
+# endif()
 
 # 可选：检查 liburing 头文件
 find_path(URING_INCLUDE_DIR
@@ -111,7 +111,8 @@ add_executable(get10w testcase/master-replica/get10w.cpp)
 add_executable(insert_after5w testcase/master-replica/insert_after5w.cpp)
 add_executable(insert_before5w testcase/master-replica/insert_before5w.cpp)
 add_executable(test testcase/test/testcase.cpp)
-add_executable(memp testcase/memorypool/memptest.cpp)
+add_executable(memptest testcase/memorypool/memptest.cpp)
+add_executable(memptest_pthread testcase/memorypool/memptest_pthread.cpp)
 
 set_target_properties(rdb_save PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/RDB" OUTPUT_NAME save)
 set_target_properties(rdb_load PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/RDB" OUTPUT_NAME load)
@@ -121,17 +122,20 @@ set_target_properties(get10w insert_after5w insert_before5w
     PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/master-replica"
 )
 set_target_properties(test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/test")
-set_target_properties(memp PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/memorypool")
+set_target_properties(memptest memptest_pthread
+    PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/memorypool"
+)
 
 foreach(testcase_target rdb_save rdb_load aof_save aof_load
-    get10w insert_after5w insert_before5w test memp)
+    get10w insert_after5w insert_before5w test memptest memptest_pthread)
     target_include_directories(${testcase_target} PRIVATE
         ${CMAKE_SOURCE_DIR}/testcase
     )
 endforeach()
 
 target_link_libraries(test Threads::Threads)
-target_link_libraries(memp Threads::Threads)
+target_link_libraries(memptest Threads::Threads)
+target_link_libraries(memptest_pthread Threads::Threads)
 
 # 包含目录
 target_include_directories(kvstore PRIVATE
@@ -153,7 +157,7 @@ target_link_directories(kvstore PRIVATE ${NTYCO_LIBRARY_DIR})
 # 链接库
 target_link_libraries(kvstore
     ${URING_LIBRARY}
-    ${JEMALLOC_LIBRARY}
+    # ${JEMALLOC_LIBRARY}
     ntyco                    # 库名，依赖于前面的 link_directories
     Threads::Threads         # 提供 pthread
     ${CMAKE_DL_LIBS}         # 提供 dl（如果系统需要）

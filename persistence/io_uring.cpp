@@ -59,46 +59,6 @@ kvs_io_uring_file_t* kvs_io_uring_open(const char* filename, int flags, mode_t m
     return file;
 }
 
-int kvs_io_uring_write(kvs_io_uring_file_t* file, const void* buf, size_t len) {
-    // 校验文件对象、缓冲区和写入长度。
-    if (file == NULL || buf == NULL || len == 0) {
-        return -1;
-    }
-    if (len > UINT_MAX) {
-        return -1;
-    }
-
-    // 获取 SQE，准备一次文件写入请求。
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&file->ring);
-    if (sqe == NULL) {
-        return -1;
-    }
-
-    __u64 offset = file->append_mode ? 0 : file->write_offset;
-    io_uring_prep_write(sqe, file->fd, buf, (unsigned)len, offset);
-    sqe->user_data = 0;
-
-    // 提交请求并同步等待对应的完成事件。
-    int submitted = io_uring_submit(&file->ring);
-    if (submitted < 1) {
-        return -1;
-    }
-
-    int res = kvs_io_uring_wait_one(&file->ring);
-    if (res < 0) {
-        return -1;
-    }
-    if ((size_t)res != len) {
-        return -1;
-    }
-
-    // 顺序写模式需要记录下一次写入位置；追加模式由 O_APPEND 管理偏移。
-    if (!file->append_mode) {
-        file->write_offset += (unsigned long long)res;
-    }
-    return 0;
-}
-
 int kvs_io_uring_write_and_fsync(kvs_io_uring_file_t* file, const void* buf, size_t len) {
     // 空缓冲区只需执行一次 fsync，调用方不必额外处理空写场景。
     if (file == NULL || (len == 0 && buf == NULL)) {

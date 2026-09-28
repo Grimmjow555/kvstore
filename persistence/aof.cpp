@@ -18,7 +18,9 @@ extern int kvs_filter_protocol(char* tokens[], int count, char* response, int re
 
 #define KVS_AOF_FLUSH_THRESHOLD (0)
 
-static int aof_replaying = 0;
+// AOF 重放标记按线程隔离：Replica 的复制回放线程与本地客户端线程可能同时
+// 处于写入路径，全局标记会让本地客户端的写被误判为「重放中」而漏记 AOF。
+static __thread int aof_replaying = 0;
 
 static kvs_io_uring_file_t* aof_fp = NULL;
 static char aof_filename[512] = {0};

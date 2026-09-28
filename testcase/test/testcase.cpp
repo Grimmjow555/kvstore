@@ -17,14 +17,14 @@
     ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
 
 #define PRINT_PASS 1
-#define TEST_COUNT 1000
+#define TEST_COUNT 10000
 
-#define LEVEL1 1 //使用最基础的9条测试样例，测试一次
+#define LEVEL1 0 //使用最基础的9条测试样例，测试一次
 #define LEVEL2 0 //使用最基础的9条测试样例，测试 TEST_COUNT 次
 
 #define LEVEL3w 0 //使用30000条测试样例
 
-#define LEVEL3 0 //使用多线程，每个线程9条测试样例，测试 TEST_COUNT 次
+#define LEVEL3 1 //使用多线程，每个线程9条测试样例，测试 TEST_COUNT 次
 //若只有一套样例，考虑到线程安全，需要对这一套样例加锁，实际上和串行无异。
 //所以我们多套样例应该互不相同，互不影响结果。这样可以不加锁使用多线程，具体做法是为每一套样例的key添加对应的fd
 

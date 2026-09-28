@@ -108,6 +108,42 @@ int connect_tcpserver(const char* ip, unsigned short port) {
     return connfd;
 }
 
+struct test_thread_context {
+    const char* ip;
+    unsigned short port;
+    int structure_id;
+};
+
+void array_testcase_3w(int connfd);
+void rbtree_testcase_3w(int connfd);
+void hash_testcase_3w(int connfd);
+void skiptable_testcase_3w(int connfd);
+
+void* structure_test_entry(void* arg) {
+    test_thread_context* context = (test_thread_context*)arg;
+    int connfd = connect_tcpserver(context->ip, context->port);
+    if (connfd < 0)
+        return NULL;
+
+    switch (context->structure_id) {
+    case 0:
+        array_testcase_3w(connfd);
+        break;
+    case 1:
+        rbtree_testcase_3w(connfd);
+        break;
+    case 2:
+        hash_testcase_3w(connfd);
+        break;
+    case 3:
+        skiptable_testcase_3w(connfd);
+        break;
+    }
+
+    close(connfd);
+    return NULL;
+}
+
 void array_testcase_3w(int connfd) {
 
     int count = TEST_COUNT;
@@ -336,13 +372,27 @@ int main(int argc, char* argv[]) {
 
     char* ip = argv[1];
     unsigned short port = atoi(argv[2]);
-    int connfd = connect_tcpserver(ip, port);
 
-    array_testcase_3w(connfd);
-    rbtree_testcase_3w(connfd);
-    hash_testcase_3w(connfd);
-    skiptable_testcase_3w(connfd);
+    printf("四线程并发测试：每个线程负责一种存储结构\n");
 
+    pthread_t threads[4];
+    test_thread_context contexts[4] = {
+        {ip, port, 0},
+        {ip, port, 1},
+        {ip, port, 2},
+        {ip, port, 3},
+    };
+
+    for (int i = 0; i < 4; i++) {
+        if (pthread_create(&threads[i], NULL, structure_test_entry, &contexts[i]) != 0) {
+            perror("pthread_create");
+            return -1;
+        }
+    }
+
+    for (int i = 0; i < 4; i++) {
+        pthread_join(threads[i], NULL);
+    }
     printf("***memorypool test case finished***\n");
 
     return 0;
