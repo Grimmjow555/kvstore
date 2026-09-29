@@ -12,10 +12,25 @@ set(CMAKE_CXX_EXTENSIONS OFF)   # 推荐关闭 GNU 扩展，提高可移植性
 # 查找线程库（必须）
 find_package(Threads REQUIRED)
 
-# 允许用户通过 -D 覆盖 NtyCo 根目录
-set(NTYCO_ROOT "${CMAKE_SOURCE_DIR}/NtyCo-master" CACHE PATH "Path to NtyCo library root")
+# 允许用户通过 -D 覆盖 NtyCo 根目录（submodule 目录为 NtyCo）
+set(NTYCO_ROOT "${CMAKE_SOURCE_DIR}/NtyCo" CACHE PATH "Path to NtyCo library root")
 set(NTYCO_INCLUDE_DIR "${NTYCO_ROOT}/core" CACHE PATH "Path to NtyCo include directory")
-set(NTYCO_LIBRARY_DIR "${NTYCO_ROOT}" CACHE PATH "Path to NtyCo library directory")
+
+if(NOT EXISTS "${NTYCO_INCLUDE_DIR}/nty_coroutine.h")
+    message(FATAL_ERROR
+        "未找到 NtyCo 源码: ${NTYCO_INCLUDE_DIR}/nty_coroutine.h\n"
+        "请先初始化子模块: git submodule sync --recursive && git submodule update --init --recursive")
+endif()
+
+# NtyCo 的 libntyco.a 不在版本库中（objs/、lib/ 都在 submodule 的 .gitignore 里），
+# 依赖它会出现「手工构建一次后又丢失、链接报 cannot find -lntyco」的问题。
+# 这里直接把 NtyCo 源码编进 kvstore，不再依赖 submodule 内的构建产物。
+set(NTYCO_SOURCES
+    ${NTYCO_ROOT}/core/nty_coroutine.c
+    ${NTYCO_ROOT}/core/nty_epoll.c
+    ${NTYCO_ROOT}/core/nty_schedule.c
+    ${NTYCO_ROOT}/core/nty_socket.c
+)
 
 # 查找 liburing
 find_library(URING_LIBRARY
@@ -79,6 +94,7 @@ set(KVSTORE_SOURCES
     network/proactor.cpp
     network/reactor.cpp
     network/ntyco.c
+    ${NTYCO_SOURCES}
 
     storage/kvs_array.cpp
     storage/kvs_rbtree.cpp
@@ -151,14 +167,11 @@ if(KVSTORE_RDMA_FOUND)
     target_compile_definitions(kvstore PRIVATE KVS_ENABLE_RDMA=1)
 endif()
 
-# 链接目录（用于 NtyCo）
-target_link_directories(kvstore PRIVATE ${NTYCO_LIBRARY_DIR})
-
 # 链接库
 target_link_libraries(kvstore
     ${URING_LIBRARY}
     # ${JEMALLOC_LIBRARY}
-    ntyco                    # 库名，依赖于前面的 link_directories
+    # NtyCo 源码已随 KVSTORE_SOURCES 一起编译，无需再链接 libntyco.a
     Threads::Threads         # 提供 pthread
     ${CMAKE_DL_LIBS}         # 提供 dl（如果系统需要）
 )

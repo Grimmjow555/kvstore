@@ -33,7 +33,11 @@ cmake -S . -B build
 cmake --build build -j$(nproc)
 ```
 
-可通过 CMake 变量覆盖 NtyCo 路径：`NTYCO_ROOT`、`NTYCO_INCLUDE_DIR`、`NTYCO_LIBRARY_DIR`。不要使用 README 中的 `URING_ROOT`，该变量未在 [CMakeLists.txt](CMakeLists.txt) 中定义。
+NtyCo 源码通过 `NTYCO_SOURCES` 直接随 `kvstore` 一起编译，不依赖 submodule 内的
+`libntyco.a`（该产物不在版本库中，且 `objs/`、`lib/` 已被 submodule 的 `.gitignore` 忽略）。
+因此不需要手工在 `NtyCo/` 下执行 `make`。
+
+可通过 CMake 变量覆盖 NtyCo 路径：`NTYCO_ROOT`、`NTYCO_INCLUDE_DIR`。不要使用 README 中的 `URING_ROOT`，该变量未在 [CMakeLists.txt](CMakeLists.txt) 中定义。
 
 产物为 `build/kvstore`。运行时请从 `build` 目录启动，因为持久化路径使用的是 `../data/...`。
 
@@ -66,12 +70,12 @@ CMake 只构建主服务，不构建 `testcase/` 下的测试客户端。`testca
 ├── replication/            # 主从复制
 ├── testcase/               # 测试客户端源码与历史产物
 ├── data/                   # 运行时持久化文件目录
-├── NtyCo-master/           # Git submodule，第三方协程库
+├── NtyCo/                  # Git submodule，第三方协程库
 ├── MASTER_kvstore/         # 独立的旧版 C 实现，不属于当前服务
 └── readme.md
 ```
 
-`build/` 是 CMake 生成目录；`NtyCo-master/` 是第三方 submodule；`MASTER_kvstore/` 使用另一套实现、协议和构建方式。正常修改当前服务时不要改动这些目录中的产物或第三方代码。
+`build/` 是 CMake 生成目录；`NtyCo/` 是第三方 submodule；`MASTER_kvstore/` 使用另一套实现、协议和构建方式。正常修改当前服务时不要改动这些目录中的产物或第三方代码。
 
 ## 通信协议
 
@@ -234,7 +238,7 @@ if (!kvs_replication_is_replaying()) {
 
 - 主服务为 C++11，但部分网络/第三方代码为 C；混合编译是项目现状，不要强行统一。
 - 注释以中文为主，新增代码建议沿用清晰的中文说明。
-- 不要修改 `NtyCo-master/` 内的第三方代码；需要升级时通过 submodule 流程处理，并保持 `.gitmodules` 一致。
+- 不要修改 `NtyCo/` 内的第三方代码；需要升级时通过 submodule 流程处理，并保持 `.gitmodules` 一致。
 - 不要删除或重命名现有公共 API；如需调整，先搜索所有调用点，尤其是 `kvstore.cpp`、`persistence/`、`replication/` 和 `testcase/`。
 - 提交前至少完成一次干净构建，并尽量用 `testcase/` 客户端做协议级验证。
 

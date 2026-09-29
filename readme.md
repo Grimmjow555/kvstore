@@ -25,7 +25,7 @@
 
 NtyCo 以 submodule 方式接入，目录如下：
 
-- `NtyCo-master`
+- `NtyCo`
 
 官方仓库：
 
@@ -67,7 +67,8 @@ sudo apt-get install -y build-essential cmake liburing-dev libjemalloc-dev
 cmake -S . -B build -DURING_ROOT=/usr/lib
 ```
 
-> 说明：当前项目的 CMake 会优先使用 `NtyCo-master` 目录下的依赖结构，确保 submodule 初始化后可以直接编译。
+> 说明：CMake 默认使用仓库根目录下的 submodule 目录 `NtyCo`，因此在仓库根目录直接执行
+> `cmake -S . -B build` 即可。只有在自定义路径时才需要显式指定 `-DNTYCO_ROOT=/path/to/NtyCo`。
 
 ## 最小编译命令
 
@@ -78,6 +79,10 @@ git submodule update --init --recursive
 cmake -S . -B build
 cmake --build build -j$(nproc)
 ```
+
+NtyCo 的源码会随 `kvstore` 一起编译，不依赖 submodule 内生成的 `libntyco.a`，因此不需要
+手工在 `NtyCo/` 下执行 `make`。也可以直接执行一键脚本 `./setup_submodule.sh` 完成子模块
+同步与初始化，再执行上面的 CMake 编译步骤。
 
 编译完成后，会生成可执行文件：
 
@@ -372,6 +377,12 @@ git submodule sync --recursive
 git submodule update --init --recursive
 ```
 
+报 `nty_coroutine.h: No such file or directory` 说明 submodule 还没有初始化，按上面的
+`git submodule` 命令同步即可。
+
+如果 `NTYCO_ROOT` 指向的目录里没有 `core/nty_coroutine.h`，CMake 配置阶段会直接报错并
+提示先初始化子模块，因此不会出现链接阶段找不到 NtyCo 符号的情况。
+
 ### 找不到 liburing / jemalloc
 
 ```bash
@@ -388,7 +399,7 @@ liburing 是构建期必需依赖。内存分配由 `include/memorypool.h` 中�
 可检查 CMake 变量是否正确，或在命令行中显式指定依赖目录：
 
 ```bash
-cmake -S . -B build -DNTYCO_ROOT=/path/to/NtyCo-master
+cmake -S . -B build -DNTYCO_ROOT=/path/to/NtyCo
 ```
 
 ## 目录结构
@@ -404,7 +415,7 @@ cmake -S . -B build -DNTYCO_ROOT=/path/to/NtyCo-master
 ├── replication/
 ├── testcase/
 ├── data/
-├── NtyCo-master/      # git submodule
+├── NtyCo/             # git submodule
 ├── build/
 └── readme.md
 ```

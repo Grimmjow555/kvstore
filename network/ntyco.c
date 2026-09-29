@@ -100,7 +100,7 @@ static void nty_wake_accept(void) {
 //
 // 需要这样一个协程的原因：NtyCo 的 accept()/recv() 内部都用 nty_poll_inner(...,
 // timeout = 1) 等待，而 nty_schedule_sched_wait() 对 timeout == 1 有特殊处理
-// （见 NtyCo-master/core/nty_schedule.c: `if (timeout == 1) return;`），
+// （见 NtyCo/core/nty_schedule.c: `if (timeout == 1) return;`），
 // 不会把协程挂进睡眠树。也就是说这些等待只能被 fd 上的事件唤醒，既不会超时，
 // 也不会因为 fd 被关闭而返回——server 协程空载时就一直卡在 accept() 里。
 //
