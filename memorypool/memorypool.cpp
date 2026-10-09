@@ -37,9 +37,9 @@
 #define MP_CLASS_LARGE 0xFFFFFFFFu // 超过最大 class 的请求直接走 malloc
 
 typedef struct mp_hdr_s {
-    uint32_t magic;
-    uint32_t cls;
-    struct mp_hdr_s* next; // 只有在该块位于空闲链表时才有意义
+    uint32_t magic;        // 记录该内存块是否被使用
+    uint32_t cls;          // 记录所属的free_list
+    struct mp_hdr_s* next; // 位于空闲链表时记录下一个空闲块
 } mp_hdr_t;
 
 // 块头必须是 16 字节，才能保证返回给调用方的 payload 保持 16 字节对齐
@@ -47,16 +47,16 @@ static_assert(sizeof(mp_hdr_t) == MP_HDR_SIZE, "mp_hdr_t must be 16 bytes");
 
 // 线程本地空闲链表
 typedef struct mp_bin_s {
-    mp_hdr_t* free_list;
-    size_t free_count;
+    mp_hdr_t* free_list; // 空闲链表头指针
+    size_t free_count;   // 空闲块数
 } mp_bin_t;
 
 // chunk 注册信息，用于 slab_dest 与统计
 typedef struct mp_chunk_s {
-    struct mp_chunk_s* next;
-    char* data; // 块区起始地址（16 字节对齐）
-    uint32_t cls;
-    uint32_t nblocks;
+    struct mp_chunk_s* next; // chunk 链表指针，指向下一个同size的chunk
+    char* data;              // 块区起始地址（16 字节对齐）
+    uint32_t cls;            // 表示被切成哪一种size
+    uint32_t nblocks;        // 块数
 } mp_chunk_t;
 
 static int mp_class_sizes[MP_CLASS_COUNT] = {16, 32, 64};

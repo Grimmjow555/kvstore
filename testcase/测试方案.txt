@@ -1,0 +1,19 @@
+增量同步功能
+测试代码位于AOF文件夹，通过run_aof_cycle.sh一键执行，
+'AOF CLEAR'后，插入十万条数据
+重启kvstore服务，'AOF LOAD' 后，检查十万条数据
+该测试样例已通过
+
+
+全量同步功能
+测试代码位于RDB文件夹，通过run_rdb_cycle.sh一键执行，
+插入十万条数据，然后 'RDB SAVE'
+重启kvstore服务，'RDB LOAD' 后，检查十万条数据
+该测试样例已通过
+
+主从同步功能
+测试代码位于master-replica文件夹
+先对master执行 insert_before5w 插入五万条数据
+然后启动replica连接master，再对master执行 insert_after5w 插入后五万条数据
+对replica执行 get10w ，检查10万条数据
+该测试样例已通过

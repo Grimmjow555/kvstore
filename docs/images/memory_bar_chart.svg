@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600" viewBox="0 0 1200 600" role="img" aria-label="物理内存与虚拟内存占用对比">
+<title>无内存池 / jemalloc / 内置内存池 在开始、峰值、结束时的物理内存与虚拟内存占用对比（MB）</title>
+<rect x="0" y="0" width="1200" height="600" fill="#FFFFFF"/>
+<text x="325.00" y="36.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="17" fill="#222222" text-anchor="middle">物理内存（MB）</text>
+<text x="78.00" y="465.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="13" fill="#555555" text-anchor="end">0</text>
+<line x1="90.00" y1="369.00" x2="560.00" y2="369.00" stroke="#EAEAEA" stroke-width="1"/>
+<text x="78.00" y="374.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="13" fill="#555555" text-anchor="end">10</text>
+<line x1="90.00" y1="278.00" x2="560.00" y2="278.00" stroke="#EAEAEA" stroke-width="1"/>
+<text x="78.00" y="283.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="13" fill="#555555" text-anchor="end">20</text>
+<line x1="90.00" y1="187.00" x2="560.00" y2="187.00" stroke="#EAEAEA" stroke-width="1"/>
+<text x="78.00" y="192.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="13" fill="#555555" text-anchor="end">30</text>
+<line x1="90.00" y1="96.00" x2="560.00" y2="96.00" stroke="#EAEAEA" stroke-width="1"/>
+<text x="78.00" y="101.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="13" fill="#555555" text-anchor="end">40</text>
+<line x1="90.00" y1="96.00" x2="90.00" y2="460.00" stroke="#9A9A9A" stroke-width="1.2"/>
+<line x1="90.00" y1="460.00" x2="560.00" y2="460.00" stroke="#9A9A9A" stroke-width="1.2"/>
+<rect x="113.33" y="415.41" width="30" height="44.59" fill="#4472C4"/>
+<text x="0" y="0" transform="translate(132.33, 409.41) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">4.90</text>
+<rect x="153.33" y="123.03" width="30" height="336.97" fill="#ED7D31"/>
+<text x="0" y="0" transform="translate(172.33, 117.03) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">37.03</text>
+<rect x="193.33" y="127.67" width="30" height="332.33" fill="#A5A5A5"/>
+<text x="0" y="0" transform="translate(212.33, 121.67) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">36.52</text>
+<text x="168.33" y="488.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="15" fill="#333333" text-anchor="middle">无内存池</text>
+<rect x="270.00" y="399.03" width="30" height="60.97" fill="#4472C4"/>
+<text x="0" y="0" transform="translate(289.00, 393.03) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">6.70</text>
+<rect x="310.00" y="144.32" width="30" height="315.68" fill="#ED7D31"/>
+<text x="0" y="0" transform="translate(329.00, 138.32) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">34.69</text>
+<rect x="350.00" y="152.69" width="30" height="307.31" fill="#A5A5A5"/>
+<text x="0" y="0" transform="translate(369.00, 146.69) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">33.77</text>
+<text x="325.00" y="488.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="15" fill="#333333" text-anchor="middle">jemalloc</text>
+<rect x="426.67" y="414.41" width="30" height="45.59" fill="#4472C4"/>
+<text x="0" y="0" transform="translate(445.67, 408.41) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">5.01</text>
+<rect x="466.67" y="118.30" width="30" height="341.70" fill="#ED7D31"/>
+<text x="0" y="0" transform="translate(485.67, 112.30) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">37.55</text>
+<rect x="506.67" y="122.85" width="30" height="337.15" fill="#A5A5A5"/>
+<text x="0" y="0" transform="translate(525.67, 116.85) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">37.05</text>
+<text x="481.67" y="488.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="15" fill="#333333" text-anchor="middle">内存池</text>
+<text x="915.00" y="36.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="17" fill="#222222" text-anchor="middle">虚拟内存（MB）</text>
+<text x="668.00" y="465.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="13" fill="#555555" text-anchor="end">0</text>
+<line x1="680.00" y1="399.33" x2="1150.00" y2="399.33" stroke="#EAEAEA" stroke-width="1"/>
+<text x="668.00" y="404.33" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="13" fill="#555555" text-anchor="end">30</text>
+<line x1="680.00" y1="338.67" x2="1150.00" y2="338.67" stroke="#EAEAEA" stroke-width="1"/>
+<text x="668.00" y="343.67" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="13" fill="#555555" text-anchor="end">60</text>
+<line x1="680.00" y1="278.00" x2="1150.00" y2="278.00" stroke="#EAEAEA" stroke-width="1"/>
+<text x="668.00" y="283.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="13" fill="#555555" text-anchor="end">90</text>
+<line x1="680.00" y1="217.33" x2="1150.00" y2="217.33" stroke="#EAEAEA" stroke-width="1"/>
+<text x="668.00" y="222.33" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="13" fill="#555555" text-anchor="end">120</text>
+<line x1="680.00" y1="156.67" x2="1150.00" y2="156.67" stroke="#EAEAEA" stroke-width="1"/>
+<text x="668.00" y="161.67" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="13" fill="#555555" text-anchor="end">150</text>
+<line x1="680.00" y1="96.00" x2="1150.00" y2="96.00" stroke="#EAEAEA" stroke-width="1"/>
+<text x="668.00" y="101.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="13" fill="#555555" text-anchor="end">180</text>
+<line x1="680.00" y1="96.00" x2="680.00" y2="460.00" stroke="#9A9A9A" stroke-width="1.2"/>
+<line x1="680.00" y1="460.00" x2="1150.00" y2="460.00" stroke="#9A9A9A" stroke-width="1.2"/>
+<rect x="703.33" y="236.56" width="30" height="223.44" fill="#4472C4"/>
+<text x="0" y="0" transform="translate(722.33, 230.56) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">110.49</text>
+<rect x="743.33" y="133.88" width="30" height="326.12" fill="#ED7D31"/>
+<text x="0" y="0" transform="translate(762.33, 127.88) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">161.27</text>
+<rect x="783.33" y="195.96" width="30" height="264.04" fill="#A5A5A5"/>
+<text x="0" y="0" transform="translate(802.33, 189.96) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">130.57</text>
+<text x="758.33" y="488.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="15" fill="#333333" text-anchor="middle">无内存池</text>
+<rect x="860.00" y="322.73" width="30" height="137.27" fill="#4472C4"/>
+<text x="0" y="0" transform="translate(879.00, 316.73) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">67.88</text>
+<rect x="900.00" y="265.10" width="30" height="194.90" fill="#ED7D31"/>
+<text x="0" y="0" transform="translate(919.00, 259.10) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">96.38</text>
+<rect x="940.00" y="266.13" width="30" height="193.87" fill="#A5A5A5"/>
+<text x="0" y="0" transform="translate(959.00, 260.13) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">95.87</text>
+<text x="915.00" y="488.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="15" fill="#333333" text-anchor="middle">jemalloc</text>
+<rect x="1016.67" y="236.54" width="30" height="223.46" fill="#4472C4"/>
+<text x="0" y="0" transform="translate(1035.67, 230.54) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">110.50</text>
+<rect x="1056.67" y="133.86" width="30" height="326.14" fill="#ED7D31"/>
+<text x="0" y="0" transform="translate(1075.67, 127.86) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">161.28</text>
+<rect x="1096.67" y="194.22" width="30" height="265.78" fill="#A5A5A5"/>
+<text x="0" y="0" transform="translate(1115.67, 188.22) rotate(-90)" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="12.5" fill="#444444" text-anchor="start">131.43</text>
+<text x="1071.67" y="488.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="15" fill="#333333" text-anchor="middle">内存池</text>
+<rect x="480.00" y="527.00" width="16" height="16" fill="#4472C4"/>
+<text x="502.00" y="540.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="15" fill="#333333" text-anchor="start">开始</text>
+<rect x="572.00" y="527.00" width="16" height="16" fill="#ED7D31"/>
+<text x="594.00" y="540.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="15" fill="#333333" text-anchor="start">峰值</text>
+<rect x="664.00" y="527.00" width="16" height="16" fill="#A5A5A5"/>
+<text x="686.00" y="540.00" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif" font-size="15" fill="#333333" text-anchor="start">结束</text>
+</svg>
