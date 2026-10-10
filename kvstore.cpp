@@ -968,8 +968,12 @@ int main(int argc, char* argv[]) {
 #endif
 
     // 初始化复制模块
-    if (role == 0) {
-        kvs_replication_init(KVS_ROLE_MASTER);
+    if (kvs_replication_init((kvs_role_t)role) != 0) {
+        kvs_log(KVS_LOG_ERROR, "Failed to init replication");
+        return -1;
+    }
+
+    if (role == KVS_ROLE_MASTER) {
 #if !KVS_ENABLE_EBPF_REALTIME
         kvs_log(KVS_LOG_INFO,
                 "eBPF realtime sync disabled, replication uses backlog + sender thread");
@@ -985,14 +989,7 @@ int main(int argc, char* argv[]) {
             return -1;
         }
     } else {
-        kvs_replication_init(KVS_ROLE_REPLICA);
-        // 位置参数形式（./kvstore <port> 1 <master_ip> <master_port>）只在 main 里
-        // 覆盖了局部变量，这里必须把最终地址同步给复制模块。
         kvs_replication_set_master_addr(master_ip, master_port);
-    }
-
-    // Replica 连接 Master
-    if (role == KVS_ROLE_REPLICA) {
         // 连接、RDMA 全量、握手、断线重连全部交给复制监督线程，
         // 网络服务不必等 Master 就绪即可启动。
         if (kvs_replication_start() != 0) {
