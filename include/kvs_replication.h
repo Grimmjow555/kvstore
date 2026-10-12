@@ -7,6 +7,23 @@ extern "C" {
 // 当前进程在复制拓扑中的角色。
 typedef enum { KVS_ROLE_MASTER = 0, KVS_ROLE_REPLICA = 1 } kvs_role_t;
 
+// ==================== 主从同步数据流总览 ====================
+//
+// 先看这张图建立整体印象，再按 replication/kvs_replication.cpp 顶部的
+// 「阅读路线图」逐步深入每个函数：
+//
+//   Master 写成功 ──> kvs_replication_append() ──> backlog（带自增序号，只写一份）
+//                                                        │
+//   Replica 连接 ──> REPLICA 握手 ──> Master 登记槽位 ──────┘
+//                              │
+//                              ├─ 该 IP 有 RDMA 快照记录 ─> 只补 base_seq 之后的增量
+//                              └─ 否则                ─> TCP 下发 RDB 快照 + 补增量
+//                                                        │
+//   Replica 回放 <── COMMAND 帧 <── 发送线程按槽位 next_seq 投递 <── backlog
+//
+// 三个核心对象：g_slots[]（每副本进度）、g_backlog（全局增量日志）、
+// next_seq（槽位在 backlog 中的下一条待发序号）。
+
 // ==================== 复制通道帧类型 ====================
 //
 // 复制通道沿用外层「4 字节网络序长度 + 负载」的帧格式，但在负载首字节增加

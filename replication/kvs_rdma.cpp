@@ -23,6 +23,28 @@
 #include <time.h>
 #include <unistd.h>
 
+// ==================== RDMA 全量同步：定位与阅读提示 ====================
+//
+// 这是主从同步的可选加速通道，只负责把 RDB 快照从 Master 搬到 Replica；
+// 增量命令仍走 kvs_replication.cpp 的 backlog + TCP 发送线程。在
+// kvs_replication.cpp 顶部的阅读路线图里，它对应 [步骤 10]。
+//
+// Replica 主动发起（kvs_replication_rdma_full_sync）：
+//   1) 连接 Master 的 RDMA 端口，等待对端发来「快照长度」控制消息；
+//   2) 按长度分配本地缓冲并把地址/rkey 回给 Master（kvs_rdma_receive_snapshot）；
+//   3) Master 用普通 RDMA_WRITE 把快照直接写入该缓冲，再单独发一条 SEND 通知完成；
+//   4) 本地加载快照（kvs_snapshot_load_buffer），并记录快照对应的 backlog 序号。
+//
+// Master 被动响应（kvs_replication_start_rdma_listener 起的监听线程）：
+//   1) kvs_rdma_handle_connection() 收到 RDMA 连接请求；
+//   2) kvs_rdma_serve_snapshot() 序列化快照、注册内存区（MR）并告知对端长度；
+//   3) 拿到对端缓冲地址后 RDMA_WRITE 写入，完成后发 SEND 通知；
+//   4) kvs_replication_note_rdma_snapshot() 记下 peer_ip + 快照序号，供随后
+//      到达的 TCP 握手消费，从而只补发该序号之后的增量，避免丢写。
+//
+// 关键约束：不要改回 IBV_WR_RDMA_WRITE_WITH_IMM，SoftiWARP 下 ibv_post_send
+// 会返回 ENOSPC；必须用「普通 RDMA_WRITE + 单独一条 SEND 通知」。
+
 // RDMA 控制消息使用固定 32 字节结构，便于双方按同一布局收发。
 struct kvs_rdma_msg {
     uint32_t type;
@@ -282,6 +304,9 @@ static int kvs_rdma_post_write(struct ibv_qp* qp, struct ibv_mr* local_mr, void*
     return rc;
 }
 
+// [步骤 10 续] Master 侧：生成快照并主动 RDMA 写入对端缓冲。
+// 流程：回「快照长度」-> 注册快照 MR 并回「本地地址/rkey」-> 等对端回填远端
+// 缓冲地址 -> rdma_post_write 写入 -> 发 SEND 通知 -> 记录快照序号。
 static int kvs_rdma_serve_snapshot(struct rdma_cm_id* id, struct ibv_pd* pd,
                                    struct ibv_cq* cq, const char* peer_ip) {
     if (id == NULL || pd == NULL || cq == NULL) {
@@ -426,6 +451,9 @@ cleanup:
     return ret;
 }
 
+// [步骤 10 续] Replica 侧：分配缓冲接收 Master 的 RDMA 写入。
+// 流程：收「快照长度」-> 分配本地缓冲并注册 MR -> 把地址/rkey 回给 Master ->
+// 等 RDMA_WRITE 完成通知 -> kvs_snapshot_load_buffer() 加载快照。
 static int kvs_rdma_receive_snapshot(struct rdma_cm_id* id, struct ibv_pd* pd,
                                      struct ibv_cq* cq) {
     if (id == NULL || pd == NULL || cq == NULL) {
@@ -561,6 +589,8 @@ cleanup:
     return ret;
 }
 
+// [步骤 10 续] Master 侧连接处理：建立 QP 后调用 serve_snapshot 完成一次搬运。
+// 这里用被动连接的对端地址作为 peer_ip，RDMA 快照序号随后按该 IP 与 TCP 握手对齐。
 static void kvs_rdma_handle_connection(struct rdma_cm_id* id, struct rdma_event_channel* ec) {
     if (id == NULL || ec == NULL) {
         return;
@@ -690,6 +720,8 @@ static void* kvs_rdma_listener_thread(void* arg) {
     return NULL;
 }
 
+// [步骤 10 前置] Master 启动 RDMA 监听（端口 = TCP 端口 + KVS_RDMA_PORT_OFFSET）。
+// 没有 RDMA 硬件/驱动时返回失败，调用方忽略即可，复制会自动走纯 TCP 全量同步。
 int kvs_replication_start_rdma_listener(unsigned short tcp_port) {
     if ((int)tcp_port + KVS_RDMA_PORT_OFFSET > 65535) {
         return -1;
@@ -783,6 +815,8 @@ void kvs_replication_stop_rdma_listener() {
     pthread_detach(g_rdma_listener_tid);
 }
 
+// [步骤 10] Replica 主入口：一次 RDMA 全量快照同步，成功返回 0。
+// 失败不影响复制——监督线程会继续用 TCP 全量同步兜底。
 int kvs_replication_rdma_full_sync(const char* master_ip, int master_port) {
     const char* step = "参数校验";
     struct rdma_event_channel* ec = NULL;

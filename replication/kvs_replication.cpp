@@ -45,6 +45,50 @@ extern int kvs_protocol(char* msg, int length, char* response, int response_size
 //     MSG_DONTWAIT 完成，慢副本只会拖慢自己，不会阻塞 Master；
 //   * fd 归网络层所有，复制模块只 shutdown() 触发对端断开，绝不 close()。
 
+// ==================== 阅读路线图 ====================
+//
+// 建议按「一次完整的主从同步生命周期」顺序阅读，而不是从文件头读到尾。
+// 方括号里的编号是本文件内的函数，按编号跳转即可串起整条链路：
+//
+//   一、初始化与写入
+//     [1] kvs_replication_init()       初始化角色、副本槽位、增量日志；Master 在此
+//                                      拉起常驻的发送线程 repl_sender_thread。
+//     [2] kvs_replication_append()     每条写命令的入口：编码成 RESP 后追加到全局
+//                                      增量日志 backlog。启用 eBPF 时改由
+//                                      kvs_replication_on_captured_command() 异步落库。
+//
+//   二、Master 接受一个 Replica
+//     [3] kvs_replication_accept_handshake()  网络层读到 REPLICA 握手后调用。
+//     [4] kvs_replication_add_replica()       登记一个空闲槽位，状态 = PENDING。
+//     [5] kvs_replication_finish_handshake()  回 +OK，并决定如何做全量同步。
+//     [6] build_tcp_full_sync_prefix()        在同一把存储锁内「取快照 + 记 base_seq」，
+//                                             并拼成 RESET + SNAPSHOT... + SNAPSHOT_END；
+//         start_full_sync_locked()            再把这个前缀挂到槽位的待发缓冲。
+//
+//   三、发送线程（Master 不被慢副本拖死的核心）
+//     [7] repl_sender_thread()   事件循环只负责入队，真正的 socket 写入都在这里。
+//         flush_slot_locked()    非阻塞发送状态机：发数据 → 补增量 → 发 FULLSYNC_DONE。
+//         refill_slot_locked()   按槽位的 next_seq 从 backlog 取增量命令。
+//
+//   四、Replica
+//     [8] replica_supervisor_thread()      连接/重连与指数退避的监督线程。
+//     [9] kvs_replication_connect_master() 非阻塞 connect + 超时。
+//    [10] kvs_replication_rdma_full_sync() （可选）RDMA 拉快照，实现在 kvs_rdma.cpp。
+//    [11] replica_session()                发握手，然后按帧类型循环读取。
+//    [12] handle_replication_frame()       各帧语义：RESET / SNAPSHOT / COMMAND / DONE。
+//
+//   五、异常与收尾
+//    [13] kvs_replication_resync()         日志越界等问题时强制所有副本重新全量同步。
+//    [14] kvs_replication_stop() / _destroy()  停止顺序（先停采集，再停线程/监听）。
+//
+// 全程只需盯住三个核心对象，其余代码都是围绕它们的状态机：
+//   * g_slots[]  —— 每个已连接副本一个槽位：fd、状态、next_seq、待发缓冲 out。
+//   * g_backlog  —— 全局增量日志；写命令只写一份，所有副本共享。
+//   * next_seq   —— 槽位进度指针：指向 backlog 中「下一条要发给该副本」的记录序号。
+//
+// 读完 [1]~[7] 就掌握了 Master 全流程；[8]~[12] 是 Replica 全流程；
+// [13]/[14] 是保证长时间运行不丢数据、能优雅退出的兜底逻辑。
+
 // Master 最多同时维护的 Replica 连接数。
 #define MAX_REPLICAS 16
 
@@ -68,24 +112,43 @@ extern int kvs_protocol(char* msg, int length, char* response, int response_size
 #define REPL_SLOT_SYNCING 2 // 正在发送全量快照 / 增量补齐
 #define REPL_SLOT_ONLINE 3  // 已追平过至少一次，进入常规增量投递
 
+// Master 侧每个已连接 Replica 的状态槽位（g_slots 数组的一项）。
+// 槽位释放后会复用；所有字段由 g_repl_mutex 保护。
 struct repl_slot_t {
+    // 该副本使用的网络层连接 fd；-1 表示槽位空闲，或已交给网络层关闭。
     int fd;
+    // 槽位状态：REPL_SLOT_FREE / PENDING / SYNCING / ONLINE。
     int state;
+    // 对端 IPv4 字符串，用于按 IP 匹配 RDMA 快照记录。
     char peer_ip[INET_ADDRSTRLEN];
 
-    // 已从 backlog 取出、等待写入 socket 的字节（含帧头）。
+    // 已从 backlog 取出、等待写入 socket 的字节（含网络层帧头）。
     std::string out;
+    // out 中已成功 send() 的字节数；下一待发字节为 out[out_sent]。
     size_t out_sent;
-    int prefix_done;             // out 中的全量同步前缀是否已发完
-    int fullsync_done_sent;      // 是否已下发 FULLSYNC_DONE
-    unsigned long long next_seq; // 下一条待投递的 backlog 序号
+    // out 中的 TCP 全量同步前缀（RESET + SNAPSHOT + SNAPSHOT_END）是否已发完；
+    // 走 RDMA 快照续传的槽位没有该前缀，直接置 1。
+    int prefix_done;
+    // 是否已把 FULLSYNC_DONE 标记排入 out；用于避免重复下发该结束标记。
+    int fullsync_done_sent;
+    // 下一条要从 backlog 投递给该副本的记录序号。
+    unsigned long long next_seq;
+    // 最近一次发送有实际进展（send 成功或当前无积压）的毫秒时间戳，
+    // 用于 REPL_STALL_TIMEOUT_MS 判定并断开慢副本。
     unsigned long long last_progress_ms;
 };
 
+// Master 侧的 RDMA 快照凭证：记录某个 IP 通过 RDMA 拉取快照时的 backlog 序号。
+// Replica 随后 TCP 握手时凭它跳过 TCP 全量，只补该序号之后的增量。
+// 条目按 TTL 过期，取用后置为未使用；所有字段由 g_repl_mutex 保护。
 struct rdma_note_t {
+    // 条目是否有效；0 表示空槽、已过期或已被消费。
     int used;
+    // 发起 RDMA 拉取的副本 IPv4 字符串，用于 TCP 握手时匹配。
     char peer_ip[INET_ADDRSTRLEN];
+    // RDMA 快照对应的全局 backlog 序号；Replica 已拥有该序号及之前的数据。
     unsigned long long seq;
+    // 记录写入时刻的毫秒时间戳，超过 REPL_RDMA_NOTE_TTL_MS 后失效。
     unsigned long long ts_ms;
 };
 
@@ -230,25 +293,35 @@ static int send_raw_frame(int fd, const char* data, size_t len) {
 
 // ==================== backlog（增量日志） ====================
 
+// backlog 的序号语义（后续所有 next_seq 比较都基于它）：
+//   tail = g_backlog_head - g_backlog.size()  队首记录号，即最老的仍在内存里的记录；
+//   head = g_backlog_head                     已写入记录总数，也是「下一条将写入」的序号。
+// 槽位的 next_seq 必须落在 [tail, head] 内才能从 backlog 补齐；若 next_seq < tail，
+// 说明落后的记录已被上限挤出内存，只能重连后重新全量同步。
 static void backlog_push_locked(const std::string& payload) {
+    // 追加一条记录，并让 head 自增（= 分配下一个序号）。
     g_backlog.push_back(payload);
     g_backlog_bytes += payload.size();
     g_backlog_head++;
 
+    // 超过内存上限就从队首淘汰最老记录；tail 随之前移，落后过多的副本会被判越界。
     while (g_backlog_bytes > REPL_BACKLOG_MAX_BYTES && g_backlog.size() > 1) {
         g_backlog_bytes -= g_backlog.front().size();
         g_backlog.pop_front();
     }
 }
 
+// 队首序号：next_seq 追上它之前都还能补齐。
 static unsigned long long backlog_tail_locked() {
     return g_backlog_head - (unsigned long long)g_backlog.size();
 }
 
+// 按下标取出第 seq 条记录（调用点已保证 seq 在 [tail, head) 内）。
 static const std::string& backlog_at_locked(unsigned long long seq) {
     return g_backlog[(size_t)(seq - backlog_tail_locked())];
 }
 
+// 读取当前日志末尾序号，供 RDMA 快照与握手对齐使用。
 unsigned long long kvs_replication_backlog_offset() {
     pthread_mutex_lock(&g_repl_mutex);
     unsigned long long seq = g_backlog_head;
@@ -258,6 +331,18 @@ unsigned long long kvs_replication_backlog_offset() {
 
 // ==================== Master：槽位管理 ====================
 
+// 槽位状态机（读懂 add / finish_handshake / resync 的钥匙）：
+//
+//   FREE ──add_replica──> PENDING ──start_full_sync_locked──> SYNCING ──追平──> ONLINE
+//                            ^                                          │
+//                            └──────────── resync() ◄───────────────────┘
+//
+//   PENDING：已登记握手，但还没开始投递任何字节（RDMA 只会在此状态下续传增量）；
+//   SYNCING：正在发送全量快照或补齐快照之后的增量；
+//   ONLINE ：至少追平过一次，进入常规增量投递。
+//
+// 每个槽位自带 next_seq，因此各副本进度互不影响：快的照常发，慢的只会拖慢自己。
+
 static int find_slot_locked(int fd) {
     for (int i = 0; i < MAX_REPLICAS; ++i) {
         if (g_slots[i].fd == fd && g_slots[i].state != REPL_SLOT_FREE) {
@@ -265,6 +350,17 @@ static int find_slot_locked(int fd) {
         }
     }
     return -1;
+}
+
+// 复位一个槽位的数据字段。fd 与 state 描述「槽位是否仍被占用」，由各调用方
+// 按场景单独设置，因此不在这里改动，避免不同清理路径的语义漂移。
+static void slot_clear_locked(repl_slot_t& s) {
+    s.next_seq = 0;
+    s.out.clear();
+    s.out_sent = 0;
+    s.prefix_done = 0;
+    s.fullsync_done_sent = 0;
+    s.peer_ip[0] = '\0';
 }
 
 // 复制模块主动放弃一个副本：只 shutdown，不 close。
@@ -278,12 +374,7 @@ static void drop_slot_locked(int slot, const char* reason) {
     }
     s.fd = -1;
     s.state = REPL_SLOT_FREE;
-    s.next_seq = 0;
-    s.out.clear();
-    s.out_sent = 0;
-    s.prefix_done = 0;
-    s.fullsync_done_sent = 0;
-    s.peer_ip[0] = '\0';
+    slot_clear_locked(s);
 }
 
 static void fill_peer_ip(int fd, char* out, size_t out_size) {
@@ -312,6 +403,8 @@ static void enable_tcp_keepalive(int fd) {
     setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
 }
 
+// [步骤 4] 占一个空闲槽位，状态置 PENDING（已登记、还没开始投递）。
+// next_seq 初始化为「当前 backlog 末尾」：真正全量同步前先不补历史增量。
 int kvs_replication_add_replica(int fd) {
     if (g_role != KVS_ROLE_MASTER || fd < 0) {
         return -1;
@@ -325,11 +418,8 @@ int kvs_replication_add_replica(int fd) {
         }
         s.fd = fd;
         s.state = REPL_SLOT_PENDING;
+        slot_clear_locked(s);
         s.next_seq = g_backlog_head;
-        s.out.clear();
-        s.out_sent = 0;
-        s.prefix_done = 0;
-        s.fullsync_done_sent = 0;
         s.last_progress_ms = repl_now_ms();
         fill_peer_ip(fd, s.peer_ip, sizeof(s.peer_ip));
         pthread_mutex_unlock(&g_repl_mutex);
@@ -357,12 +447,7 @@ void kvs_replication_remove_replica(int fd) {
         }
         s.fd = -1;
         s.state = REPL_SLOT_FREE;
-        s.next_seq = 0;
-        s.out.clear();
-        s.out_sent = 0;
-        s.prefix_done = 0;
-        s.fullsync_done_sent = 0;
-        s.peer_ip[0] = '\0';
+        slot_clear_locked(s);
         kvs_log(KVS_LOG_INFO, "[REPLICATION] replica removed fd=%d", fd);
         break;
     }
@@ -380,6 +465,8 @@ static int parse_handshake(const char* data, int length) {
     return memcmp(data, legacy, sizeof(legacy) - 1) == 0;
 }
 
+// [步骤 3] 握手识别：网络层把收到的第一个网络帧交给这里判断。
+// 返回 1 = 是副本握手且已登记；0 = 不是握手（按普通客户端继续走命令解析）。
 int kvs_replication_accept_handshake(int fd, const char* data, int length) {
     if (!parse_handshake(data, length)) {
         return 0;
@@ -474,7 +561,7 @@ static int take_rdma_note_locked(const char* peer_ip, unsigned long long* seq) {
 
 #endif
 
-// 生成 TCP 全量同步前缀：RESET + SNAPSHOT 分片 + SNAPSHOT_END。
+// [步骤 6] 生成 TCP 全量同步前缀：RESET + SNAPSHOT 分片 + SNAPSHOT_END。
 //
 // 关键点：快照序列化与 backlog 序号在同一个存储锁区间内确定，序列化期间
 // 不会再有写命令落地，因此「快照状态」与「base_seq」严格对齐，之后 backlog
@@ -482,15 +569,18 @@ static int take_rdma_note_locked(const char* peer_ip, unsigned long long* seq) {
 static int build_tcp_full_sync_prefix(std::string* prefix, unsigned long long* base_seq) {
     kvs_data_lock();
 
+    // (6a) 等 eBPF 采集线程把已通知的命令都落进 backlog，再取基准序号：
     // 写命令是先经 eBPF ringbuf 采集、再由消费线程落 backlog 的，两者之间有一小段
     // 异步窗口。这里在存储锁内等消费线程追平（锁内不会再产生新命令），保证下面取到的
     // base_seq 与快照内容严格对齐：快照里已有的命令不会被当成增量再补发一遍。
     kvs_ebpf_wait_drained(KVS_REPL_EBPF_DRAIN_TIMEOUT_MS);
 
+    // (6b) 在同一把存储锁内记录基准序号：这是快照与增量的分界点。
     pthread_mutex_lock(&g_repl_mutex);
     unsigned long long base = g_backlog_head;
     pthread_mutex_unlock(&g_repl_mutex);
 
+    // (6c) 在持锁状态下序列化 RDB，保证快照内容就是 base_seq 对应的那一刻状态。
     char* blob = NULL;
     size_t blob_len = 0;
     int rc = kvs_snapshot_serialize(&blob, &blob_len);
@@ -502,6 +592,7 @@ static int build_tcp_full_sync_prefix(std::string* prefix, unsigned long long* b
         return -1;
     }
 
+    // (6d) 按帧协议分片封装：先要求对端 RESET，再逐片发 SNAPSHOT，最后发结束标记。
     prefix->clear();
     append_frame_header(prefix, KVS_REPL_FRAME_RESET, 0);
     for (size_t off = 0; off < blob_len; off += REPL_SNAPSHOT_CHUNK) {
@@ -519,27 +610,21 @@ static int build_tcp_full_sync_prefix(std::string* prefix, unsigned long long* b
     return 0;
 }
 
-// 为某个副本安排一次全量同步。调用时需持有 g_repl_mutex。
-// have_base_seq=1 表示对端已通过 RDMA 拿到 base_seq 对应的快照，只需补增量；
-// 否则生成 TCP 二进制快照（生成过程会临时释放 g_repl_mutex，避免长时间持锁）。
-static int start_full_sync_locked(int slot, int have_base_seq, unsigned long long base_seq) {
+// [步骤 6 续] 把一次全量同步挂到槽位上。调用时必须持有 g_repl_mutex，
+// 且本函数全程持锁、不会释放它——耗时的快照序列化由调用方在锁外预先完成，
+// 通过 tcp_prefix 传入，从而避免「_locked 函数中途解锁」这种易误用的写法。
+// have_base_seq=1：对端已通过 RDMA 拿到 base_seq 对应的快照，只需补增量；
+// have_base_seq=0：使用 tcp_prefix（RESET + SNAPSHOT... + SNAPSHOT_END），
+//                   tcp_prefix 为空表示快照生成失败，直接断开该副本。
+static int start_full_sync_locked(int slot, int have_base_seq, unsigned long long base_seq,
+                                  const std::string& tcp_prefix) {
     repl_slot_t& s = g_slots[slot];
     if (s.fd < 0 || s.state == REPL_SLOT_FREE) {
         return -1;
     }
 
     if (!have_base_seq) {
-        std::string prefix;
-        unsigned long long base = 0;
-        int rc;
-        pthread_mutex_unlock(&g_repl_mutex);
-        rc = build_tcp_full_sync_prefix(&prefix, &base);
-        pthread_mutex_lock(&g_repl_mutex);
-
-        if (s.fd < 0 || s.state == REPL_SLOT_FREE) {
-            return -1;
-        }
-        if (rc != 0) {
+        if (tcp_prefix.empty()) {
             drop_slot_locked(slot, "build full sync snapshot failed");
             return -1;
         }
@@ -551,8 +636,8 @@ static int start_full_sync_locked(int slot, int have_base_seq, unsigned long lon
             s.out.erase(0, s.out_sent);
             s.out_sent = 0;
         }
-        s.out.append(prefix);
-        s.next_seq = base;
+        s.out.append(tcp_prefix);
+        s.next_seq = base_seq;
         s.prefix_done = 0;
     } else {
         // 该分支只用于「刚登记握手、尚未投递任何字节」的槽位（RDMA 快照后补增量）。
@@ -577,6 +662,9 @@ static int start_full_sync_locked(int slot, int have_base_seq, unsigned long lon
     return 0;
 }
 
+// [步骤 5] 握手收尾：网络层已把 +OK 响应写回后调用，这里启动全量同步。
+// 如果同一对端刚通过 RDMA 拿过快照，就取出记录的 base_seq，只补它之后的增量；
+// 否则走 build_tcp_full_sync_prefix() 下发完整 RDB 快照。
 void kvs_replication_finish_handshake(int fd) {
     if (g_role != KVS_ROLE_MASTER) {
         return;
@@ -594,17 +682,52 @@ void kvs_replication_finish_handshake(int fd) {
 #ifdef KVS_ENABLE_RDMA
     have_base = take_rdma_note_locked(g_slots[slot].peer_ip, &base_seq);
 #endif
+    pthread_mutex_unlock(&g_repl_mutex);
 
-    if (start_full_sync_locked(slot, have_base, base_seq) != 0) {
-        pthread_mutex_unlock(&g_repl_mutex);
-        return;
+    // 快照序列化耗时且要取存储锁，必须在 g_repl_mutex 之外完成：
+    // 先在锁内确认槽位与 RDMA 记录，再解锁生成前缀，最后重新持锁安装。
+    std::string tcp_prefix;
+    unsigned long long tcp_base = 0;
+    if (!have_base && build_tcp_full_sync_prefix(&tcp_prefix, &tcp_base) != 0) {
+        tcp_prefix.clear();
+    }
+
+    pthread_mutex_lock(&g_repl_mutex);
+    // 生成快照期间槽位可能被回收或复用，按 fd + 状态重新校验后再启动。
+    if (g_slots[slot].fd == fd && g_slots[slot].state == REPL_SLOT_PENDING) {
+        start_full_sync_locked(slot, have_base, have_base ? base_seq : tcp_base, tcp_prefix);
     }
     pthread_mutex_unlock(&g_repl_mutex);
 }
 
+// [步骤 13] 兜底入口：副本落后超出 backlog 范围、快照加载失败或 eBPF 丢事件时调用，
+// 让所有在线副本退回 PENDING，各自重新走一次「快照 + 增量补齐」。
+// 全量同步的开关也是它：RDB LOAD / AOF LOAD 之后会调用它刷新在线副本。
 int kvs_replication_resync() {
     if (g_role != KVS_ROLE_MASTER) {
         return 0;
+    }
+
+    // 先看有没有需要重同步的副本，避免没有副本时白白序列化一次快照。
+    pthread_mutex_lock(&g_repl_mutex);
+    int has_active = 0;
+    for (int i = 0; i < MAX_REPLICAS; ++i) {
+        if (g_slots[i].fd >= 0 && g_slots[i].state >= REPL_SLOT_SYNCING) {
+            has_active = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_repl_mutex);
+    if (!has_active) {
+        return 0;
+    }
+
+    // 所有副本复用同一份快照，base_seq 因此一致：重同步后它们从同一个起点补增量。
+    // 快照序列化耗时且要取存储锁，必须在 g_repl_mutex 之外完成。
+    std::string tcp_prefix;
+    unsigned long long tcp_base = 0;
+    if (build_tcp_full_sync_prefix(&tcp_prefix, &tcp_base) != 0) {
+        tcp_prefix.clear();
     }
 
     pthread_mutex_lock(&g_repl_mutex);
@@ -617,7 +740,7 @@ int kvs_replication_resync() {
         s.state = REPL_SLOT_PENDING;
         s.prefix_done = 0;
         s.fullsync_done_sent = 0;
-        start_full_sync_locked(i, 0, 0);
+        start_full_sync_locked(i, 0, tcp_base, tcp_prefix);
     }
     pthread_mutex_unlock(&g_repl_mutex);
     return 0;
@@ -664,7 +787,7 @@ static void backlog_push_and_wake(const std::string& payload) {
     pthread_mutex_unlock(&g_repl_mutex);
 }
 
-// eBPF 采集通道的消费回调：记录里取出的参数在这里重新编码后落 backlog。
+// [步骤 2 续] eBPF 采集通道的消费回调：把 ringbuf 里取出的参数重新编码后落 backlog。
 // 调用方是采集消费线程，不持有任何锁。
 void kvs_replication_on_captured_command(int argc, char* argv[]) {
     if (g_role != KVS_ROLE_MASTER) {
@@ -679,6 +802,10 @@ void kvs_replication_on_captured_command(int argc, char* argv[]) {
     backlog_push_and_wake(payload);
 }
 
+// [步骤 2] 增量入口：Master 每次写成功都会调用这里（见 kvstore.cpp 的写分支）。
+// 它只负责把命令交到全局 backlog：采集可用时交给 eBPF 通道异步入队，否则当场编码
+// 入队。两条路径都绝不在这里直接 send 给副本，因此慢副本不会阻塞事件循环，
+// 掉队副本也能靠各自的 next_seq 慢慢追上。
 int kvs_replication_append(int argc, char* argv[]) {
     if (g_role != KVS_ROLE_MASTER) {
         return 0;
@@ -688,10 +815,13 @@ int kvs_replication_append(int argc, char* argv[]) {
     }
 
 #if KVS_ENABLE_EBPF_REALTIME
+    // 路径 A（采集可用）：只通知 eBPF，本次调用立刻返回；命令稍后由采集线程
+    // 调用 on_captured_command() 入队。event_seq 让消费线程能发现丢事件并重同步。
     if (kvs_ebpf_realtime_active()) {
         if (kvs_ebpf_event_fits(argc, argv)) {
-            // 交给 eBPF 采集通道：uprobe 把参数写进 ringbuf，消费线程稍后
-            // 调用 kvs_replication_on_captured_command() 落 backlog。
+            // 只通知采集通道，本函数不直接入队：uprobe 把参数写进 ringbuf，
+            // 消费线程随后在 dispatch_record() 里调用
+            // kvs_replication_on_captured_command() 才真正落 backlog。
             // 序号在存储锁内递增，消费线程据此发现丢失的事件。
             static unsigned int event_seq = 0;
             ++event_seq;
@@ -704,6 +834,7 @@ int kvs_replication_append(int argc, char* argv[]) {
     }
 #endif
 
+    // 路径 B（采集不可用或参数过大）：在当前线程直接编码后入队。
     std::string payload;
     if (encode_command(argc, argv, &payload) != 0) {
         return -1;
@@ -712,7 +843,9 @@ int kvs_replication_append(int argc, char* argv[]) {
     return 0;
 }
 
-// 把 backlog 中 seq 开始的记录拼进 s.out，最多 REPL_SEND_CHUNK 字节。
+// [步骤 7 续] 把 backlog 中 s.next_seq 开始的记录（带 COMMAND 帧头）拼进
+// s.out，最多 REPL_SEND_CHUNK 字节。每拼一条 next_seq 就前进一格，
+// 因此对端收到的命令顺序与 Master 写入 backlog 的顺序完全一致。
 // 返回 1 表示副本落后超出日志范围，需要重新全量同步。
 static int refill_slot_locked(int slot) {
     repl_slot_t& s = g_slots[slot];
@@ -737,7 +870,22 @@ static int refill_slot_locked(int slot) {
     return 0;
 }
 
-// 返回：0 = 本轮无待发数据，1 = 还有数据待发，2 = 需要重新全量同步。
+// [步骤 7 核心] 单个副本的非阻塞发送状态机。每次被调用都尽量把 s.out 发空，
+// 发空后再按需补数据，直到「无数据可发」或「内核缓冲区满(EAGAIN)」。
+//
+// 一轮循环依次处理三件事：
+//   (a) s.out 里还有字节  -> send(MSG_DONTWAIT) 继续发；
+//   (b) 快照已发完且增量已补齐 -> 下发 FULLSYNC_DONE，副本据此转入常规增量；
+//   (c) s.out 发空          -> refill 从 backlog 取下一批增量，回到 (a)。
+//
+// 全量 / 增量在这里的分界：
+//   * 全量同步 = (a) 中把 s.out 里的 RESET + SNAPSHOT... + SNAPSHOT_END 前缀发完
+//     （发完那一刻 prefix_done 置 1）；
+//   * 增量同步 = (c) 的 refill 按 next_seq 从 backlog 取 COMMAND 帧；
+//   * (b) 的 FULLSYNC_DONE 是两者之间的分界标记，发完即转入纯增量。
+//
+// 返回：0 = 本轮无待发数据，1 = 还有数据待发（socket 暂时写不下），
+//       2 = 需要重新全量同步（副本落后超出 backlog 范围）。
 static int flush_slot_locked(int slot) {
     repl_slot_t& s = g_slots[slot];
     if (s.fd < 0 || s.state < REPL_SLOT_SYNCING) {
@@ -752,8 +900,10 @@ static int flush_slot_locked(int slot) {
         return 0;
     }
 
-    for (;;) {
+    while (1) {
         if (s.out_sent < s.out.size()) {
+            // [发送中] s.out 此刻可能是全量快照帧，也可能是增量 COMMAND 帧，
+            // 这里只按字节写 socket，帧语义由后面的 prefix_done 判断。
             ssize_t n = send(s.fd, s.out.data() + s.out_sent, s.out.size() - s.out_sent,
                              MSG_DONTWAIT | MSG_NOSIGNAL);
             if (n > 0) {
@@ -763,6 +913,7 @@ static int flush_slot_locked(int slot) {
                     s.out.clear();
                     s.out_sent = 0;
                     if (!s.prefix_done) {
+                        // [全量同步结束] 快照前缀（RESET+SNAPSHOT...+SNAPSHOT_END）刚发完。
                         s.prefix_done = 1;
                         kvs_log(KVS_LOG_INFO, "[REPLICATION] full snapshot sent fd=%d", s.fd);
                     }
@@ -776,13 +927,15 @@ static int flush_slot_locked(int slot) {
             return 0;
         }
 
-        // 全量快照发完、且快照之后落地的增量也补齐后，下发 FULLSYNC_DONE 标记。
+        // [全量同步收尾] 快照发完、且快照之后落地的增量也补齐后，下发 FULLSYNC_DONE；
+        // 这是全量同步的结束标记，副本收到后只再处理增量。
         if (s.prefix_done && !s.fullsync_done_sent && s.next_seq == g_backlog_head) {
             append_frame_header(&s.out, KVS_REPL_FRAME_FULLSYNC_DONE, 0);
             s.fullsync_done_sent = 1;
             continue;
         }
 
+        // [增量同步] 从 backlog 取下一批 COMMAND 帧（refill 内部按 next_seq 前进一格）。
         if (refill_slot_locked(slot) != 0) {
             return 2;
         }
@@ -796,6 +949,23 @@ static int flush_slot_locked(int slot) {
     }
 }
 
+// [步骤 7] Master 唯一的网络发送线程。事件循环只把命令写进 backlog，
+// 真正 send() 到副本的动作全部集中在这里，从而避免慢副本阻塞事件循环。
+//
+// 全量同步 / 增量同步在本线程里的分工：
+//   * 本函数只是「驱动循环」，自身不区分全量与增量；它对每个 SYNCING/ONLINE
+//     槽位统一调用 flush_slot_locked()，真正投递两类数据的是后者：
+//        - 全量同步：槽位登记/重连时，out 里被预置了
+//          RESET + SNAPSHOT 分片 + SNAPSHOT_END，把这段前缀发完就是全量同步；
+//        - 增量同步：out 发空后由 refill_slot_locked() 按 next_seq 从 backlog
+//          取 COMMAND 记录继续发，这就是常规增量投递。
+//   * 因此 SYNCING 槽位此刻可能在发全量快照，也可能在补快照之后的增量，
+//     追平一次后转 ONLINE；ONLINE 槽位只剩增量。
+//
+// 每轮做三件事：
+//   1) 持复制锁遍历所有 SYNCING/ONLINE 槽位，各做一次非阻塞 flush；
+//   2) 若无需等待可写，就在条件变量上最多睡 50ms（有写入唤醒会提前返回）；
+//   3) 若某副本被判越界，断开该槽位迫使副本重连，重连后会重新走一遍全量同步。
 static void* repl_sender_thread(void*) {
     while (g_sender_running) {
         struct pollfd pfds[MAX_REPLICAS];
@@ -810,10 +980,14 @@ static void* repl_sender_thread(void*) {
             if (s.fd < 0 || s.state < REPL_SLOT_SYNCING) {
                 continue;
             }
+            // 每个槽位一次推进：既发 out 里已就绪的全量快照帧，
+            // 也在发空后 refill 出增量 COMMAND 帧（细节见 flush_slot_locked）。
             int rc = flush_slot_locked(i);
             if (rc == 2) {
+                // 副本落后超出 backlog 范围：本轮先记账，稍后断开重连，改走全量重同步。
                 need_resync[resync_count++] = i;
             } else if (rc == 1) {
+                // 快照或增量还有剩余字节没写完（socket 暂时满），登记 POLLOUT 稍后再发。
                 pending = 1;
                 pfds[nfds].fd = s.fd;
                 pfds[nfds].events = POLLOUT;
@@ -822,6 +996,7 @@ static void* repl_sender_thread(void*) {
             }
         }
 
+        // 所有槽位都已发空（没有快照/增量待发，也没有越界副本），空闲等待被唤醒。
         if (!pending && resync_count == 0) {
             struct timespec ts;
             clock_gettime(CLOCK_REALTIME, &ts);
@@ -834,20 +1009,18 @@ static void* repl_sender_thread(void*) {
         }
         pthread_mutex_unlock(&g_repl_mutex);
 
+        // [全量重同步] 越界副本无法再用 backlog 增量补齐，断开它；副本重连握手后
+        // 会经 build_tcp_full_sync_prefix() 重新做一次全量同步。
         for (int k = 0; k < resync_count; ++k) {
-            // 重新全量同步需要先拿存储锁再拿复制锁，必须脱离复制锁后再启动。
             int slot = need_resync[k];
             pthread_mutex_lock(&g_repl_mutex);
-            int valid = (g_slots[slot].fd >= 0 && g_slots[slot].state >= REPL_SLOT_SYNCING);
-            pthread_mutex_unlock(&g_repl_mutex);
-            if (!valid) {
-                continue;
+            if (g_slots[slot].fd >= 0 && g_slots[slot].state >= REPL_SLOT_SYNCING) {
+                drop_slot_locked(slot, "backlog overrun, force reconnect");
             }
-            pthread_mutex_lock(&g_repl_mutex);
-            drop_slot_locked(slot, "backlog overrun, force reconnect");
             pthread_mutex_unlock(&g_repl_mutex);
         }
 
+        // 等待某个槽位的 socket 重新可写，再回到循环继续发（全量快照或增量）。
         if (pending) {
             poll(pfds, (nfds_t)nfds, 20);
         }
@@ -872,7 +1045,8 @@ void kvs_replication_set_master_addr(const char* ip, int port) {
     g_master_port = port;
 }
 
-// 非阻塞 connect + 超时，避免 Master 不可达时线程长时间卡死。
+// [步骤 9] Replica 连接 Master：非阻塞 connect + 1s 超时，避免 Master 不可达时
+// 监督线程长时间卡死。连接成功后恢复阻塞语义，供 replica_session() 阻塞读取。
 int kvs_replication_connect_master(const char* ip, int port) {
     if (ip == NULL || strlen(ip) >= INET_ADDRSTRLEN || port <= 0 || port > 65535) {
         return -1;
@@ -935,7 +1109,9 @@ int kvs_replication_connect_master(const char* ip, int port) {
     return fd;
 }
 
-// 回放一条 Master 下发的写命令（回放期间不重复记录 AOF、不再向外转发）。
+// [步骤 12 续] 回放一条 Master 下发的写命令。
+// 回放期间置线程局部 replaying 标记，使 kvstore.cpp 的写分支跳过 AOF 记录和
+// 向外转发——否则副本会把 Master 的命令再记一遍 AOF，甚至级联转发回去。
 static int apply_replication_command(const char* body, size_t len) {
     if (len == 0) {
         return 0;
@@ -947,7 +1123,14 @@ static int apply_replication_command(const char* body, size_t len) {
     return 0;
 }
 
-// 处理一个复制帧。返回 0 正常，-1 需要断开重连。
+// [步骤 12] 复制帧分发：Replica 侧理解 Master 语义的唯一入口。
+// 负载首字节是类型（见 kvs_replication.h 的 KVS_REPL_FRAME_*），其余为内容：
+//   RESET       清空本地数据，准备接收新快照；
+//   SNAPSHOT    累积一片 RDB 二进制；
+//   SNAPSHOT_END 全部到齐，调用 kvs_snapshot_load_buffer() 整体加载；
+//   COMMAND     常规增量写命令，交给 apply_replication_command() 回放；
+//   FULLSYNC_DONE 标记全量同步结束，之后只剩 COMMAND。
+// 返回 0 正常，-1 需要断开重连（由监督线程重新发起全量同步）。
 static int handle_replication_frame(unsigned char type, const char* body, size_t len,
                                     std::string* snapshot_buf) {
     switch (type) {
@@ -999,7 +1182,8 @@ static int handle_replication_frame(unsigned char type, const char* body, size_t
     }
 }
 
-// 一次会话：持续读取类型化复制帧并应用，直到连接断开或主动停止。
+// [步骤 11] 一次会话：发握手，然后持续读取类型化复制帧并应用，
+// 直到连接断开或主动停止。socket 上不会出现其它类型的数据，读循环很简单。
 // 实时增量统一从 TCP 复制帧（KVS_REPL_FRAME_COMMAND）读取并回放；
 // Master 侧的 eBPF 采集只影响命令如何进入 backlog，不影响本函数。
 static void replica_session(int fd) {
@@ -1045,6 +1229,9 @@ static void replica_session(int fd) {
     snapshot_buf.clear();
 }
 
+// [步骤 8] Replica 监督线程：连接 -> 可选 RDMA 拉快照 -> 会话回放，
+// 断开后按指数退避（200ms 起，上限 5s）重连，直到收到停止信号。
+// kvs_replication_start() 只负责创建本线程，所以 Master 未启动时副本也能正常启动。
 static void* replica_supervisor_thread(void*) {
     int backoff_ms = 200;
 
@@ -1066,6 +1253,7 @@ static void* replica_supervisor_thread(void*) {
         backoff_ms = 200;
 
 #ifdef KVS_ENABLE_RDMA
+        // [步骤 10] 可选路径：先用 RDMA 把快照拉到本地（见 kvs_rdma.cpp）。
         // 优先用 RDMA 拉一次全量快照；Master 会按是否收到 RDMA 快照记录，
         // 决定是「只补增量」还是「发完整 TCP 快照」。
         if (kvs_replication_rdma_full_sync(ip, port) != 0) {
@@ -1091,6 +1279,8 @@ static void* replica_supervisor_thread(void*) {
     return NULL;
 }
 
+// [步骤 8 前置] 只拉起监督线程就返回，因此调用方（main）不会被网络阻塞；
+// 后续连接/重连/全量同步都在 replica_supervisor_thread() 内完成。
 int kvs_replication_start() {
     if (g_role != KVS_ROLE_REPLICA || replica_running) {
         return -1;
@@ -1109,6 +1299,8 @@ int kvs_replication_start() {
     return 0;
 }
 
+// [步骤 14] 停止 Replica：置停止标志并 shutdown，唤醒可能阻塞在 recv/退避里的线程，
+// 然后 join。fd 的 close 放在会话线程之后，避免并发使用已关闭的 fd。
 void kvs_replication_stop() {
     if (!replica_running) {
         return;
@@ -1125,6 +1317,11 @@ void kvs_replication_stop() {
     kvs_log(KVS_LOG_INFO, "[REPLICATION] replica sync stopped");
 }
 
+// [步骤 14 续] 进程退出时的清理顺序很重要：
+//   1) 先停 Replica 线程；
+//   2) 再停 Master 发送线程（清空槽位与 backlog）；
+//   3) 然后停 eBPF 采集线程——它会回调 kvs_replication_resync()，必须确保它已退出；
+//   4) 最后才拆 RDMA 监听（此时不会再有新的全量同步请求）。
 void kvs_replication_destroy() {
     if (g_role == KVS_ROLE_REPLICA) {
         kvs_replication_stop();
@@ -1139,9 +1336,9 @@ void kvs_replication_destroy() {
         pthread_mutex_lock(&g_repl_mutex);
     }
     for (int i = 0; i < MAX_REPLICAS; ++i) {
-        g_slots[i].out.clear();
         g_slots[i].fd = -1;
         g_slots[i].state = REPL_SLOT_FREE;
+        slot_clear_locked(g_slots[i]);
     }
     g_backlog.clear();
     g_backlog_bytes = 0;
@@ -1160,6 +1357,9 @@ void kvs_replication_destroy() {
 #endif
 }
 
+// [步骤 1] 角色初始化，整条链路的起点。
+// Master：准备好全部空闲槽位与 backlog，并拉起常驻发送线程（此后只等被唤醒）。
+// Replica：仅记录配置文件里的主节点地址，真正的连接由 [8] 的监督线程负责。
 int kvs_replication_init(kvs_role_t role) {
     g_role = role;
 
@@ -1172,15 +1372,11 @@ int kvs_replication_init(kvs_role_t role) {
         g_master_port = kvs_config_master_port();
     }
 
+    // (1a) 所有槽位置为空闲，backlog 清空并从序号 0 开始。
     for (int i = 0; i < MAX_REPLICAS; ++i) {
         g_slots[i].fd = -1;
         g_slots[i].state = REPL_SLOT_FREE;
-        g_slots[i].next_seq = 0;
-        g_slots[i].out.clear();
-        g_slots[i].out_sent = 0;
-        g_slots[i].prefix_done = 0;
-        g_slots[i].fullsync_done_sent = 0;
-        g_slots[i].peer_ip[0] = '\0';
+        slot_clear_locked(g_slots[i]);
         g_rdma_notes[i].used = 0;
         g_rdma_notes[i].peer_ip[0] = '\0';
         g_rdma_notes[i].seq = 0;
@@ -1190,6 +1386,7 @@ int kvs_replication_init(kvs_role_t role) {
     g_backlog_bytes = 0;
     g_backlog_head = 0;
 
+    // (1b) 只有 Master 需要发送线程；它常驻运行，写命令通过条件变量唤醒它。
     if (role == KVS_ROLE_MASTER && !g_sender_running) {
         g_sender_running = 1;
         if (pthread_create(&g_sender_tid, NULL, repl_sender_thread, NULL) != 0) {
@@ -1200,6 +1397,8 @@ int kvs_replication_init(kvs_role_t role) {
     }
 
 #if KVS_ENABLE_EBPF_REALTIME
+    // (1c) 可选优化：Master 尝试启用 eBPF 实时采集。它只改变「命令怎么进 backlog」，
+    //      失败会回退到 kvs_replication_append() 直接入队，不影响复制正确性。
     // Master 侧：尝试用 uprobe/kprobe + ringbuf 采集写命令。失败只影响「命令怎么
     // 进 backlog」，不影响复制正确性——写路径会自动改走直接落 backlog。
     if (role == KVS_ROLE_MASTER) {

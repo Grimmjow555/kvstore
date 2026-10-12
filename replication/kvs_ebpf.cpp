@@ -32,6 +32,34 @@
 #include <time.h>
 #include <unistd.h>
 
+// ==================== eBPF 采集通道：定位与阅读提示 ====================
+//
+// 这是 kvs_replication.cpp 阅读路线图 [步骤 2] 的支线。Master 的写命令有两条
+// 落 backlog 的路径，终点都是 kvs_replication.cpp 的 backlog_push_and_wake()：
+//   * 直接路径：kvs_replication_append() 当场 encode_command() 后入队（采集不可用
+//     或命令参数超长时走这条）；
+//   * 采集路径：kvs_replication_append() 只调用 kvs_ebpf_notify_write() 通知本文件，
+//     真正的入队发生在消费线程——dispatch_record() 调用
+//     kvs_replication_on_captured_command()，后者再 encode + 入队。
+// 所以 kvs_replication_append() 本身并不调用 on_captured_command()。
+//
+// 完整链路：
+//   写命令 -> kvs_ebpf_notify_write()（uprobe 挂载点，在存储锁内调用，本身不做采集）
+//          -> 内核 BPF 程序读 pt_regs 里的 (seq, argc, argv) 并写 ringbuf
+//          -> consumer_thread() 轮询 ringbuf
+//          -> ringbuf_drain() / dispatch_record() 解析并检查序号连续性
+//          -> kvs_replication_on_captured_command() 落 backlog
+//
+// 正确性要点：
+//   * ringbuf 满时 reserve 失败会丢事件，因此每条记录带自增 seq；dispatch_record()
+//     发现 seq 缺口立刻 kvs_replication_resync()，绝不静默丢命令；
+//   * 参数超长/参数过多时 kvs_ebpf_event_fits() 返回 0，调用方先
+//     kvs_ebpf_wait_drained() 再直接落 backlog，保证与异步路径的顺序一致；
+//   * 任何 attach 失败都会自动回退为「写路径直接落 backlog」，不影响复制正确性。
+//
+// 定义 KVS_EBPF_SIM 时把内核采集替换成用户态 ringbuf 模拟，便于在容器/CI 中
+// 走通同一条消费链路。
+
 // 内核 ABI 里固定的 helper 编号。本机 linux/bpf.h 只提供 __BPF_FUNC_MAPPER，
 // 不生成 BPF_FUNC_* 名字，这里按 ABI 常量补上（顺序见 __BPF_FUNC_MAPPER）。
 #define KVS_BPF_FUNC_PROBE_READ_USER 112
@@ -117,7 +145,7 @@ static void pb_patch(struct prog_builder* b, int idx, int target) {
     b->insns[idx].off = (short)(target - idx - 1);
 }
 
-// 生成采集程序：
+// [步骤 2 支线] 生成内核 BPF 程序（裸指令，不依赖 libbpf）：
 //
 //   seq  = ctx->di; argc = ctx->si; argv = ctx->dx;
 //   if (argc < 1 || argc > 3) return 0;
@@ -221,6 +249,9 @@ static int build_capture_program(struct prog_builder* b, int ringbuf_fd) {
 
 // ==================== 记录解析 ====================
 
+// [步骤 2 支线] 解析一条 ringbuf 记录为 argv：头部是 (seq, argc) 和每个参数长度，
+// 参数体按固定槽长排布。任一长度非法或参数未以 '\0' 结尾都返回 -1，
+// 由调用方判定为「记录损坏」并触发重同步，而不是复制半条命令。
 int kvs_ebpf_event_parse(const unsigned char* data, unsigned int len, unsigned int* out_seq,
                          char* argbuf, size_t argbuf_size, char* argv[], int max_args) {
     if (data == NULL || argbuf == NULL || argv == NULL || len < KVS_EBPF_EVENT_HEADER_SIZE) {
@@ -278,6 +309,8 @@ int kvs_ebpf_event_fits(int argc, char* argv[]) {
 
 // ==================== ringbuf 消费 ====================
 
+// [步骤 2 支线] 单条记录的处理：解析 -> 校验序号连续性 -> 交给复制模块落 backlog。
+// 序号缺口意味着中间的事件被 ringbuf 丢弃，此时必须先重同步再继续。
 static void dispatch_record(const unsigned char* data, unsigned int len) {
     char argbuf[KVS_EBPF_EVENT_MAX_ARGS * KVS_EBPF_EVENT_ARG_MAX];
     char* argv[KVS_EBPF_EVENT_MAX_ARGS];
@@ -371,6 +404,8 @@ static void check_capture_health(void) {
     }
 }
 
+// [步骤 2 支线] 采集消费线程：轮询/等待 ringbuf，把新记录交给 ringbuf_drain()，
+// 并由 check_capture_health() 看门狗兜底处理「尾部事件静默丢失」的情况。
 static void* consumer_thread(void*) {
     while (__atomic_load_n(&g_running, __ATOMIC_RELAXED)) {
         if (g_ringbuf_fd >= 0) {
@@ -394,7 +429,8 @@ static void* consumer_thread(void*) {
 
 // ==================== 写路径入口 ====================
 
-// 真实内核模式下本函数体不做任何事：参数由挂在函数入口的 kprobe 程序通过
+// [步骤 2 支线] 写路径的采集挂载点：真实内核模式下本函数体不做任何事，
+// 参数由挂在函数入口的 uprobe 程序通过
 // pt_regs 读取，这里只维护「已通知序号」水位，供快照对齐与超大命令排序使用。
 __attribute__((noinline, used)) void kvs_ebpf_notify_write(unsigned int seq, int argc, char* argv[]) {
     (void)argc;
@@ -411,6 +447,8 @@ __attribute__((noinline, used)) void kvs_ebpf_notify_write(unsigned int seq, int
 #endif
 }
 
+// [步骤 2 支线] 等待「已通知序号」被消费线程追平：取快照或直接落 backlog 前调用，
+// 保证异步采集的命令不会插到当前命令后面（顺序一致性）。
 void kvs_ebpf_wait_drained(int timeout_ms) {
     if (!__atomic_load_n(&g_active, __ATOMIC_RELAXED)) {
         return;
@@ -926,6 +964,9 @@ static void ebpf_teardown(void) {
     __atomic_store_n(&g_active, 0, __ATOMIC_RELAXED);
 }
 
+// [步骤 2 支线] 启用采集：建 ringbuf map -> 加载并校验 BPF 程序 -> 把 uprobe
+// 挂到 kvs_ebpf_notify_write 上 -> 启动 consumer_thread。任何一步失败都返回 -1，
+// 调用方据此回退到写路径直接落 backlog。
 int kvs_ebpf_realtime_start(void) {
     if (__atomic_load_n(&g_active, __ATOMIC_RELAXED)) {
         return 0;
