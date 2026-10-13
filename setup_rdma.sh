@@ -69,7 +69,9 @@ done
 ip link show "$NETDEV" >/dev/null 2>&1 ||
     die "找不到网络设备: $NETDEV"
 
-if rdma link show "$LINK_NAME" >/dev/null 2>&1; then
+# rdma link show 要求传入完整的“设备/端口”名称（例如 siw1/1），
+# 只传 siw1 会返回 Wrong device name，因此从列表中匹配设备名前缀。
+if rdma link show | grep -Eq "^link ${LINK_NAME}/"; then
     echo "RDMA 链路已存在: $LINK_NAME"
 else
     echo "加载 SoftiWARP 内核模块: siw"
@@ -81,4 +83,4 @@ fi
 
 echo
 echo "RDMA 配置完成："
-rdma link show "$LINK_NAME"
+rdma link show | grep -E "^link ${LINK_NAME}/"
