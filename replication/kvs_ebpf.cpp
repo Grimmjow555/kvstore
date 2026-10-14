@@ -9,8 +9,8 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#include "kvs_ebpf.h"
 #include "kvs_config.h"
+#include "kvs_ebpf.h"
 #include "kvs_replication.h"
 
 #include <errno.h>
@@ -161,17 +161,17 @@ static int build_capture_program(struct prog_builder* b, int ringbuf_fd) {
 
     const unsigned char reg_seq = 7, reg_argc = 8, reg_argv = 9, reg_rec = 6;
 
-#define EMIT(C, D, S, O, I)                              \
-    do {                                                 \
-        if (pb_emit(b, (C), (D), (S), (O), (I)) < 0) {   \
-            return -1;                                   \
-        }                                                \
+#define EMIT(C, D, S, O, I)                                                                        \
+    do {                                                                                           \
+        if (pb_emit(b, (C), (D), (S), (O), (I)) < 0) {                                             \
+            return -1;                                                                             \
+        }                                                                                          \
     } while (0)
 
-    EMIT(BPF_ALU64 | BPF_MOV | BPF_X, 6, 1, 0, 0);                        // r6 = ctx
-    EMIT(BPF_LDX | BPF_MEM | BPF_DW, reg_seq, 6, KVS_PT_REG_DI, 0);       // r7 = seq
-    EMIT(BPF_LDX | BPF_MEM | BPF_DW, reg_argc, 6, KVS_PT_REG_SI, 0);      // r8 = argc
-    EMIT(BPF_LDX | BPF_MEM | BPF_DW, reg_argv, 6, KVS_PT_REG_DX, 0);      // r9 = argv
+    EMIT(BPF_ALU64 | BPF_MOV | BPF_X, 6, 1, 0, 0);                   // r6 = ctx
+    EMIT(BPF_LDX | BPF_MEM | BPF_DW, reg_seq, 6, KVS_PT_REG_DI, 0);  // r7 = seq
+    EMIT(BPF_LDX | BPF_MEM | BPF_DW, reg_argc, 6, KVS_PT_REG_SI, 0); // r8 = argc
+    EMIT(BPF_LDX | BPF_MEM | BPF_DW, reg_argv, 6, KVS_PT_REG_DX, 0); // r9 = argv
 
     int j_argc_low = b->n;
     EMIT(BPF_JMP | BPF_JSLT | BPF_K, reg_argc, 0, 0, 1);
@@ -359,7 +359,8 @@ static void ringbuf_drain(void) {
         if ((len & BPF_RINGBUF_BUSY_BIT) != 0) {
             break; // 生产者尚未提交，下次再来
         }
-        unsigned int data_len = len & ~(unsigned int)(BPF_RINGBUF_BUSY_BIT | BPF_RINGBUF_DISCARD_BIT);
+        unsigned int data_len =
+            len & ~(unsigned int)(BPF_RINGBUF_BUSY_BIT | BPF_RINGBUF_DISCARD_BIT);
         if ((len & BPF_RINGBUF_DISCARD_BIT) == 0) {
             dispatch_record(hdr + 8, data_len);
         }
@@ -404,25 +405,46 @@ static void check_capture_health(void) {
     }
 }
 
-// [步骤 2 支线] 采集消费线程：轮询/等待 ringbuf，把新记录交给 ringbuf_drain()，
-// 并由 check_capture_health() 看门狗兜底处理「尾部事件静默丢失」的情况。
+// [步骤 2 支线] 采集消费线程：eBPF 采集通道的用户态半边。
+//
+// 生命周期：
+//   kvs_ebpf_realtime_start() 完成 uprobe 挂载后创建本线程；
+//   kvs_ebpf_realtime_stop() / ebpf_teardown() 通过清零 g_running 并 pthread_join
+//   请求本线程退出。
+//
+// 每轮循环做三件事：
+//   1. 等待新记录。真实内核模式下 ringbuf map fd 支持 poll，有事件或 100ms 超时后返回；
+//      模拟模式没有内核 map fd，退化为 1ms 短睡眠轮询，避免忙等。
+//   2. ringbuf_drain()：按 consumer/producer 位置逐条取出已提交记录，交给
+//      dispatch_record() 解析、校验序号连续性，再经
+//      kvs_replication_on_captured_command() 落入复制 backlog。
+//   3. check_capture_health()：检查「已通知序号」是否长期领先「已消费序号」。采集卡住
+//      或尾部事件被丢弃时触发 kvs_replication_resync()，绝不静默丢命令。
+//
+// 本线程必须保持轻量：如果消费不及时，ringbuf 会被填满，内核侧 reserve 失败即丢事件，
+// 虽然序号缺口能触发重同步，但会造成一次不必要的全量同步。
 static void* consumer_thread(void*) {
     while (__atomic_load_n(&g_running, __ATOMIC_RELAXED)) {
         if (g_ringbuf_fd >= 0) {
+            // 真实内核路径：等待 ringbuf 可读。即使没有新事件，100ms 超时也能让循环
+            // 周期性执行看门狗检查。
             struct pollfd pfd;
             pfd.fd = g_ringbuf_fd;
             pfd.events = POLLIN;
             pfd.revents = 0;
             poll(&pfd, 1, 100);
         } else {
+            // 模拟模式没有可 poll 的内核 fd，用 1ms 短睡眠代替等待。
             struct timespec ts;
             ts.tv_sec = 0;
             ts.tv_nsec = 1000000L; // 模拟模式：1ms 轮询
             nanosleep(&ts, NULL);
         }
+        // 先排空本轮所有可达记录，再做一次健康检查。
         ringbuf_drain();
         check_capture_health();
     }
+    // 收到停止请求后再排空一次，消费掉退出瞬间已经提交到 ringbuf 的尾部记录。
     ringbuf_drain();
     return NULL;
 }
@@ -432,7 +454,8 @@ static void* consumer_thread(void*) {
 // [步骤 2 支线] 写路径的采集挂载点：真实内核模式下本函数体不做任何事，
 // 参数由挂在函数入口的 uprobe 程序通过
 // pt_regs 读取，这里只维护「已通知序号」水位，供快照对齐与超大命令排序使用。
-__attribute__((noinline, used)) void kvs_ebpf_notify_write(unsigned int seq, int argc, char* argv[]) {
+__attribute__((noinline, used)) void kvs_ebpf_notify_write(unsigned int seq, int argc,
+                                                           char* argv[]) {
     (void)argc;
     (void)argv;
 
@@ -503,8 +526,8 @@ static int find_main_load_segment(struct dl_phdr_info* info, size_t size, void* 
         if (s->addr < start || s->addr >= end) {
             continue;
         }
-        s->offset = (unsigned long)(s->addr - (unsigned long)info->dlpi_addr - ph->p_vaddr +
-                                    ph->p_offset);
+        s->offset =
+            (unsigned long)(s->addr - (unsigned long)info->dlpi_addr - ph->p_vaddr + ph->p_offset);
         s->found = 1;
         return 1;
     }
@@ -630,8 +653,8 @@ static int perf_open_and_attach(struct perf_event_attr* pe, int prog_fd, const c
         }
     }
     if (fd < 0) {
-        kvs_log(KVS_LOG_WARN, "[EBPF] perf_event_open(%s) failed (errno=%d, %s)", what,
-                last_errno, strerror(last_errno));
+        kvs_log(KVS_LOG_WARN, "[EBPF] perf_event_open(%s) failed (errno=%d, %s)", what, last_errno,
+                strerror(last_errno));
         return -1;
     }
     if (ioctl(fd, PERF_EVENT_IOC_SET_BPF, (unsigned long)prog_fd) != 0) {
@@ -641,8 +664,8 @@ static int perf_open_and_attach(struct perf_event_attr* pe, int prog_fd, const c
         return -1;
     }
     if (ioctl(fd, PERF_EVENT_IOC_ENABLE, 0) != 0) {
-        kvs_log(KVS_LOG_WARN, "[EBPF] PERF_EVENT_IOC_ENABLE(%s) failed (errno=%d, %s)", what,
-                errno, strerror(errno));
+        kvs_log(KVS_LOG_WARN, "[EBPF] PERF_EVENT_IOC_ENABLE(%s) failed (errno=%d, %s)", what, errno,
+                strerror(errno));
         close(fd);
         return -1;
     }
@@ -815,15 +838,18 @@ static int ringbuf_mmap(int map_fd) {
     }
     g_cons_pos = (unsigned long long*)mmap(NULL, (size_t)g_page_size, PROT_READ | PROT_WRITE,
                                            MAP_SHARED, map_fd, 0);
-    g_prod_pos = (unsigned long long*)mmap(NULL, (size_t)g_page_size, PROT_READ, MAP_SHARED,
-                                           map_fd, (off_t)g_page_size);
+    g_prod_pos = (unsigned long long*)mmap(NULL, (size_t)g_page_size, PROT_READ, MAP_SHARED, map_fd,
+                                           (off_t)g_page_size);
     g_data = (unsigned char*)mmap(NULL, 2u * KVS_EBPF_RINGBUF_SIZE, PROT_READ, MAP_SHARED, map_fd,
                                   (off_t)(2 * g_page_size));
     if (g_cons_pos == MAP_FAILED || g_prod_pos == MAP_FAILED || g_data == MAP_FAILED) {
         kvs_log(KVS_LOG_WARN, "[EBPF] mmap ringbuf failed (errno=%d, %s)", errno, strerror(errno));
-        if (g_cons_pos != MAP_FAILED && g_cons_pos != NULL) munmap(g_cons_pos, (size_t)g_page_size);
-        if (g_prod_pos != MAP_FAILED && g_prod_pos != NULL) munmap(g_prod_pos, (size_t)g_page_size);
-        if (g_data != MAP_FAILED && g_data != NULL) munmap(g_data, 2u * KVS_EBPF_RINGBUF_SIZE);
+        if (g_cons_pos != MAP_FAILED && g_cons_pos != NULL)
+            munmap(g_cons_pos, (size_t)g_page_size);
+        if (g_prod_pos != MAP_FAILED && g_prod_pos != NULL)
+            munmap(g_prod_pos, (size_t)g_page_size);
+        if (g_data != MAP_FAILED && g_data != NULL)
+            munmap(g_data, 2u * KVS_EBPF_RINGBUF_SIZE);
         g_cons_pos = NULL;
         g_prod_pos = NULL;
         g_data = NULL;
@@ -853,11 +879,12 @@ static int sim_ringbuf_setup(void) {
     // 用一个 memfd 映射两次，得到和内核 ringbuf 一样的「双映射」环形缓冲。
     int fd = memfd_create("kvstore-ringbuf", MFD_CLOEXEC);
     if (fd < 0 || ftruncate(fd, KVS_EBPF_RINGBUF_SIZE) != 0) {
-        if (fd >= 0) close(fd);
+        if (fd >= 0)
+            close(fd);
         return -1;
     }
-    void* base = mmap(NULL, 2u * KVS_EBPF_RINGBUF_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS,
-                      -1, 0);
+    void* base =
+        mmap(NULL, 2u * KVS_EBPF_RINGBUF_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (base == MAP_FAILED) {
         close(fd);
         return -1;
@@ -1043,8 +1070,9 @@ int kvs_ebpf_realtime_start(void) {
         return -1;
     }
 
-    kvs_log(KVS_LOG_INFO,
-            "[EBPF] realtime capture active: uprobe ringbuf -> replication backlog (cross-host OK)");
+    kvs_log(
+        KVS_LOG_INFO,
+        "[EBPF] realtime capture active: uprobe ringbuf -> replication backlog (cross-host OK)");
     return 0;
 #endif // KVS_EBPF_SIM
 
@@ -1052,7 +1080,8 @@ int kvs_ebpf_realtime_start(void) {
 }
 
 void kvs_ebpf_realtime_stop(void) {
-    if (!__atomic_load_n(&g_active, __ATOMIC_RELAXED) && !__atomic_load_n(&g_running, __ATOMIC_RELAXED)) {
+    if (!__atomic_load_n(&g_active, __ATOMIC_RELAXED) &&
+        !__atomic_load_n(&g_running, __ATOMIC_RELAXED)) {
         return;
     }
     ebpf_teardown();

@@ -15,9 +15,16 @@
 #define REQ_BUF_SIZE 256 // 请求内容较短，直接在栈上构建，避免频繁堆分配
 #define TIME_SUB_MS(tv1, tv2)                                                                      \
     ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
+#define TIME_SUB_US(tv1, tv2) ((tv1.tv_sec - tv2.tv_sec) * 1000000 + (tv1.tv_usec - tv2.tv_usec))
 #define SET_NUMS 100000
 #define PRINT_PASS 0
 #define SAVE 0 // 测试保存功能
+// 是否逐条打印每条命令的耗时/QPS；数据量大时建议置 0，只看阶段与整体汇总
+#define PRINT_CMD_STATS 0
+
+// 统计本进程真实下发的命令数与累计耗时（微秒），用于阶段与整体 QPS 汇总
+static long long g_cmd_count = 0;
+static long long g_cmd_time_us = 0;
 
 /**
  * @brief 将命令构建为符合 RESP (Redis Serialization Protocol) 协议的请求字符串
@@ -63,15 +70,49 @@ int build_resp_request(char* buf, size_t capacity, const char* cmd, int argc, co
     return (int)offset;
 }
 
+/**
+ * @brief 打印一次统计的命令数、耗时与 QPS
+ *
+ * @param name      统计项名称，如 "AOF SAVE array SET"
+ * @param cmd_count 统计到的命令条数
+ * @param time_us   统计到的累计耗时（微秒）
+ */
+static void print_stats(const char* name, long long cmd_count, long long time_us) {
+    long long safe_us = time_us > 0 ? time_us : 1; // 避免除零
+    double time_ms = safe_us / 1000.0;
+    double qps = (double)cmd_count * 1000000.0 / (double)safe_us;
+    double avg_ms = cmd_count > 0 ? time_ms / (double)cmd_count : 0.0;
+
+    printf("%s --> commands: %lld, time_used: %.3f ms, qps: %.0f, avg: %.4f ms/cmd\n", name,
+           cmd_count, time_ms, qps, avg_ms);
+}
+
 void testcase(int connfd, const char* msg, const char* expected_pattern, const char* casename,
               int thread_id) {
     if (!msg || !expected_pattern || !casename)
         return;
 
+    struct timeval tv_begin, tv_end;
+    gettimeofday(&tv_begin, NULL);
+
     send_msg(connfd, msg, strlen(msg));
 
     char result[MAX_MSG_LENGTH] = {0};
     recv_msg(connfd, result, MAX_MSG_LENGTH);
+
+    gettimeofday(&tv_end, NULL);
+    long elapsed_us = TIME_SUB_US(tv_end, tv_begin);
+    if (elapsed_us <= 0)
+        elapsed_us = 1; // 避免除零（时间分辨率不足时按 1us 计）
+
+    // 累计命令数与耗时，供阶段/整体 QPS 汇总使用
+    g_cmd_count++;
+    g_cmd_time_us += elapsed_us;
+
+#if PRINT_CMD_STATS
+    printf("cmd[%s] time: %.3f ms, qps: %.0f\n", casename, elapsed_us / 1000.0,
+           1000000.0 / (double)elapsed_us);
+#endif
 
     if (strcmp(result, expected_pattern) == 0) {
 #if PRINT_PASS
@@ -105,6 +146,8 @@ int connect_tcpserver(const char* ip, unsigned short port) {
 
 void array_testcase(int connfd) {
     char req[REQ_BUF_SIZE];
+    struct timeval tv_begin, tv_end;
+    gettimeofday(&tv_begin, NULL);
 
 #if SAVE
 
@@ -140,10 +183,19 @@ void array_testcase(int connfd) {
     }
 
 #endif
+
+    gettimeofday(&tv_end, NULL);
+#if SAVE
+    print_stats("AOF SAVE array SET", SET_NUMS / 4, TIME_SUB_US(tv_end, tv_begin));
+#else
+    print_stats("AOF LOAD array GET", SET_NUMS / 4, TIME_SUB_US(tv_end, tv_begin));
+#endif
 }
 
 void rbtree_testcase(int connfd) {
     char req[REQ_BUF_SIZE];
+    struct timeval tv_begin, tv_end;
+    gettimeofday(&tv_begin, NULL);
 
 #if SAVE
     for (int i = 0; i < SET_NUMS / 4; i++) {
@@ -175,10 +227,19 @@ void rbtree_testcase(int connfd) {
         testcase(connfd, req, expected, "RGET-Teacher", 0);
     }
 #endif
+
+    gettimeofday(&tv_end, NULL);
+#if SAVE
+    print_stats("AOF SAVE rbtree RSET", SET_NUMS / 4, TIME_SUB_US(tv_end, tv_begin));
+#else
+    print_stats("AOF LOAD rbtree RGET", SET_NUMS / 4, TIME_SUB_US(tv_end, tv_begin));
+#endif
 }
 
 void hash_testcase(int connfd) {
     char req[REQ_BUF_SIZE];
+    struct timeval tv_begin, tv_end;
+    gettimeofday(&tv_begin, NULL);
 
 #if SAVE
     for (int i = 0; i < SET_NUMS / 4; i++) {
@@ -210,10 +271,19 @@ void hash_testcase(int connfd) {
         testcase(connfd, req, expected, "HGET-Teacher", 0);
     }
 #endif
+
+    gettimeofday(&tv_end, NULL);
+#if SAVE
+    print_stats("AOF SAVE hash HSET", SET_NUMS / 4, TIME_SUB_US(tv_end, tv_begin));
+#else
+    print_stats("AOF LOAD hash HGET", SET_NUMS / 4, TIME_SUB_US(tv_end, tv_begin));
+#endif
 }
 
 void skiptable_testcase(int connfd) {
     char req[REQ_BUF_SIZE];
+    struct timeval tv_begin, tv_end;
+    gettimeofday(&tv_begin, NULL);
 
     // const char* args1[] = {"SSET","Teacher", "King","SEXIST","Teacher"};
 #if SAVE
@@ -246,6 +316,13 @@ void skiptable_testcase(int connfd) {
         testcase(connfd, req, expected, "SGET-Teacher", 0);
     }
 #endif
+
+    gettimeofday(&tv_end, NULL);
+#if SAVE
+    print_stats("AOF SAVE skiptable SSET", SET_NUMS / 4, TIME_SUB_US(tv_end, tv_begin));
+#else
+    print_stats("AOF LOAD skiptable SGET", SET_NUMS / 4, TIME_SUB_US(tv_end, tv_begin));
+#endif
 }
 
 //   ./test 192.168.234.135  2000 1
@@ -270,7 +347,14 @@ int main(int argc, char* argv[]) {
     char req[REQ_BUF_SIZE];
     if (build_resp_request(req, sizeof(req), "AOF CLEAR", 0, args_save) < 0)
         exit(1);
+    g_cmd_count = 0;
+    g_cmd_time_us = 0;
     testcase(connfd, req, "+OK\r\n", "AOF CLEAR", 0);
+    print_stats("AOF SAVE: \"AOF CLEAR\"", g_cmd_count, g_cmd_time_us);
+
+    // 只统计后续真正的写命令，排除 AOF CLEAR 本身
+    g_cmd_count = 0;
+    g_cmd_time_us = 0;
 
     rbtree_testcase(connfd);
 
@@ -279,6 +363,8 @@ int main(int argc, char* argv[]) {
     hash_testcase(connfd);
 
     skiptable_testcase(connfd);
+
+    print_stats("AOF SAVE TOTAL", g_cmd_count, g_cmd_time_us);
 
 #else
 
@@ -288,7 +374,14 @@ int main(int argc, char* argv[]) {
     char req[REQ_BUF_SIZE];
     if (build_resp_request(req, sizeof(req), "AOF LOAD", 0, args_load) < 0)
         exit(1);
+    g_cmd_count = 0;
+    g_cmd_time_us = 0;
     testcase(connfd, req, "+OK\r\n", "AOF LOAD", 0);
+    print_stats("AOF LOAD: \"AOF LOAD\"", g_cmd_count, g_cmd_time_us);
+
+    // 只统计后续的读命令，排除 AOF LOAD 本身
+    g_cmd_count = 0;
+    g_cmd_time_us = 0;
 
     rbtree_testcase(connfd);
 
@@ -297,6 +390,8 @@ int main(int argc, char* argv[]) {
     hash_testcase(connfd);
 
     skiptable_testcase(connfd);
+
+    print_stats("AOF LOAD TOTAL", g_cmd_count, g_cmd_time_us);
 
     printf("***AOF TEST SUCCESS***\n");
 #endif

@@ -16,7 +16,6 @@
     ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
 
 #define PRINT_PASS 1
-#define SAVE 1 // 测试保存功能
 
 #define LEVEL1 1 //使用最基础的9条测试样例，测试一次
 
@@ -147,20 +146,6 @@ int connect_tcpserver(const char* ip, unsigned short port) {
     return connfd;
 }
 
-void clear_aof(int connfd) {
-    const char* args_clear[] = {};
-    char* req = build_resp_request("CLEAR_AOF", 0, args_clear);
-    testcase_raw(connfd, req, "+OK\r\n", "CLEAR AOF", 0);
-    free(req);
-}
-
-void load_aof(int connfd) {
-    const char* args_load[] = {};
-    char* req = build_resp_request("LOAD_AOF", 0, args_load);
-    testcase_raw(connfd, req, "+OK\r\n", "LOAD AOF", 0);
-    free(req);
-}
-
 const char* longdata =
     "11111111111 1111111111111111111111111111111111111             "
     "22222222222222222222222222222222222\n "
@@ -222,8 +207,6 @@ const char* longdata =
 void array_testcase(int connfd) {
     char* req = NULL;
 
-#if SAVE
-
     // SET Teacher King
     const char* args1[] = {"Teacher", longdata};
     req = build_resp_request("SET", 2, args1);
@@ -247,8 +230,6 @@ void array_testcase(int connfd) {
     req = build_resp_request("GET", 1, args4);
     testcase_raw(connfd, req, "$6\r\nDarren\r\n", "GET-Darren-Teacher", 0);
     free(req);
-
-#else
 
     // EXIST Teacher
     const char* args5[] = {"Teacher"};
@@ -280,13 +261,11 @@ void array_testcase(int connfd) {
     req = build_resp_request("EXIST", 1, args9);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "EXIST-Teacher", 0);
     free(req);
-#endif
 }
 
 void rbtree_testcase(int connfd) {
     char* req = NULL;
 
-#if SAVE
     // RSET Teacher King
     const char* args1[] = {"Teacher", longdata};
     req = build_resp_request("RSET", 2, args1);
@@ -310,8 +289,6 @@ void rbtree_testcase(int connfd) {
     req = build_resp_request("RGET", 1, args4);
     testcase_raw(connfd, req, "$6\r\nDarren\r\n", "RGET-Darren-Teacher", 0);
     free(req);
-
-#else
 
     // REXIST Teacher
     const char* args5[] = {"Teacher"};
@@ -343,13 +320,11 @@ void rbtree_testcase(int connfd) {
     req = build_resp_request("REXIST", 1, args9);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "REXIST-Teacher", 0);
     free(req);
-#endif
 }
 
 void hash_testcase(int connfd) {
     char* req = NULL;
 
-#if SAVE
     // HSET Teacher King
     const char* args1[] = {"Teacher", longdata};
     req = build_resp_request("HSET", 2, args1);
@@ -373,8 +348,6 @@ void hash_testcase(int connfd) {
     req = build_resp_request("HGET", 1, args4);
     testcase_raw(connfd, req, "$6\r\nDarren\r\n", "HGET-Darren-Teacher", 0);
     free(req);
-
-#else
 
     // HEXIST Teacher
     const char* args5[] = {"Teacher"};
@@ -406,14 +379,13 @@ void hash_testcase(int connfd) {
     req = build_resp_request("HEXIST", 1, args9);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "HEXIST-Teacher", 0);
     free(req);
-#endif
 }
 
 void skiptable_testcase(int connfd) {
     char* req = NULL;
 
     // const char* args1[] = {"SSET","Teacher", "King","SEXIST","Teacher"};
-#if SAVE
+
     // SSET Teacher King
     const char* args1[] = {"Teacher", longdata};
     req = build_resp_request("SSET", 2, args1);
@@ -437,8 +409,6 @@ void skiptable_testcase(int connfd) {
     req = build_resp_request("SGET", 1, args4);
     testcase_raw(connfd, req, "$6\r\nDarren\r\n", "SGET-Darren-Teacher", 0);
     free(req);
-
-#else
 
     // SEXIST Teacher
     const char* args5[] = {"Teacher"};
@@ -470,33 +440,23 @@ void skiptable_testcase(int connfd) {
     req = build_resp_request("SEXIST", 1, args9);
     testcase_raw(connfd, req, "$8\r\nNO EXIST\r\n", "SEXIST-Teacher", 0);
     free(req);
-#endif
 }
 
 //   ./test 192.168.234.135  2000 1
 // 0: rbtree; 1: array; 2: hash; 3: skiptable
 int main(int argc, char* argv[]) {
 
-    if (argc != 4) {
+    if (argc != 3) {
         printf("arg error\n");
         return -1;
     }
 
     char* ip = argv[1];
     unsigned short port = atoi(argv[2]);
-    int mode = atoi(argv[3]);
 
 #if LEVEL1
     printf("LEVEL1:使用9条测试样例, 测试一次\n");
     int connfd = connect_tcpserver(ip, port);
-
-#if !SAVE
-    load_aof(connfd);
-#endif
-
-#if SAVE
-    clear_aof(connfd);
-#endif
 
     rbtree_testcase(connfd);
 
