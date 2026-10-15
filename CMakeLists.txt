@@ -109,14 +109,48 @@ set(KVSTORE_SOURCES
 
     replication/kvs_replication.cpp
     replication/kvs_ebpf.cpp
+    replication/kvs_ebpf_ring.cpp
+    replication/kvs_sync.cpp
 )
-
-if(KVSTORE_RDMA_FOUND)
-    list(APPEND KVSTORE_SOURCES replication/kvs_rdma.cpp)
-endif()
 
 # 添加可执行文件
 add_executable(kvstore ${KVSTORE_SOURCES})
+
+# 阶段 3：增量采集与转发拆成独立进程 ebpf-agent（uprobe 挂 master 二进制，
+# 或 sim 模式读 master 创建的共享内存环）。产地在 build/ 根目录。
+add_executable(ebpf_agent
+    tools/ebpf_agent.cpp
+    replication/kvs_ebpf_agent.cpp
+    replication/kvs_ebpf_ring.cpp
+    config/kvs_config.cpp
+)
+target_include_directories(ebpf_agent PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(ebpf_agent Threads::Threads)
+set_target_properties(ebpf_agent PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}" OUTPUT_NAME "ebpf-agent")
+
+# 阶段 2：RDMA 全量搬运拆成两个独立进程。它们与 kvstore 分开构建，
+# 由 Master / Replica 在 SYNC 流程中按需派生（见 docs/replication-redesign.md）。
+# 产物直接放在 build/ 根目录，便于用默认的 ./rdma-client、./rdma-server 启动。
+if(KVSTORE_RDMA_FOUND)
+    add_executable(rdma_client tools/rdma_client.cpp replication/kvs_rdma_transfer.cpp)
+    add_executable(rdma_server tools/rdma_server.cpp replication/kvs_rdma_transfer.cpp)
+    foreach(rdma_tool rdma_client rdma_server)
+        target_include_directories(${rdma_tool} PRIVATE
+            ${CMAKE_SOURCE_DIR}/include
+            ${RDMA_VERBS_INCLUDE_DIR}
+            ${RDMA_CMA_INCLUDE_DIR}
+        )
+        target_link_libraries(${rdma_tool}
+            ${RDMACM_LIBRARY}
+            ${IBVERBS_LIBRARY}
+        )
+    endforeach()
+    set_target_properties(rdma_client PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}" OUTPUT_NAME "rdma-client")
+    set_target_properties(rdma_server PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}" OUTPUT_NAME "rdma-server")
+endif()
 
 # 持久化循环脚本使用的测试客户端
 add_executable(rdb_save testcase/RDB/save.cpp)
@@ -159,14 +193,6 @@ target_include_directories(kvstore PRIVATE
     ${CMAKE_SOURCE_DIR}/include
 )
 
-if(KVSTORE_RDMA_FOUND)
-    target_include_directories(kvstore PRIVATE
-        ${RDMA_VERBS_INCLUDE_DIR}
-        ${RDMA_CMA_INCLUDE_DIR}
-    )
-    target_compile_definitions(kvstore PRIVATE KVS_ENABLE_RDMA=1)
-endif()
-
 # 链接库
 target_link_libraries(kvstore
     ${URING_LIBRARY}
@@ -175,10 +201,3 @@ target_link_libraries(kvstore
     Threads::Threads         # 提供 pthread
     ${CMAKE_DL_LIBS}         # 提供 dl（如果系统需要）
 )
-
-if(KVSTORE_RDMA_FOUND)
-    target_link_libraries(kvstore
-        ${RDMACM_LIBRARY}
-        ${IBVERBS_LIBRARY}
-    )
-endif()

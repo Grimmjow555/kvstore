@@ -8,6 +8,7 @@
 #include "kvs_shutdown.h"
 #include "kvs_skiptable.h"
 #include "kvs_snapshot.h"
+#include "kvs_sync.h"
 #include "kvstore.h"
 #include "memorypool.h"
 #include "network.h"
@@ -168,7 +169,9 @@ const char* command[] = {"SET",      "GET",      "DEL",      "MOD",      "EXIST"
 
                          "SSET",     "SGET",     "SDEL",     "SMOD",     "SEXIST",
 
-                         "RDB SAVE", "RDB LOAD", "AOF LOAD", "AOF CLEAR"};
+                         "RDB SAVE", "RDB LOAD", "AOF LOAD", "AOF CLEAR",
+
+                         "SYNC",     "SYNC FINISHED"};
 
 enum KVS_CMD {
     KVS_CMD_START = 0,
@@ -204,6 +207,10 @@ enum KVS_CMD {
     KVS_CMD_RDB_LOAD,
     KVS_CMD_AOF_LOAD,
     KVS_CMD_AOF_CLEAR,
+
+    // 主从全量同步（重设计阶段 1，见 docs/replication-redesign.md）
+    KVS_CMD_SYNC,
+    KVS_CMD_SYNC_FINISHED,
 
     KVS_CMD_COUNT,
 };
@@ -759,6 +766,18 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     }
 #endif
 
+    // 主从全量同步控制命令（重设计阶段 1）：在这里处理意味着天然持存储锁，
+    // SYNC 的序列化因此就是「收到命令那一刻」的一致快照。
+    case KVS_CMD_SYNC: {
+        length = kvs_sync_handle_sync(response, response_size);
+        break;
+    }
+
+    case KVS_CMD_SYNC_FINISHED: {
+        length = kvs_sync_handle_sync_finished(response, response_size);
+        break;
+    }
+
     default: {
         break;
     }
@@ -973,30 +992,42 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
+    // 初始化主从全量同步控制流（重设计阶段 1：SYNC / SYNC FINISHED）。
+    if (kvs_sync_init((kvs_role_t)role) != 0) {
+        kvs_log(KVS_LOG_ERROR, "Failed to init sync module");
+        return -1;
+    }
+
     if (role == KVS_ROLE_MASTER) {
-#if !KVS_ENABLE_EBPF_REALTIME
-        kvs_log(KVS_LOG_INFO,
-                "eBPF realtime sync disabled, replication uses backlog + sender thread");
-#endif
-#ifdef KVS_ENABLE_RDMA
-        if (kvs_replication_start_rdma_listener((unsigned short)port) != 0) {
-            // RDMA 设备不可用时不要阻止服务启动，自动回退到 TCP 全量同步。
-            kvs_log(KVS_LOG_WARN, "RDMA listener unavailable, falling back to TCP full sync");
+        // 阶段 3：Master 侧准备采集通道。uprobe 模式下这里只登记模式（挂载由
+        // 独立的 ebpf-agent 完成）；sim 模式下创建 agent 要读的共享内存环。
+        {
+            const char* mode_name =
+                kvs_config_ebpf_capture_mode() == 1 ? "sim" : "uprobe";
+            if (kvs_ebpf_capture_init(kvs_config_ebpf_ring_file(),
+                                      kvs_config_ebpf_capture_mode()) == 0) {
+                kvs_log(KVS_LOG_INFO, "[EBPF] master capture channel ready (mode=%s)", mode_name);
+            } else {
+                kvs_log(KVS_LOG_ERROR, "[EBPF] master capture channel init failed (mode=%s)",
+                        mode_name);
+                return -1;
+            }
         }
-#endif
+        // 全量搬运由独立的 rdma-client 进程完成（见 docs/replication-redesign.md
+        // §8.3），Master 进程内不再有任何 RDMA 代码（阶段 4 已删除旧监听）。
         if (kvs_config_aof_enabled() && kvs_aof_init("../data/append.aof") != 0) {
             kvs_log(KVS_LOG_ERROR, "AOF init failed");
             return -1;
         }
     } else {
-        kvs_replication_set_master_addr(master_ip, master_port);
-        // 连接、RDMA 全量、握手、断线重连全部交给复制监督线程，
-        // 网络服务不必等 Master 就绪即可启动。
-        if (kvs_replication_start() != 0) {
-            kvs_log(KVS_LOG_ERROR, "Failed to start replication");
+        // Replica 走 SYNC/SYNC FINISHED 全量同步驱动线程：连接、全量同步、
+        // 等待增量通道、断线重试都在该线程内完成，网络服务不必等 Master 就绪。
+        kvs_sync_set_master_addr(master_ip, master_port);
+        if (kvs_sync_start() != 0) {
+            kvs_log(KVS_LOG_ERROR, "Failed to start sync driver");
             return -1;
         }
-        kvs_log(KVS_LOG_INFO, "Replica replication started in background, master=%s:%d", master_ip,
+        kvs_log(KVS_LOG_INFO, "Replica sync driver started in background, master=%s:%d", master_ip,
                 master_port);
     }
 
@@ -1027,7 +1058,8 @@ int main(int argc, char* argv[]) {
 #endif
     // 先停止复制线程、释放引擎数据，最后才销毁内存池：
     // slab_dest() 会释放全部 chunk，必须确认没有其它线程还在分配/释放内存。
-    kvs_replication_destroy();
+    kvs_sync_destroy();
+    kvs_ebpf_capture_shutdown();
     destroy_kvengine();
 #if ENABLE_MEMORYPOOL
     slab_dest();

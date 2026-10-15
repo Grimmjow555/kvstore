@@ -35,6 +35,19 @@ typedef struct {
     int rdb_enabled;     // 是否启用 RDB
     int aof_enabled;     // 是否启用 AOF
     int network;         // kvs_network_t 对应的整数
+    // 重设计后的主从全量同步临时快照文件（SYNC 落盘 / SYNC FINISHED 删除）。
+    // 相对进程运行目录解析，与现有 ../data/... 约定一致。
+    char sync_tmp_file[256];
+    // 阶段 2：RDMA 搬运由独立进程 rdma-client / rdma-server 完成。
+    char rdma_client_bin[256]; // Master 派生的发送端可执行文件
+    char rdma_server_bin[256]; // Replica 派生的接收端可执行文件
+    char replica_host[64];     // Master 侧：Replica 的 RDMA 网卡 IP
+    int rdma_port;             // RDMA 端口（发送端连接、接收端监听）
+    int rdma_transfer_timeout_ms; // rdma-client / rdma-server 的整体超时
+    int sync_wait_timeout_ms;     // Replica 等待 RDMA 文件落盘的超时
+    // 阶段 3：增量采集由独立 ebpf-agent 负责。
+    int ebpf_capture_mode;    // 0 = uprobe，1 = sim（共享内存环）
+    char ebpf_ring_file[256]; // sim 模式的采集环文件
 } kvs_config_t;
 
 // 恢复默认配置。默认监听 0.0.0.0:9999，角色为 Master，
@@ -77,6 +90,17 @@ const char* kvs_config_master_ip(void);
 int kvs_config_master_port(void);
 int kvs_config_rdb_enabled(void);
 int kvs_config_aof_enabled(void);
+
+// 主从全量同步的临时快照路径，默认 ../data/kvstore.sync.tmp。
+const char* kvs_config_sync_tmp_file(void);
+const char* kvs_config_rdma_client_bin(void);
+const char* kvs_config_rdma_server_bin(void);
+const char* kvs_config_replica_host(void);
+int kvs_config_rdma_port(void);
+int kvs_config_rdma_transfer_timeout_ms(void);
+int kvs_config_sync_wait_timeout_ms(void);
+int kvs_config_ebpf_capture_mode(void);
+const char* kvs_config_ebpf_ring_file(void);
 
 // 当前网络框架，取值见 kvs_network_t。
 int kvs_config_network(void);

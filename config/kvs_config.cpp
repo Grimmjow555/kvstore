@@ -118,6 +118,23 @@ static bool parse_log_level(const std::string& value, int* out) {
     return true;
 }
 
+// 解析 [min, max] 范围内的正整数（用于超时毫秒等非端口参数）。
+static bool parse_int_range(const std::string& value, long min, long max, int* out) {
+    if (out == nullptr || value.empty()) {
+        return false;
+    }
+
+    std::string text = trim(value);
+    char* end = nullptr;
+    long parsed = std::strtol(text.c_str(), &end, 10);
+    if (end == text.c_str() || *end != '\0' || parsed < min || parsed > max) {
+        return false;
+    }
+
+    *out = static_cast<int>(parsed);
+    return true;
+}
+
 static bool parse_role(const std::string& value, int* out) {
     if (out == nullptr) {
         return false;
@@ -333,6 +350,86 @@ static int apply_config_key(const std::string& raw_key, const std::string& raw_v
         return 0;
     }
 
+    if (key == "sync_tmp_file" || key == "sync_tmp" || key == "replication_tmp_file") {
+        if (value.empty() || value.size() >= sizeof(g_config.sync_tmp_file)) {
+            return -1;
+        }
+        snprintf(g_config.sync_tmp_file, sizeof(g_config.sync_tmp_file), "%s", value.c_str());
+        return 0;
+    }
+
+    if (key == "rdma_client_bin" || key == "rdma_client") {
+        if (value.empty() || value.size() >= sizeof(g_config.rdma_client_bin)) {
+            return -1;
+        }
+        snprintf(g_config.rdma_client_bin, sizeof(g_config.rdma_client_bin), "%s", value.c_str());
+        return 0;
+    }
+
+    if (key == "rdma_server_bin" || key == "rdma_server") {
+        if (value.empty() || value.size() >= sizeof(g_config.rdma_server_bin)) {
+            return -1;
+        }
+        snprintf(g_config.rdma_server_bin, sizeof(g_config.rdma_server_bin), "%s", value.c_str());
+        return 0;
+    }
+
+    if (key == "replica_host" || key == "replica_ip") {
+        std::string ip = trim(value);
+        if (ip.empty() || ip.size() >= sizeof(g_config.replica_host)) {
+            return -1;
+        }
+        snprintf(g_config.replica_host, sizeof(g_config.replica_host), "%s", ip.c_str());
+        return 0;
+    }
+
+    if (key == "rdma_port") {
+        int parsed = 0;
+        if (!parse_port(value, &parsed)) {
+            return -1;
+        }
+        g_config.rdma_port = parsed;
+        return 0;
+    }
+
+    if (key == "rdma_transfer_timeout_ms") {
+        int parsed = 0;
+        if (!parse_int_range(value, 100, 24L * 3600 * 1000, &parsed)) {
+            return -1;
+        }
+        g_config.rdma_transfer_timeout_ms = parsed;
+        return 0;
+    }
+
+    if (key == "sync_wait_timeout_ms") {
+        int parsed = 0;
+        if (!parse_int_range(value, 100, 24L * 3600 * 1000, &parsed)) {
+            return -1;
+        }
+        g_config.sync_wait_timeout_ms = parsed;
+        return 0;
+    }
+
+    if (key == "ebpf_capture_mode" || key == "ebpf_mode") {
+        std::string lower = to_lower(trim(value));
+        if (lower == "uprobe" || lower == "kernel" || lower == "0") {
+            g_config.ebpf_capture_mode = 0;
+        } else if (lower == "sim" || lower == "shm" || lower == "ring" || lower == "1") {
+            g_config.ebpf_capture_mode = 1;
+        } else {
+            return -1;
+        }
+        return 0;
+    }
+
+    if (key == "ebpf_ring_file" || key == "ebpf_ring") {
+        if (value.empty() || value.size() >= sizeof(g_config.ebpf_ring_file)) {
+            return -1;
+        }
+        snprintf(g_config.ebpf_ring_file, sizeof(g_config.ebpf_ring_file), "%s", value.c_str());
+        return 0;
+    }
+
     // 未知键不视为致命错误，便于后续扩展配置项。
     return 0;
 }
@@ -352,6 +449,23 @@ void kvs_config_set_defaults(void) {
     // 默认网络框架为 NtyCo；kvstore.conf 的 network_architecture
     // 或命令行 --network 可在启动时覆盖。
     g_config.network = KVS_NETWORK_NTYCO;
+
+    // 主从全量同步的临时快照文件：Master 写、Replica 读，单机验证时共享同一路径。
+    snprintf(g_config.sync_tmp_file, sizeof(g_config.sync_tmp_file), "%s",
+             "../data/kvstore.sync.tmp");
+
+    // 阶段 2：RDMA 搬运由独立进程完成，这里给出可执行文件与端口的默认值。
+    snprintf(g_config.rdma_client_bin, sizeof(g_config.rdma_client_bin), "%s", "./rdma-client");
+    snprintf(g_config.rdma_server_bin, sizeof(g_config.rdma_server_bin), "%s", "./rdma-server");
+    snprintf(g_config.replica_host, sizeof(g_config.replica_host), "%s", "127.0.0.1");
+    g_config.rdma_port = 10000;
+    g_config.rdma_transfer_timeout_ms = 60000;
+    g_config.sync_wait_timeout_ms = 120000;
+
+    // 阶段 3：默认走内核 uprobe 采集；无 CAP_BPF 时改 ebpf_capture_mode sim。
+    g_config.ebpf_capture_mode = 0;
+    snprintf(g_config.ebpf_ring_file, sizeof(g_config.ebpf_ring_file), "%s",
+             "../data/kvstore.ebpf.ring");
 }
 
 int kvs_config_load(const char* filename) {
@@ -574,6 +688,24 @@ int kvs_config_master_port(void) { return g_config.master_port; }
 int kvs_config_rdb_enabled(void) { return g_config.rdb_enabled; }
 
 int kvs_config_aof_enabled(void) { return g_config.aof_enabled; }
+
+const char* kvs_config_sync_tmp_file(void) { return g_config.sync_tmp_file; }
+
+const char* kvs_config_rdma_client_bin(void) { return g_config.rdma_client_bin; }
+
+const char* kvs_config_rdma_server_bin(void) { return g_config.rdma_server_bin; }
+
+const char* kvs_config_replica_host(void) { return g_config.replica_host; }
+
+int kvs_config_rdma_port(void) { return g_config.rdma_port; }
+
+int kvs_config_rdma_transfer_timeout_ms(void) { return g_config.rdma_transfer_timeout_ms; }
+
+int kvs_config_sync_wait_timeout_ms(void) { return g_config.sync_wait_timeout_ms; }
+
+int kvs_config_ebpf_capture_mode(void) { return g_config.ebpf_capture_mode; }
+
+const char* kvs_config_ebpf_ring_file(void) { return g_config.ebpf_ring_file; }
 
 int kvs_config_network(void) { return g_config.network; }
 

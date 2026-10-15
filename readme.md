@@ -11,7 +11,9 @@
   `ENABLE_MEMORYPOOL` 决定使用内置 slab 内存池还是系统 `malloc` / `free`。
 - **协议**：外层 4 字节长度前缀帧 + 内层 RESP 数组/批量字符串，支持半包与粘包。
 - **持久化**：RDB 全量快照 + AOF 增量日志，启动后不自动恢复，需命令手动触发。
-- **复制**：主从握手、全量同步（TCP，可选 RDMA）、增量同步（eBPF 采集 + backlog + 发送线程）。
+- **复制**：`SYNC` 驱动的全量同步（`.tmp` 快照经独立 `rdma-client` / `rdma-server` 搬运）
+  + 增量同步（独立 `ebpf-agent` 采集与转发）。详见
+  [docs/replication-redesign.md](docs/replication-redesign.md)。
 
 ## 目录结构
 
@@ -26,10 +28,11 @@
 ├── storage/                # array / rbtree / hash / skiptable
 ├── memorypool/             # 内置 slab 内存池
 ├── persistence/            # snapshot（RDB）与 aof
-├── replication/            # 主从复制、eBPF 采集、RDMA
+├── replication/            # 复制控制流、采集环、agent 侧采集、RDMA 搬运
+├── tools/                  # 独立进程：rdma-client / rdma-server / ebpf-agent
 ├── testcase/               # 测试客户端源码、测试方案与一键脚本
 ├── data/                   # 运行时持久化文件目录
-├── docs/                   # 内存对比图表与生成脚本
+├── docs/                   # 内存对比图表、主从同步重设计文档
 ├── NtyCo/                  # Git submodule，第三方协程库
 └── readme.md
 ```
@@ -47,8 +50,8 @@
 可选：
 
 - jemalloc：CMake 默认未强制链接；关闭内存池（`ENABLE_MEMORYPOOL=0`）时可作为系统分配器。
-- libibverbs / librdmacm：能找到时自动启用 RDMA 全量同步（定义 `KVS_ENABLE_RDMA`），
-  否则退化为纯 TCP 全量同步。
+- libibverbs / librdmacm：能找到时额外构建 `rdma-client` / `rdma-server` 两个独立进程承担
+  全量搬运；`kvstore` 自身不链接 RDMA 库。
 
 Ubuntu/Debian 安装依赖：
 
@@ -177,6 +180,10 @@ cd build
 | --- | --- | --- | --- | --- |
 | AOF 增量恢复 | `testcase/AOF/{save,load}.cpp` | `testcase/run_aof_cycle.sh` | `AOF CLEAR` 后写入 10 万条，重启服务 `AOF LOAD` 后数据完整 | 已通过 |
 | RDB 全量恢复 | `testcase/RDB/{save,load}.cpp` | `testcase/run_rdb_cycle.sh` | 写入 10 万条 → `RDB SAVE` → 重启服务 → `RDB LOAD` 后数据完整 | 已通过 |
+| 主从全量同步（重设计阶段 1+2） | `testcase/master-replica/*.cpp` | `testcase/run_sync_fullsync.sh` | Master 写入 10 万条 → `SYNC` → `rdma-server`/`rdma-client` 搬运 → 逐条比对一致 | 已通过 |
+| 主从全量+增量（重设计阶段 3） | `testcase/master-replica/*.cpp` | `testcase/run_sync_increment.sh` | 前 5 万全量、后 5 万由独立 `ebpf-agent` 缓存/转发 → Replica 10 万条一致 | 已通过 |
+| 三网络后端协议回归（重设计阶段 4） | 内嵌 python 校验 | `testcase/run_backends_check.sh` | reactor / ntyco / proactor 四引擎命令与异常响应一致 | 已通过 |
+| 同步异常路径回归（重设计阶段 5） | 内嵌 python 校验 | `testcase/run_sync_faults.sh` | 未武装拒绝 / 缓存溢出重同步 / rdma-client 失败重试 三条异常均按预期恢复 | 已通过 |
 | 主从全量 + 增量同步 | `testcase/master-replica/*.cpp` | 手动分步执行（见下） | 先写 5 万条启动 Replica 做全量同步，再写 5 万条走增量，Replica 读到 10 万条 | 已通过 |
 | 单引擎命令回归 | `testcase/test/testcase.cpp` | `build/testcase/test/test 127.0.0.1 9999 <mode>` | 四引擎 `SET/GET/DEL/MOD/EXIST` 及异常响应 | 可扩展执行 |
 | 内存池对比 | `testcase/memorypool/*.cpp` | `memptest` / `memptest_pthread` + `monitor_mem.sh` | 内存占用与并发稳定性 | 已采集，见「性能数据」 |
@@ -191,30 +198,55 @@ cd /path/to/kvstore
 
 # RDB：写入 10 万条 -> RDB SAVE -> 重启服务 -> RDB LOAD -> 校验
 ./testcase/run_rdb_cycle.sh
+
+# 主从全量同步（重设计阶段 1+2）：Master 写入 10 万条 -> SYNC -> RDMA 搬运 -> 逐条比对
+./testcase/run_sync_fullsync.sh
+
+# 主从全量+增量（重设计阶段 3）：额外的 5 万条由独立 ebpf-agent 缓存/转发 -> 逐条比对
+./testcase/run_sync_increment.sh
+
+# 三个网络后端（reactor / ntyco / proactor）的协议级回归
+./testcase/run_backends_check.sh
+
+# 同步异常路径回归（未武装拒绝 / 缓存溢出重同步 / rdma-client 失败重试）
+./testcase/run_sync_faults.sh
 ```
 
-两个脚本都会自动从 `build/` 启动服务、等待端口就绪、运行保存/加载客户端，并用 SIGINT
-优雅停服。输出 `... cycle completed.` 表示用例通过；客户端断言失败会以非零状态码退出。
+这些脚本都会自动从 `build/` 启动所需进程（Master / Replica / `ebpf-agent`，同步用例还会
+拉起 `rdma-client` / `rdma-server`）、等待就绪、跑客户端断言，并用 SIGINT 优雅停服。
+输出 `... completed.` 表示用例通过；断言失败会以非零状态码退出。
 
 ### 主从同步用例（手动）
+
+重设计后 eBPF 是**强制依赖**：Master 只在 `ebpf-agent` 注册后才受理 `SYNC`，因此手动跑
+必须先把 agent 起来。下面是最小步骤（采集用 `sim` 模式，免 capability；用 uprobe 模式则需
+先按 [setup_ebpf.sh](setup_ebpf.sh) 给 `build/ebpf-agent` 授权限）：
 
 ```bash
 cd build
 
-# 1. 启动 Master，并写入前 5 万条
+# 0. 准备：kvstore.conf 里配好 rdma_port、replica_host（必须是 RDMA 网卡 IP，
+#    不能是 127.0.0.1）、ebpf_capture_mode sim；RDMA 链路用 setup_rdma.sh 准备。
+
+# 1. 先起采集进程（未注册时 Master 会拒绝 SYNC）
+./ebpf-agent --mode sim --ring ../data/kvstore.ebpf.ring \
+    --master 127.0.0.1:9999 --replica 127.0.0.1:10001 &
+
+# 2. 启动 Master，并写入前 5 万条
 ./kvstore 9999 0 &
 ./testcase/master-replica/insert_before5w 127.0.0.1 9999
 
-# 2. 另开终端启动 Replica，触发全量同步
+# 3. 另开终端启动 Replica，触发 SYNC 全量同步（快照经 rdma-client/rdma-server 搬运）
 ./kvstore 10001 1 127.0.0.1 9999 &
 
-# 3. 向 Master 写入后 5 万条，触发增量同步
+# 4. 向 Master 写入后 5 万条，由 agent 走 REPL_INC 增量通道转发
 ./testcase/master-replica/insert_after5w 127.0.0.1 9999
 
-# 4. 在 Replica 上校验 10 万条（前 5 万全量 + 后 5 万增量）
+# 5. 在 Replica 上校验 10 万条（前 5 万全量 + 后 5 万增量）
 ./testcase/master-replica/get10w 127.0.0.1 10001
 ```
 
+等价的一键脚本是 `./testcase/run_sync_increment.sh`（阶段 3 全链路）。
 每 5 万条按四种引擎均分（`SET`/`RSET`/`HSET`/`SSET` 各 12500 条），`get10w` 会逐条比对，
 失败时打印 `==> FAILED ...`。
 
@@ -230,19 +262,23 @@ cd build
 
 可行性：
 
-- 三个同步/持久化用例已在单机环境验证通过，可通过上述脚本与客户端复现。
-- 用例只依赖编译产物，无外部服务依赖；`build/kvstore` 与测试客户端由同一次 CMake 构建生成。
+- 持久化与主从同步用例已在单机环境验证通过，可通过上述一键脚本复现（含三后端协议回归与
+  同步异常路径注入）。
+- 用例只依赖编译产物；`build/` 下的 `kvstore`、`rdma-client`、`rdma-server`、`ebpf-agent`
+  与测试客户端由同一次 CMake 构建生成。主从同步用例需要可用的 RDMA（SoftiWARP 即可）。
 
 已知局限：
 
 - 目前均为单机功能正确性验证（10 万数据量级），不构成压力/稳定性测试。
-- 未覆盖多机部署、网络分区、故障注入、慢副本断开与重连等异常场景。
-- 主从同步用例需手动分步执行，暂无一键脚本。
+- 未覆盖真实多机部署与网络分区；异常路径已覆盖未武装拒绝、缓存溢出、rdma-client 失败重试
+  三类（`run_sync_faults.sh`），但未覆盖磁盘满、内存不足等资源类故障。
+- 采集的 `uprobe` 模式未做进程级端到端验证：本次环境无法给 `ebpf-agent` 设置 file
+  capability，验证全部走 `sim` 模式；建议在有 root 的机器上复验一次。
+- 大流量增量受既有引擎性能限制：`kvs_array_set` 为线性扫描（插入 O(n²)），5 万条 `SET`
+  回放约 15s，而 `RSET` 仅约 1.6s。
+- 当前仅支持单从机；`rdma-client` 的健康检查是被动的（靠 Replica 等待失败/超时触发重试）。
 - RDB 记录长度依赖 `strlen`，不支持嵌入 NUL 的 key/value，也不支持跨主机字节序移植。
 - AOF 批量落盘，进程被强制杀死时可能丢失未达刷新阈值的缓冲数据。
-
-待补充专项测试：eBPF 实时增量路径、RDMA 全量同步、断线重连与退避，以及 reactor / proactor /
-ntyco 三种后端的一致性对比。
 
 ## 性能数据
 
@@ -293,6 +329,8 @@ $5\r\nvalue\r\n
 - hash：`HSET HGET HDEL HMOD HEXIST`
 - skiptable：`SSET SGET SDEL SMOD SEXIST`
 - 持久化：`RDB SAVE`、`RDB LOAD`、`AOF LOAD`、`AOF CLEAR`
+- 主从全量同步（重设计阶段 1）：`SYNC`、`SYNC FINISHED`（由服务端之间使用，详见
+  [docs/replication-redesign.md](docs/replication-redesign.md)）
 
 > `RDB SAVE`、`AOF LOAD` 等带空格的命令是一个整体 token，不是两个参数。
 
@@ -305,31 +343,52 @@ $5\r\nvalue\r\n
 
 ## 主从复制与同步
 
-- 从节点只需指定主节点地址与端口，连接、握手、全量同步、断线重连都在后台监督线程完成；
-  Master 尚未启动时从节点也能正常启动，并按指数退避持续重试。
-- 每次写成功都会把 RESP 命令追加到全局增量日志 backlog（带递增序号），由独立发送线程按每个
-  Replica 的 `next_seq` 用 `MSG_DONTWAIT` 投递，事件循环不做阻塞发送。
-- 全量同步复用 `kvs_snapshot_serialize()` 的 RDB 二进制内容分片下发，快照与 backlog 序号在同一把
-  存储锁内确定，因此全量同步期间落地的写命令不会丢失，也不会重复。
-- 超过 30 秒没有发送进展的慢副本会被断开，由 Replica 重连后重新全量同步，不会阻塞 Master。
-- 复制帧负载首字节是类型字段（增量命令 / RESET / 快照分片 / 快照结束 / 全量完成），定义见
-  `include/kvs_replication.h`。
-- `RDB LOAD` / `AOF LOAD` 成功后会对在线 Replica 重新发起全量同步。
-- fd 生命周期归网络层：复制模块只 `shutdown()` 触发断开，由网络层 `close()` 并回调
-  `kvs_replication_remove_replica()`，避免 fd 复用后复制帧写进普通客户端连接。
-- 存储引擎没有内部锁，所有访问都经过 `kvstore.cpp` 的可重入存储锁；锁顺序固定为
-  存储锁 → 复制锁（`g_repl_mutex`），不得反向获取。
+重设计后复制被拆成「kvstore 控制流 + 独立进程」：全量搬运交给 `rdma-client` /
+`rdma-server`，增量采集与转发交给 `ebpf-agent`。设计与阶段记录见
+[docs/replication-redesign.md](docs/replication-redesign.md)。
 
-## RDMA 全量同步（可选）
+进程与通道：
 
-编译时能找到 libibverbs/librdmacm 会定义 `KVS_ENABLE_RDMA`，此时：
+| 角色 | 可执行文件 | 职责 |
+| --- | --- | --- |
+| Master | `build/kvstore`（role=0） | 处理 `SYNC` / `SYNC FINISHED`、生成 `.tmp` 快照、启停 `rdma-client` |
+| Replica | `build/kvstore`（role=1） | 启停 `rdma-server`、发 `SYNC`、加载 `.tmp`、回放增量 |
+| RDMA 客户端 | `build/rdma-client` | 读 `.tmp`，用 RDMA 写给对端 `rdma-server` |
+| RDMA 服务端 | `build/rdma-server` | 接收 RDMA 文件并原子落盘，收完退出 |
+| eBPF 采集 | `build/ebpf-agent` | 采集写命令与控制记录，缓存/转发增量给 Replica |
 
-- Master 在 `监听端口 + 1` 上额外开一个 RDMA 监听（如 TCP 9999 → RDMA 10000）。
-- Replica 每次（重）连接先尝试用 RDMA 拉全量快照，成功后再发 TCP 握手；Master 记录该快照
-  对应的 backlog 序号，握手时只补发序号之后的增量。RDMA 只承担一次性大批量搬运，实时增量
-  始终走 TCP。
-- 任何一步失败都会回退 TCP 全量快照，并在日志中打印失败步骤，例如
-  `[RDMA] full sync 失败于步骤「rdma_resolve_addr」: errno=22(Invalid argument)`。
+关键点：
+
+- **全量**：Replica 发 `SYNC` → Master 把快照写成 `data/kvstore.sync.tmp` 并派生
+  `rdma-client` → 文件经 RDMA 到 Replica 侧 `rdma-server`（落在 `<tmp>.recv`）→
+  Replica 加载后回 `SYNC FINISHED`，Master 删除 `.tmp` 并回收 `rdma-client`。
+- **增量**：`ebpf-agent` 通过 `REPL_INC` 专用握手连 Replica；全量窗口内的写命令由 agent
+  缓存，读到 `SYNC FINISHED` 记录后按序补发，之后转实时转发。
+- **顺序保证**：写命令与 `SYNC` / `SYNC FINISHED` 都经同一个 uprobe 挂载点
+  （`kvs_ebpf_notify_write`）在存储锁内取号，采集流顺序 == 提交顺序，因此
+  「缓存窗口 ⊇ 快照窗口」由顺序本身保证，不依赖额外水位。
+- **eBPF 强制**：Master 只在 agent 注册（`EBPF` 握手）后才受理 `SYNC`；采集不可用时
+  直接回 `-ERROR`，不会静默降级。
+- **重同步**：`RDB LOAD` / `AOF LOAD` 之后 Master 往采集流写一条 `INVALIDATE` 记录，
+  agent 断开增量通道，Replica 检测到断开后重新走一次 `SYNC`。
+- **断连处理**：fd 生命周期归网络层，各后端在断连路径调用
+  `kvs_replication_remove_replica()` 清理复制/同步会话登记，避免 fd 复用后旧映射仍生效。
+- 存储引擎没有内部锁，所有访问都经过 `kvstore.cpp` 的可重入存储锁。
+
+## RDMA 全量搬运（独立进程）
+
+编译时能找到 libibverbs/librdmacm 会额外构建 `rdma-client` 与 `rdma-server` 两个可执行文件；
+**`kvstore` 自身不再链接 RDMA 库**（`ldd build/kvstore` 无 ibverbs/rdmacm 依赖）：
+
+- Master 收到 `SYNC` 后把快照写到 `sync_tmp_file`，再派生 `rdma-client` 把文件发给
+  Replica 侧的 `rdma-server`；后者原子落盘（`.partial` + rename）后退出，Replica 以
+  「子进程退出」作为文件就绪信号。
+- Replica 在发 `SYNC` 之前先派生 `rdma-server` 并等它创建就绪文件，避免 `rdma-client`
+  先到、连接被拒。
+- 实时增量不走 RDMA，始终由 `ebpf-agent` 的 TCP 增量通道承载。
+- 任一环节失败都会打印明确的失败步骤，例如
+  `[RDMA-XFER] send failed at step [rdma_resolve_addr]: errno=22(Invalid argument)`；
+  Replica 侧等待文件失败/超时后按退避重试 `SYNC`。
 
 用软件 RDMA 验证：
 
@@ -341,9 +400,11 @@ rdma link show                # 应显示 siw1/1 state ACTIVE
 注意事项：
 
 - `rdma link add` 创建的 SoftiWARP 链路不持久化，重启后需重新执行 `setup_rdma.sh`。
-- Replica 的 `master_ip` 必须是 RDMA 网卡 IP（例如 `192.168.234.135`），**不能用 127.0.0.1**，
-  RDMA 无法 resolve 回环地址（`rdma_resolve_addr` 返回 EINVAL）。
-- 同机部署时注意端口冲突：Master 的 RDMA 端口是「主节点端口 + 1」。
+- **`replica_host` 必须是 RDMA 网卡 IP**（例如 `192.168.234.135`），**不能用 127.0.0.1**：
+  RDMA 无法 resolve 回环地址（`rdma_resolve_addr` 返回 EINVAL）。Master 用它作为
+  `rdma-client` 的目标地址。
+- `rdma_port` 是独立配置项（默认 `10000`），不再沿用旧实现的「数据端口 + 1」——那个端口
+  曾被进程内 RDMA 监听占用，容易和 `rdma-server` 冲突。
 - 实现使用「普通 `IBV_WR_RDMA_WRITE` + 一条 SEND 通知」，不要改回
   `IBV_WR_RDMA_WRITE_WITH_IMM`：SoftiWARP 下带立即数的写会在 `ibv_post_send` 返回 ENOSPC(28)。
 - `siw` 是软件 RDMA（底层仍走 TCP/IP），吞吐不会优于 TCP，主要用于在没有 RDMA 硬件的环境
@@ -351,29 +412,34 @@ rdma link show                # 应显示 siw1/1 state ACTIVE
 
 ## eBPF 实时增量采集
 
-实时增量默认由 eBPF 采集（`KVS_ENABLE_EBPF_REALTIME=1`），链路为：
+实时增量由**独立的 `ebpf-agent` 进程**采集与转发（不再在 kvstore 进程内消费）：
 
 ```text
-Master 写路径（持有存储锁）
-  -> kvs_ebpf_notify_write(seq, argc, argv)      uprobe 挂载点
-  -> BPF_PROG_TYPE_KPROBE 程序读取 argv，写 BPF_MAP_TYPE_RINGBUF
-  -> 用户态消费线程解析记录、校验序号
-  -> backlog（增量日志）+ 发送线程
-  -> TCP / RDMA 投递给 Replica
+Master 写路径 / SYNC / SYNC FINISHED（都在存储锁内）
+  -> kvs_ebpf_notify_write(seq, argc, argv)   uprobe 挂载点（kvstore 侧）
+       uprobe 模式：函数体不采集，参数由挂在函数入口的 BPF 程序读取并写 ringbuf
+       sim   模式：函数体把记录写进共享内存环
+  -> ebpf-agent 消费（ringbuf 或共享内存环），校验序号连续性
+  -> 状态机：IDLE -> CACHING（读到 SYNC）-> LIVE（读到 SYNC FINISHED）
+  -> REPL_INC 增量通道投递给 Replica
 ```
 
 关键点：
 
-- **跨主机可用**：eBPF 只负责本机采集，跨主机投递仍走 TCP/RDMA，不要求 Master/Replica 同内核。
+- **两种采集模式**（运行期由 `ebpf_capture_mode` 选择）：
+  `uprobe`（默认）由 agent 建 ringbuf、把 uprobe 挂到 **Master 二进制**的
+  `kvs_ebpf_notify_write` 符号上（偏移从 ELF `.symtab` 解析）；`sim` 让 Master 写共享内存环、
+  agent 读该环，用于无 CAP_BPF 的容器/CI 验证。两条路径对上层完全等价。
+- **跨主机可用**：eBPF 只负责本机采集，跨主机投递仍走 TCP，不要求 Master/Replica 同内核。
 - **为什么是 uprobe**：kprobe 只能挂内核函数，读不到应用层参数，也会在 proactor(io_uring) 后端
-  下漏事件；uprobe 触发在 kvstore 自身写路径上，三个后端都能采集。
-- **丢事件可检测**：ringbuf 的 `reserve` 在队列满时会失败，记录带自增序号，消费线程一旦发现
-  序号缺口就打印错误并触发全量重同步，绝不静默丢命令。
-- **不截断命令**：单条命令最多 3 个参数、每个参数最多 `KVS_EBPF_EVENT_ARG_MAX`(1024) 字节；
-  超限命令不采集，由写路径直接落 backlog，并在落之前等采集通道排空，保证顺序不变。
-- **快照对齐**：取全量快照前会等采集通道排空（最多 200ms），保证 `base_seq` 与快照内容对齐。
-- **自动回退**：任何 attach 失败（缺 `CAP_BPF`、tracefs 不可写、内核不支持 ringbuf 等）都只影响
-  「命令怎么进 backlog」，写路径退回直接落 backlog，功能与一致性不受影响。
+  下漏事件；uprobe 触发在 Master 自身写路径上，三个后端都能采集。
+- **顺序即正确性**：写命令与 `SYNC` / `SYNC FINISHED` 走同一条有序流（都在存储锁内取号），
+  所以 agent 读到 `SYNC` 一定早于其后发生的任何写命令，「缓存窗口 ⊇ 快照窗口」由顺序保证。
+- **丢事件可检测**：ringbuf/环满会丢记录，因此每条记录带自增序号；agent 一旦发现序号缺口就
+  断开增量通道，让 Replica 重新全量同步，绝不静默丢命令。缓存溢出同理。
+- **不截断命令**：单条命令最多 3 个参数、每个参数最多 `KVS_EBPF_EVENT_ARG_MAX`(1024) 字节。
+- **强制依赖**：采集不可用时 agent 直接退出，Master 也只在 agent 注册后才受理 `SYNC`
+  （eBPF 强制）。这与旧实现「失败就回退直写 backlog」的行为不同。
 
 ### 依赖与内核要求
 
@@ -388,42 +454,48 @@ Master 写路径（持有存储锁）
 # 检查内核版本、uprobe/tracefs、perf_event_paranoid、capability
 ./setup_ebpf.sh --check
 
-# 给编译产物加 capability（或直接用 root 运行）
-sudo setcap cap_bpf,cap_perfmon,cap_sys_admin+ep ./build/kvstore
+# 给采集进程加 capability（或直接用 root 运行）
+sudo setcap cap_bpf,cap_perfmon,cap_sys_admin+ep ./build/ebpf-agent
 ```
 
+> 注意授权对象是 **`build/ebpf-agent`**（BPF 代码都在 agent 里），不是 `build/kvstore`。
 > **每次 `cmake --build` 之后都要重新执行 `./setup_ebpf.sh`**：内核会在文件被写入时清除
-> `security.capability`，此时启动会打印 `create ringbuf map failed ... Operation not permitted`
-> 并回退直写 backlog，而不是报错退出。
+> `security.capability`，此时 agent 会打印
+> `create ringbuf map failed ... Operation not permitted` 并直接退出。
 
-采集通道生效时，Master 启动日志会出现：
+采集通道生效时，agent 启动日志会出现：
 
 ```text
-[EBPF] uprobe attached: /path/to/kvstore:0x...
-[EBPF] realtime capture active: uprobe ringbuf -> replication backlog (cross-host OK)
-[REPLICATION] realtime increments captured by eBPF ringbuf
+[EBPF] uprobe attached via perf PMU: /path/to/kvstore:0x...
+[EBPF] uprobe capture active: /path/to/kvstore:0x... pid=<master pid>
+[EBPF-AGENT] registered with master 127.0.0.1:9999
 ```
 
-不具备 eBPF 能力时（容器/CI）会自动回退，也可用模拟构建验证整条链路：
+不具备 eBPF 能力时（容器/CI）改用 sim 模式即可跑通整条链路，无需特殊构建：
 
 ```bash
-cmake -S . -B build-sim -DCMAKE_CXX_FLAGS=-DKVS_EBPF_SIM -DCMAKE_C_FLAGS=-DKVS_EBPF_SIM
-cmake --build build-sim -j$(nproc)
+# kvstore.conf
+ebpf_capture_mode sim
+ebpf_ring_file ../data/kvstore.ebpf.ring
+
+# 启动时 agent 传 --mode sim --ring ../data/kvstore.ebpf.ring
 ```
 
-该构建把内核部分换成等价的用户态 ringbuf（记录格式与消费代码完全一致），启动日志会显示
-`[EBPF] simulation mode: ...`。
+sim 模式的记录格式与内核 ringbuf 完全一致（同一条消费代码），启动日志会显示
+`[EBPF] sim capture active: shared ring ...`。
 
 ### 常见故障排查
 
 | 现象 | 常见原因 | 处理方式 |
 | --- | --- | --- |
-| 重新编译后 `create ringbuf map failed` EPERM | 内核在文件被写入时清除了 `security.capability` | 重跑 `./setup_ebpf.sh`（每次 build 后都要） |
-| `create ringbuf map failed` EPERM | 缺少 `CAP_BPF`/`CAP_SYS_ADMIN` | 重新 `setcap`，或直接用 root 运行 |
-| `tracefs not writable` | 容器未暴露 `/sys/kernel/tracing` / debugfs | 授权 tracefs；否则退化为直写 backlog |
-| `load kprobe program failed` 且带 verifier 日志 | 内核过老 / helper 不可用 | 查看 verifier 输出；升级内核或接受回退 |
+| agent 启动即退出：`create ringbuf map failed` EPERM | 缺少 `CAP_BPF`/`CAP_SYS_ADMIN`，或重新编译后 `security.capability` 被内核清除 | 重跑 `./setup_ebpf.sh`（每次 build 后都要），或直接 root 运行 agent |
+| agent 启动失败：`symbol kvs_ebpf_notify_write not found` | Master 二进制被 strip，`.symtab` 缺失 | 不要 strip `kvstore`；或用 sim 模式 |
+| agent 启动失败：`uprobe 模式需要 --pid 与 --binary` | 启动命令漏参数 | 补 `--pid <master_pid> --binary ./kvstore` |
+| `tracefs not writable` / 无 uprobe PMU | 容器未暴露 tracefs 或内核无 uprobe PMU | 改用 `ebpf_capture_mode sim` |
 | `perf_event_open failed` EPERM | `perf_event_paranoid` 过高或缺 `CAP_PERFMON` | 调整 `kernel.perf_event_paranoid` 或补 capability |
-| 日志出现 `ringbuf lost N event(s)` | 采集通道丢事件（ringbuf 满） | 已自动触发全量重同步；频繁出现可调大 `KVS_EBPF_RINGBUF_SIZE` |
+| Replica 日志 `master rejected SYNC: -ERROR` | eBPF 强制：agent 未注册（或已掉线） | 先启动 agent 并确认 `registered with master` |
+| agent 日志 `capture stream lost N event(s)` / `cache overflow` | 采集环满或缓存超限 | 已自动断开增量通道触发重同步；频繁出现可调大 `KVS_EBPF_RINGBUF_SIZE` / `--cache-max-*` |
+| Master 重启后 agent 退出码 3 | uprobe 绑在旧进程上，无法自动重挂 | 用新的 `--pid` 重启 agent；sim 模式会自动重开环 |
 
 ## 数据持久化与恢复
 
