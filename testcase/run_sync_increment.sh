@@ -64,7 +64,8 @@ kvs_test_remove_runtime_files
 kvs_test_kill_stragglers
 
 echo "1) 启动 Master 并写入前 5w"
-kvs_test_start_bg "$MASTER_LOG" ./kvstore "$MASTER_PORT" 0 --config "$CONF"
+kvs_test_start_bg "$MASTER_LOG" ./kvstore --config "$CONF" \
+    --port "$MASTER_PORT" --role master
 MASTER_PID=$KVS_TEST_LAST_PID
 kvs_test_wait_for_port "$MASTER_PORT"
 "$INSERT_BEFORE" 127.0.0.1 "$MASTER_PORT"
@@ -84,8 +85,9 @@ if ! grep -q "registered with master" "$AGENT_LOG"; then
 fi
 
 echo "3) 启动 Replica（全量同步），同时写入后 5w（部分落在同步窗口内被缓存）"
-kvs_test_start_bg "$REPLICA_LOG" ./kvstore "$REPLICA_PORT" 1 127.0.0.1 "$MASTER_PORT" \
-    --config "$CONF"
+kvs_test_start_bg "$REPLICA_LOG" ./kvstore --config "$CONF" \
+    --port "$REPLICA_PORT" --role replica \
+    --master-ip 127.0.0.1 --master-port "$MASTER_PORT"
 REPLICA_PID=$KVS_TEST_LAST_PID
 kvs_test_wait_for_port "$REPLICA_PORT"
 "$INSERT_AFTER" 127.0.0.1 "$MASTER_PORT"

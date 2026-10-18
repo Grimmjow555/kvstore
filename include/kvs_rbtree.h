@@ -39,7 +39,4 @@ int kvs_rbtree_del(kvs_rbtree_t* inst, char* key);
 int kvs_rbtree_mod(kvs_rbtree_t* inst, char* key, char* value);
 int kvs_rbtree_exist(kvs_rbtree_t* inst, char* key);
 
-int kvs_rbtree_save(kvs_rbtree_t* tree, const char* filename);
-int kvs_rbtree_load(kvs_rbtree_t* tree, const char* filename);
-
 #endif

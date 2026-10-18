@@ -108,9 +108,9 @@ set(KVSTORE_SOURCES
     persistence/io_uring.cpp
 
     replication/kvs_replication.cpp
-    replication/kvs_ebpf.cpp
     replication/kvs_ebpf_ring.cpp
     replication/kvs_sync.cpp
+    replication/kvs_netutil.cpp
 )
 
 # 添加可执行文件
@@ -122,6 +122,7 @@ add_executable(ebpf_agent
     tools/ebpf_agent.cpp
     replication/kvs_ebpf_agent.cpp
     replication/kvs_ebpf_ring.cpp
+    replication/kvs_netutil.cpp
     config/kvs_config.cpp
 )
 target_include_directories(ebpf_agent PRIVATE ${CMAKE_SOURCE_DIR}/include)

@@ -1,7 +1,7 @@
 // 实时增量采集（ebpf-agent 侧）：uprobe + BPF ringbuf / 共享内存环。
 //
 // 重设计阶段 3：采集从 kvstore 进程搬到独立的 ebpf-agent 进程。kvstore 里只剩
-// 一个挂载点 kvs_ebpf_notify_write()（见 replication/kvs_ebpf.cpp），本文件负责
+// 一个挂载点 kvs_ebpf_notify_write()（见 replication/kvs_replication.cpp），本文件负责
 // 把记录取出来交给 agent 的状态机（缓存 / 转发给 Replica）。
 //
 // 两种模式（运行期选择，见 tools/ebpf_agent.cpp 的 --mode）：
@@ -40,7 +40,7 @@
 // ==================== agent 侧采集：定位与阅读提示 ====================
 //
 // 这是复制链路里 ebpf-agent 的采集半边（设计见 docs/replication-redesign.md §8.5）。
-// kvstore 进程只提供挂载点 kvs_ebpf_notify_write()（replication/kvs_ebpf.cpp），
+// kvstore 进程只提供挂载点 kvs_ebpf_notify_write()（replication/kvs_replication.cpp），
 // 本文件在 **独立进程** 里把记录取出来交给 agent 状态机（tools/ebpf_agent.cpp）。
 //
 // 两种模式（由 kvs_ebpf_agent_capture_start 的 mode 参数在运行期选择）：
@@ -438,7 +438,7 @@ static void* consumer_thread(void*) {
 //   * g_on_record：一条完整记录（写命令 / SYNC / SYNC FINISHED）；
 //   * g_on_resync：采集丢事件或记录损坏，需要重同步（agent 断开增量通道）。
 //
-// 挂载点 kvs_ebpf_notify_write() 本身在 master 进程里（replication/kvs_ebpf.cpp），
+// 挂载点 kvs_ebpf_notify_write() 本身在 master 进程里（replication/kvs_replication.cpp），
 // 本文件通过 uprobe 读它的参数，不定义该符号。
 
 // ==================== 真实内核路径：uprobe + ringbuf attach ====================

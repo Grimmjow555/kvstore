@@ -42,7 +42,4 @@ int kvs_hash_mod(kvs_hash_t* hash, char* key, char* value);
 int kvs_hash_del(kvs_hash_t* hash, char* key);
 int kvs_hash_exist(kvs_hash_t* hash, char* key);
 
-int kvs_hash_save(kvs_hash_t* hash, const char* filename);
-int kvs_hash_load(kvs_hash_t* hash, const char* filename);
-
 #endif

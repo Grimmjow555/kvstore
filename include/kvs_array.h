@@ -30,7 +30,4 @@ int kvs_array_del(kvs_array_t* inst, char* key);
 int kvs_array_mod(kvs_array_t* inst, char* key, char* value);
 int kvs_array_exist(kvs_array_t* inst, char* key);
 
-int kvs_array_save(kvs_array_t* array, const char* filename);
-int kvs_array_load(kvs_array_t* array, const char* filename);
-
 #endif

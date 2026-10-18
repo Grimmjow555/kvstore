@@ -64,6 +64,22 @@ int build_resp_request(char* buf, size_t capacity, const char* cmd, int argc, co
     return (int)offset;
 }
 
+/**
+ * @brief 打印一次统计的命令数、耗时与 QPS
+ *
+ * @param name      统计项名称，如 "ARRAY SET"
+ * @param cmd_count 统计到的命令条数
+ * @param time_ms   统计到的累计耗时（毫秒）
+ */
+static void print_stats(const char* name, long long cmd_count, long long time_ms) {
+    long long safe_ms = time_ms > 0 ? time_ms : 1; // 避免除零
+    double qps = (double)cmd_count * 1000.0 / (double)safe_ms;
+    double avg_ms = cmd_count > 0 ? (double)time_ms / (double)cmd_count : 0.0;
+
+    printf("%s --> commands: %lld, time_used: %lld ms, qps: %.0f, avg: %.4f ms/cmd\n", name,
+           cmd_count, time_ms, qps, avg_ms);
+}
+
 void testcase(int connfd, const char* msg, const char* expected_pattern, const char* casename,
               int thread_id) {
     if (!msg || !expected_pattern || !casename)
@@ -149,10 +165,11 @@ void array_testcase_3w(int connfd) {
     int count = TEST_COUNT;
     int i = 0;
 
-    struct timeval tv_begin;
+    struct timeval tv_begin, tv_end, tv_phase_begin, tv_phase_end;
     gettimeofday(&tv_begin, NULL);
 
     // 第一阶段：SET Teacher{i} King{i}
+    gettimeofday(&tv_phase_begin, NULL);
     for (i = 0; i < count; i++) {
         char key[64], value[64];
         snprintf(key, sizeof(key), "Teacher%d", i);
@@ -164,8 +181,11 @@ void array_testcase_3w(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "SET-Teacher", 0);
     }
+    gettimeofday(&tv_phase_end, NULL);
+    print_stats("ARRAY SET", count, TIME_SUB_MS(tv_phase_end, tv_phase_begin));
 
     // 第二阶段：MOD Teacher{i} Darren{i}
+    gettimeofday(&tv_phase_begin, NULL);
     for (i = 0; i < count; i++) {
         char key[64], value[64];
         snprintf(key, sizeof(key), "Teacher%d", i);
@@ -177,8 +197,11 @@ void array_testcase_3w(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "MOD-Darren-Teacher", 0);
     }
+    gettimeofday(&tv_phase_end, NULL);
+    print_stats("ARRAY MOD", count, TIME_SUB_MS(tv_phase_end, tv_phase_begin));
 
     // 第三阶段：DEL Teacher{i}
+    gettimeofday(&tv_phase_begin, NULL);
     for (i = 0; i < count; i++) {
         char key[64];
         snprintf(key, sizeof(key), "Teacher%d", i);
@@ -189,13 +212,12 @@ void array_testcase_3w(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "DEL-Teacher", 0);
     }
+    gettimeofday(&tv_phase_end, NULL);
+    print_stats("ARRAY DEL", count, TIME_SUB_MS(tv_phase_end, tv_phase_begin));
 
-    struct timeval tv_end;
     gettimeofday(&tv_end, NULL);
 
-    int time_used = TIME_SUB_MS(tv_end, tv_begin); // ms
-
-    printf("ARRAY testcase --> time_used: %d, qps: %d\n", time_used, 3 * count * 1000 / time_used);
+    print_stats("ARRAY TOTAL", (long long)3 * count, TIME_SUB_MS(tv_end, tv_begin));
 }
 
 void rbtree_testcase_3w(int connfd) {
@@ -203,10 +225,11 @@ void rbtree_testcase_3w(int connfd) {
     int count = TEST_COUNT;
     int i = 0;
 
-    struct timeval tv_begin;
+    struct timeval tv_begin, tv_end, tv_phase_begin, tv_phase_end;
     gettimeofday(&tv_begin, NULL);
 
     // 第一阶段：RSET Teacher{i} King{i}
+    gettimeofday(&tv_phase_begin, NULL);
     for (i = 0; i < count; i++) {
         char key[64], value[64];
         snprintf(key, sizeof(key), "Teacher%d", i);
@@ -218,8 +241,11 @@ void rbtree_testcase_3w(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "RSET-Teacher", 0);
     }
+    gettimeofday(&tv_phase_end, NULL);
+    print_stats("RBTREE RSET", count, TIME_SUB_MS(tv_phase_end, tv_phase_begin));
 
     // 第二阶段：RMOD Teacher{i} Darren{i}
+    gettimeofday(&tv_phase_begin, NULL);
     for (i = 0; i < count; i++) {
         char key[64], value[64];
         snprintf(key, sizeof(key), "Teacher%d", i);
@@ -231,8 +257,11 @@ void rbtree_testcase_3w(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "RMOD-Darren-Teacher", 0);
     }
+    gettimeofday(&tv_phase_end, NULL);
+    print_stats("RBTREE RMOD", count, TIME_SUB_MS(tv_phase_end, tv_phase_begin));
 
     // 第三阶段：RDEL Teacher{i}
+    gettimeofday(&tv_phase_begin, NULL);
     for (i = 0; i < count; i++) {
         char key[64];
         snprintf(key, sizeof(key), "Teacher%d", i);
@@ -243,13 +272,12 @@ void rbtree_testcase_3w(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "RDEL-Teacher", 0);
     }
+    gettimeofday(&tv_phase_end, NULL);
+    print_stats("RBTREE RDEL", count, TIME_SUB_MS(tv_phase_end, tv_phase_begin));
 
-    struct timeval tv_end;
     gettimeofday(&tv_end, NULL);
 
-    int time_used = TIME_SUB_MS(tv_end, tv_begin); // ms
-
-    printf("RBTREE testcase --> time_used: %d, qps: %d\n", time_used, 3 * count * 1000 / time_used);
+    print_stats("RBTREE TOTAL", (long long)3 * count, TIME_SUB_MS(tv_end, tv_begin));
 }
 
 void hash_testcase_3w(int connfd) {
@@ -257,10 +285,11 @@ void hash_testcase_3w(int connfd) {
     int count = TEST_COUNT;
     int i = 0;
 
-    struct timeval tv_begin;
+    struct timeval tv_begin, tv_end, tv_phase_begin, tv_phase_end;
     gettimeofday(&tv_begin, NULL);
 
     // 第一阶段：HSET Teacher{i} King{i}
+    gettimeofday(&tv_phase_begin, NULL);
     for (i = 0; i < count; i++) {
         char key[64], value[64];
         snprintf(key, sizeof(key), "Teacher%d", i);
@@ -272,8 +301,11 @@ void hash_testcase_3w(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "HSET-Teacher", 0);
     }
+    gettimeofday(&tv_phase_end, NULL);
+    print_stats("HASH HSET", count, TIME_SUB_MS(tv_phase_end, tv_phase_begin));
 
     // 第二阶段：HMOD Teacher{i} Darren{i}
+    gettimeofday(&tv_phase_begin, NULL);
     for (i = 0; i < count; i++) {
         char key[64], value[64];
         snprintf(key, sizeof(key), "Teacher%d", i);
@@ -285,8 +317,11 @@ void hash_testcase_3w(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "HMOD-Darren-Teacher", 0);
     }
+    gettimeofday(&tv_phase_end, NULL);
+    print_stats("HASH HMOD", count, TIME_SUB_MS(tv_phase_end, tv_phase_begin));
 
     // 第三阶段：HDEL Teacher{i}
+    gettimeofday(&tv_phase_begin, NULL);
     for (i = 0; i < count; i++) {
         char key[64];
         snprintf(key, sizeof(key), "Teacher%d", i);
@@ -297,13 +332,12 @@ void hash_testcase_3w(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "HDEL-Teacher", 0);
     }
+    gettimeofday(&tv_phase_end, NULL);
+    print_stats("HASH HDEL", count, TIME_SUB_MS(tv_phase_end, tv_phase_begin));
 
-    struct timeval tv_end;
     gettimeofday(&tv_end, NULL);
 
-    int time_used = TIME_SUB_MS(tv_end, tv_begin); // ms
-
-    printf("HASH testcase --> time_used: %d, qps: %d\n", time_used, 3 * count * 1000 / time_used);
+    print_stats("HASH TOTAL", (long long)3 * count, TIME_SUB_MS(tv_end, tv_begin));
 }
 
 void skiptable_testcase_3w(int connfd) {
@@ -311,10 +345,11 @@ void skiptable_testcase_3w(int connfd) {
     int count = TEST_COUNT;
     int i = 0;
 
-    struct timeval tv_begin;
+    struct timeval tv_begin, tv_end, tv_phase_begin, tv_phase_end;
     gettimeofday(&tv_begin, NULL);
 
     // 第一阶段：SSET Teacher{i} King{i}
+    gettimeofday(&tv_phase_begin, NULL);
     for (i = 0; i < count; i++) {
         char key[64], value[64];
         snprintf(key, sizeof(key), "Teacher%d", i);
@@ -326,8 +361,11 @@ void skiptable_testcase_3w(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "SSET-Teacher", 0);
     }
+    gettimeofday(&tv_phase_end, NULL);
+    print_stats("SKIPTABLE SSET", count, TIME_SUB_MS(tv_phase_end, tv_phase_begin));
 
     // 第二阶段：SMOD Teacher{i} Darren{i}
+    gettimeofday(&tv_phase_begin, NULL);
     for (i = 0; i < count; i++) {
         char key[64], value[64];
         snprintf(key, sizeof(key), "Teacher%d", i);
@@ -339,8 +377,11 @@ void skiptable_testcase_3w(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "SMOD-Darren-Teacher", 0);
     }
+    gettimeofday(&tv_phase_end, NULL);
+    print_stats("SKIPTABLE SMOD", count, TIME_SUB_MS(tv_phase_end, tv_phase_begin));
 
     // 第三阶段：SDEL Teacher{i}
+    gettimeofday(&tv_phase_begin, NULL);
     for (i = 0; i < count; i++) {
         char key[64];
         snprintf(key, sizeof(key), "Teacher%d", i);
@@ -351,14 +392,12 @@ void skiptable_testcase_3w(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "SDEL-Teacher", 0);
     }
+    gettimeofday(&tv_phase_end, NULL);
+    print_stats("SKIPTABLE SDEL", count, TIME_SUB_MS(tv_phase_end, tv_phase_begin));
 
-    struct timeval tv_end;
     gettimeofday(&tv_end, NULL);
 
-    int time_used = TIME_SUB_MS(tv_end, tv_begin); // ms
-
-    printf("SKIPTABLE testcase --> time_used: %d, qps: %d\n", time_used,
-           3 * count * 1000 / time_used);
+    print_stats("SKIPTABLE TOTAL", (long long)3 * count, TIME_SUB_MS(tv_end, tv_begin));
 }
 
 //   ./test 192.168.234.135  2000 1
@@ -383,6 +422,9 @@ int main(int argc, char* argv[]) {
         {ip, port, 3},
     };
 
+    struct timeval tv_all_begin, tv_all_end;
+    gettimeofday(&tv_all_begin, NULL);
+
     for (int i = 0; i < 4; i++) {
         if (pthread_create(&threads[i], NULL, structure_test_entry, &contexts[i]) != 0) {
             perror("pthread_create");
@@ -393,6 +435,11 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < 4; i++) {
         pthread_join(threads[i], NULL);
     }
+
+    gettimeofday(&tv_all_end, NULL);
+    print_stats("ALL ENGINES TOTAL (wall)", (long long)4 * 3 * TEST_COUNT,
+                TIME_SUB_MS(tv_all_end, tv_all_begin));
+
     printf("***memorypool test case finished***\n");
 
     return 0;

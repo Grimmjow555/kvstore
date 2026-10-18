@@ -3,8 +3,8 @@
 #include <cstddef>
 #include <vector>
 
-#define MAX_ALLOWED_LEN 1024 * 1024 // 1MB
-#define BUFFER_LENGTH 1024
+#include "network.h"
+
 #define CONN_SIZE 1024
 
 #define PORT_NUMS 1
@@ -19,8 +19,8 @@ struct conn {
     std::vector<char> rbuffer; // 接收缓冲区，按需分配（见 ensure_rbuffer）
     std::vector<char> wbuffer; // 发送缓冲区，按需分配（见 ensure_wbuffer）
 #else
-    char rbuffer[BUFFER_LENGTH];
-    char wbuffer[BUFFER_LENGTH];
+    char rbuffer[KVS_NET_INITIAL_BUFFER_SIZE];
+    char wbuffer[KVS_NET_INITIAL_BUFFER_SIZE];
 #endif
     int rlength;
     int wlength;
@@ -32,7 +32,7 @@ struct conn {
     } r_action;
 
     // 连接表是全局的（CONN_SIZE 个 conn），如果在这里预分配缓冲区，进程启动时
-    // 就要常驻 CONN_SIZE * (BUFFER_LENGTH + MAX_ALLOWED_LEN + 4) 的物理内存
+    // 就要常驻 CONN_SIZE * (初始缓冲 + 最大消息 + 4) 的物理内存
     // （当前取值约 1GB），并且这部分开销与内存分配模式无关。因此初始不分配，
     // 只在真正收发数据的连接上按需扩容。
     conn() : fd(-1), rlength(0), wlength(0) {}

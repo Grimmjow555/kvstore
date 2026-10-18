@@ -111,7 +111,6 @@ bind 0.0.0.0
 log_level info
 persistence_mode none
 network_architecture ntyco
-sync_tmp_file ../data/kvstore.sync.tmp
 rdma_client_bin ./rdma-client
 rdma_server_bin ./rdma-server
 rdma_port 10000

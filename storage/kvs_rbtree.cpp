@@ -1,5 +1,6 @@
 #include "kvs_rbtree.h"
 #include "kvstore.h"
+#include <cstdio>
 #include <cstring>
 // #include <stdio.h>
 // #include <stdlib.h>

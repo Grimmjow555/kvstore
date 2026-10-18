@@ -1,7 +1,6 @@
 #include "kvs_config.h"
 #include "kvs_replication.h"
-#include "kvs_shutdown.h"
-#include "kvs_sync.h"
+#include "network.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <iostream>
@@ -14,12 +13,9 @@
 #include <unistd.h>
 #include <vector>
 
-typedef int (*msg_handler)(char* msg, int length, char* response, int response_size);
 static msg_handler kvs_handler;
 
 #define ENTRIES_LENGTH 1024 // 提交队列和完成队列的大小
-#define BUFFER_LENGTH 1024
-#define MAX_ALLOWED_LEN 1024 * 1024 // 1MB
 
 enum class EVENT { ACCEPT = 0, READ = 1, WRITE = 2 };
 // 新增读取状态枚举
@@ -34,8 +30,8 @@ struct conn_ctx {
     std::vector<char> rbuffer; // 读取缓冲区
     std::vector<char> wbuffer; // 写入缓冲区
 #else
-    char rbuffer[BUFFER_LENGTH];
-    char wbuffer[BUFFER_LENGTH];
+    char rbuffer[KVS_NET_INITIAL_BUFFER_SIZE];
+    char wbuffer[KVS_NET_INITIAL_BUFFER_SIZE];
 #endif
     // struct iovec send_iov[2]; // 发送用的 iovec，与 ctx 同生命周期
 
@@ -52,9 +48,8 @@ struct conn_ctx {
     size_t wsent_len;  // 已成功发出的字节数，用于发送缓冲区满时的续发
 
     conn_ctx() {
-        rbuffer.resize(BUFFER_LENGTH);
         // 响应缓冲区按最大消息长度分配，并额外预留 4 字节长度头空间
-        wbuffer.resize(MAX_ALLOWED_LEN + 4);
+        wbuffer.resize(KVS_NET_MAX_MESSAGE_SIZE + 4);
         wtotal_len = 0;
         wsent_len = 0;
     }
@@ -134,9 +129,9 @@ int set_event_recv(struct io_uring* ring, int clientfd, int flags) {
     struct conn_ctx* ctx = new conn_ctx();
     ctx->clientfd = clientfd;
     ctx->event = EVENT::READ;
-    memset(ctx->rbuffer, 0, BUFFER_LENGTH);
+    memset(ctx->rbuffer, 0, KVS_NET_INITIAL_BUFFER_SIZE);
     struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-    io_uring_prep_recv(sqe, clientfd, ctx->rbuffer, BUFFER_LENGTH, flags);
+    io_uring_prep_recv(sqe, clientfd, ctx->rbuffer.data(), KVS_NET_INITIAL_BUFFER_SIZE, flags);
     sqe->user_data = (__u64)(uintptr_t)ctx;
     return 0;
 }
@@ -223,9 +218,9 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
             } else {
                 // 头部完整，解析长度
                 uint32_t msg_len = ntohl(ctx->header);
-                if (msg_len > MAX_ALLOWED_LEN) {
+                if (msg_len > KVS_NET_MAX_MESSAGE_SIZE) {
                     kvs_log(KVS_LOG_WARN, "[NETWORK] message too long: %u (max: %u)", msg_len,
-                            MAX_ALLOWED_LEN);
+                            KVS_NET_MAX_MESSAGE_SIZE);
                     kvs_replication_remove_replica(ctx->clientfd);
                     close(ctx->clientfd);
                     delete ctx;
@@ -316,9 +311,8 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
         int sendlen = entries->res;
         if (sendlen <= 0) {
             // sendlen < 0 为发送出错，sendlen == 0 表示对端已关闭连接
-            kvs_log(KVS_LOG_WARN, "[NETWORK] send error on connection [%d]: %d (%s)",
-                    ctx->clientfd, sendlen,
-                    sendlen < 0 ? strerror(-sendlen) : "connection closed");
+            kvs_log(KVS_LOG_WARN, "[NETWORK] send error on connection [%d]: %d (%s)", ctx->clientfd,
+                    sendlen, sendlen < 0 ? strerror(-sendlen) : "connection closed");
             kvs_replication_remove_replica(ctx->clientfd);
             close(ctx->clientfd);
             delete ctx;

@@ -1,7 +1,7 @@
 // 主从全量同步控制流（重设计阶段 1 + 阶段 2）。
 //
 // 设计与阶段划分见 docs/replication-redesign.md。
-//   * Master：SYNC -> 序列化 -> 写 <sync_tmp_file> -> 派生 rdma-client -> +OK；
+//   * Master：SYNC -> 序列化 -> 写 <data/kvstore.sync.tmp> -> 派生 rdma-client -> +OK；
 //             SYNC FINISHED -> 回收 rdma-client -> 删除 .tmp -> +OK；
 //   * Replica：派生 rdma-server -> 连 Master 发 SYNC -> 等 RDMA 文件落盘 ->
 //             加载 -> SYNC FINISHED -> 回收 rdma-server。
@@ -9,13 +9,10 @@
 // SYNC 的序列化放在存储锁内，保证快照是「收到 SYNC 那一刻」的一致状态；
 // 参与 RDMA 搬运的是两个独立进程（rdma-client / rdma-server），协议与约束见
 // include/kvs_rdma_transfer.h。
-#include "kvs_sync.h"
-
 #include "kvs_config.h"
 #include "kvs_ebpf.h"
 #include "kvs_io_uring.h"
 #include "kvs_netutil.h"
-#include "kvs_repl_proto.h"
 #include "kvs_replication.h"
 #include "kvs_snapshot.h"
 #include "kvstore.h"
@@ -58,6 +55,12 @@ extern int kvs_protocol(char* msg, int length, char* response, int response_size
 // 失败后的重试退避区间。
 #define KVS_SYNC_BACKOFF_MIN_MS 200
 #define KVS_SYNC_BACKOFF_MAX_MS 5000
+
+// 主从全量同步的临时快照文件。与 RDB/AOF 一样固定在运行目录的 ../data/ 下，
+// 不通过配置文件暴露（从 build/ 启动时即 data/kvstore.sync.tmp）。
+//   Master：发布 <path>；Replica 的 rdma-server 落到 <path>.recv；
+//   就绪信号为 <path>.ready，子进程日志为 <path>.rdma-{client,server}.log。
+static const char kSyncTmpFile[] = "../data/kvstore.sync.tmp";
 
 static kvs_role_t g_sync_role = KVS_ROLE_MASTER;
 
@@ -272,7 +275,7 @@ int kvs_sync_handle_sync(char* response, int response_size) {
         kvs_log(KVS_LOG_WARN,
                 "[SYNC] previous sync did not finish; superseding it with a new attempt");
         sync_kill_child(&g_rdma_client_pid);
-        unlink(kvs_config_sync_tmp_file());
+        unlink(kSyncTmpFile);
         g_sync_in_progress = 0;
     }
 
@@ -297,7 +300,7 @@ int kvs_sync_handle_sync(char* response, int response_size) {
         return snprintf(response, response_size, "-ERROR\r\n");
     }
 
-    const char* path = kvs_config_sync_tmp_file();
+    const char* path = kSyncTmpFile;
     int rc = sync_write_tmp_atomic(path, blob, blob_len);
     free(blob);
     if (rc != 0) {
@@ -331,7 +334,7 @@ int kvs_sync_handle_sync_finished(char* response, int response_size) {
     // 回收 rdma-client：正常情况下它已经发完并退出，这里只是收尸。
     sync_kill_child(&g_rdma_client_pid);
 
-    const char* path = kvs_config_sync_tmp_file();
+    const char* path = kSyncTmpFile;
     if (unlink(path) != 0 && errno != ENOENT) {
         kvs_log(KVS_LOG_WARN, "[SYNC] unlink %s failed: %s", path, strerror(errno));
     }
@@ -459,13 +462,13 @@ int kvs_sync_wait_increment(int wait_connected, int timeout_ms) {
 }
 
 // Replica 侧的本地接收路径：与 Master 的发布路径区分开，避免单机验证时两者
-// 指向同一个文件。Master 写 <sync_tmp_file>，rdma-server 写 <sync_tmp_file>.recv。
+// 指向同一个文件。Master 写 <kSyncTmpFile>，rdma-server 写 <kSyncTmpFile>.recv。
 static void sync_recv_path(char* out, size_t out_size) {
-    snprintf(out, out_size, "%s.recv", kvs_config_sync_tmp_file());
+    snprintf(out, out_size, "%s.recv", kSyncTmpFile);
 }
 
 static void sync_ready_path(char* out, size_t out_size) {
-    snprintf(out, out_size, "%s.ready", kvs_config_sync_tmp_file());
+    snprintf(out, out_size, "%s.ready", kSyncTmpFile);
 }
 
 static int sync_path_exists(const char* path) {
@@ -482,7 +485,7 @@ static int sync_spawn_rdma_server() {
     char timeout_str[16];
     sync_recv_path(recv_path, sizeof(recv_path));
     sync_ready_path(ready_path, sizeof(ready_path));
-    snprintf(log_path, sizeof(log_path), "%s.rdma-server.log", kvs_config_sync_tmp_file());
+    snprintf(log_path, sizeof(log_path), "%s.rdma-server.log", kSyncTmpFile);
     snprintf(port_str, sizeof(port_str), "%d", kvs_config_rdma_port());
     snprintf(timeout_str, sizeof(timeout_str), "%d", kvs_config_rdma_transfer_timeout_ms());
 
@@ -540,7 +543,7 @@ static int sync_run_replica_once(int fd) {
     char log_path[512];
     sync_recv_path(recv_path, sizeof(recv_path));
     sync_ready_path(ready_path, sizeof(ready_path));
-    snprintf(log_path, sizeof(log_path), "%s.rdma-server.log", kvs_config_sync_tmp_file());
+    snprintf(log_path, sizeof(log_path), "%s.rdma-server.log", kSyncTmpFile);
 
     int rc = -1;
     int waited = 0;
@@ -676,7 +679,7 @@ int kvs_sync_init(kvs_role_t role) {
         g_master_port = kvs_config_master_port();
     }
     kvs_log(KVS_LOG_INFO, "[SYNC] tmp snapshot file: %s, rdma port: %d",
-            kvs_config_sync_tmp_file(), kvs_config_rdma_port());
+            kSyncTmpFile, kvs_config_rdma_port());
     return 0;
 }
 

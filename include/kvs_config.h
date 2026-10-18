@@ -1,7 +1,5 @@
 #pragma once
 
-#include <stdarg.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -23,35 +21,8 @@ typedef enum {
     KVS_NETWORK_PROACTOR = 2  // proactor：io_uring
 } kvs_network_t;
 
-// 服务运行所需的全部配置。字段中的 role 沿用复制模块约定：
-// 0 表示 Master，1 表示 Replica。
-typedef struct {
-    char bind_ip[64];    // 服务监听 IP
-    int port;            // 服务监听端口
-    int log_level;       // kvs_log_level_t 对应的整数
-    int role;            // 0=Master, 1=Replica
-    char master_ip[64];  // Replica 连接的主节点 IP
-    int master_port;     // Replica 连接的主节点端口
-    int rdb_enabled;     // 是否启用 RDB
-    int aof_enabled;     // 是否启用 AOF
-    int network;         // kvs_network_t 对应的整数
-    // 重设计后的主从全量同步临时快照文件（SYNC 落盘 / SYNC FINISHED 删除）。
-    // 相对进程运行目录解析，与现有 ../data/... 约定一致。
-    char sync_tmp_file[256];
-    // 阶段 2：RDMA 搬运由独立进程 rdma-client / rdma-server 完成。
-    char rdma_client_bin[256]; // Master 派生的发送端可执行文件
-    char rdma_server_bin[256]; // Replica 派生的接收端可执行文件
-    char replica_host[64];     // Master 侧：Replica 的 RDMA 网卡 IP
-    int rdma_port;             // RDMA 端口（发送端连接、接收端监听）
-    int rdma_transfer_timeout_ms; // rdma-client / rdma-server 的整体超时
-    int sync_wait_timeout_ms;     // Replica 等待 RDMA 文件落盘的超时
-    // 阶段 3：增量采集由独立 ebpf-agent 负责。
-    int ebpf_capture_mode;    // 0 = uprobe，1 = sim（共享内存环）
-    char ebpf_ring_file[256]; // sim 模式的采集环文件
-} kvs_config_t;
-
 // 恢复默认配置。默认监听 0.0.0.0:9999，角色为 Master，
-// 日志级别 INFO，RDB 与 AOF 默认都关闭。
+// 日志级别 INFO，持久化关闭；RDB 与 AOF 只能择一开启。
 void kvs_config_set_defaults(void);
 
 // 从指定 key=value 或 key value 配置文件中读取并覆盖当前配置。
@@ -62,7 +33,7 @@ int kvs_config_load(const char* filename);
 // 两个文件都不存在时返回 0（继续使用当前默认值）；文件存在但解析失败时返回 -1。
 int kvs_config_load_default(void);
 
-// 解析并移除命令行配置开关。
+// 解析命令行配置开关。启动参数只接受命名开关，不接受位置参数。
 //
 // 支持的开关：
 //   --config <file>
@@ -72,13 +43,13 @@ int kvs_config_load_default(void);
 //   --role <master|replica|0|1>
 //   --master-ip <ip>
 //   --master-port <port>
-//   --persistence-mode <none|rdb|aof|both>
+//   --persistence-mode <none|rdb|aof>
 //   --rdb <on|off>
 //   --aof <on|off>
 //   --network <reactor|ntyco|proactor>
 //
 // 若指定 --config，先读取该文件，再用其他命令行开关覆盖；否则先尝试加载默认配置文件。
-// 解析成功后会把这些选项从 argv 中移除，便于继续按旧式位置参数处理。
+// 出现任何非开关参数时返回错误。
 // 返回 0 表示成功，非 0 表示配置错误。
 int kvs_config_parse_switches(int* argc, char*** argv);
 
@@ -91,8 +62,6 @@ int kvs_config_master_port(void);
 int kvs_config_rdb_enabled(void);
 int kvs_config_aof_enabled(void);
 
-// 主从全量同步的临时快照路径，默认 ../data/kvstore.sync.tmp。
-const char* kvs_config_sync_tmp_file(void);
 const char* kvs_config_rdma_client_bin(void);
 const char* kvs_config_rdma_server_bin(void);
 const char* kvs_config_replica_host(void);

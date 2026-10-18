@@ -13,7 +13,7 @@ SERVER_LOG="${TMPDIR:-/tmp}/kvstore-rdb-cycle.$$.log"
 start_server() {
     (
         cd "$BUILD_DIR"
-        exec ./kvstore 9999 0 --rdb on --aof off
+        exec ./kvstore --port 9999 --role master --rdb on --aof off
     ) >"$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
 }
@@ -64,10 +64,10 @@ wait_for_server
 "$SAVE_CLIENT" 0.0.0.0 9999
 stop_server
 
-echo "Starting kvstore for RDB load..."
+echo "Restarting kvstore for RDB auto-load..."
 start_server
 wait_for_server
 "$LOAD_CLIENT" 0.0.0.0 9999
 stop_server
 
-echo "RDB save/load cycle completed."
+echo "RDB save/auto-load cycle completed."

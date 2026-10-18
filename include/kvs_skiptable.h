@@ -33,7 +33,4 @@ int kvs_skiptable_mod(kvs_skiptable_t* skiptable, char* key, char* value);
 int kvs_skiptable_del(kvs_skiptable_t* skiptable, char* key);
 int kvs_skiptable_exist(kvs_skiptable_t* skiptable, char* key);
 
-int kvs_skiptable_save(kvs_skiptable_t* skiptable, const char* filename);
-int kvs_skiptable_load(kvs_skiptable_t* skiptable, const char* filename);
-
 #endif

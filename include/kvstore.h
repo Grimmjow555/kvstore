@@ -1,5 +1,6 @@
 #pragma once
-#include <iostream>
+
+#include <stddef.h>
 
 // 存储引擎全局读写锁。
 //

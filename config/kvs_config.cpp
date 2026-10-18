@@ -1,6 +1,7 @@
 #include "kvs_config.h"
 
 #include <cctype>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -10,6 +11,27 @@
 #include <string>
 #include <strings.h>
 #include <unistd.h>
+
+// 服务运行配置只在本实现中使用，公共接口通过 getter 暴露需要的字段。
+typedef struct {
+    char bind_ip[64];    // 服务监听 IP
+    int port;            // 服务监听端口
+    int log_level;       // kvs_log_level_t 对应的整数
+    int role;            // 0=Master, 1=Replica
+    char master_ip[64];  // Replica 连接的主节点 IP
+    int master_port;     // Replica 连接的主节点端口
+    int rdb_enabled;     // 是否启用 RDB（与 aof_enabled 互斥）
+    int aof_enabled;     // 是否启用 AOF（与 rdb_enabled 互斥）
+    int network;         // kvs_network_t 对应的整数
+    char rdma_client_bin[256]; // Master 派生的发送端可执行文件
+    char rdma_server_bin[256]; // Replica 派生的接收端可执行文件
+    char replica_host[64];     // Master 侧：Replica 的 RDMA 网卡 IP
+    int rdma_port;             // RDMA 端口
+    int rdma_transfer_timeout_ms; // rdma-client / rdma-server 的整体超时
+    int sync_wait_timeout_ms;     // Replica 等待 RDMA 文件落盘的超时
+    int ebpf_capture_mode;        // 0 = uprobe，1 = sim
+    char ebpf_ring_file[256];     // sim 模式的采集环文件
+} kvs_config_t;
 
 static kvs_config_t g_config;
 static std::mutex g_log_mutex;
@@ -174,41 +196,7 @@ static bool parse_persistence_mode(const std::string& value, int* rdb, int* aof)
         *aof = 1;
         return true;
     }
-    if (lower == "both" || lower == "all" || lower == "rdb,aof" || lower == "aof,rdb") {
-        *rdb = 1;
-        *aof = 1;
-        return true;
-    }
-
-    // 兼容逗号分隔写法，例如 "rdb, aof"。
-    bool rdb_on = false;
-    bool aof_on = false;
-    size_t begin = 0;
-    while (begin <= lower.size()) {
-        size_t comma = lower.find(',', begin);
-        size_t length = comma == std::string::npos ? std::string::npos : comma - begin;
-        std::string part = to_lower(trim(lower.substr(begin, length)));
-        if (part == "rdb") {
-            rdb_on = true;
-        } else if (part == "aof") {
-            aof_on = true;
-        } else if (!part.empty()) {
-            return false;
-        }
-
-        if (comma == std::string::npos) {
-            break;
-        }
-        begin = comma + 1;
-    }
-
-    if (!rdb_on && !aof_on) {
-        return false;
-    }
-
-    *rdb = rdb_on ? 1 : 0;
-    *aof = aof_on ? 1 : 0;
-    return true;
+    return false;
 }
 
 static bool parse_network_architecture(const std::string& value, int* out) {
@@ -252,6 +240,16 @@ static void set_bind_ip(const std::string& value) {
 static void set_master_ip(const std::string& value) {
     std::string ip = trim(value);
     snprintf(g_config.master_ip, sizeof(g_config.master_ip), "%s", ip.c_str());
+}
+
+// RDB 全量快照与 AOF 增量日志互斥，避免同一份数据被两种恢复机制同时接管。
+static bool set_persistence_flags(int rdb, int aof) {
+    if (rdb && aof) {
+        return false;
+    }
+    g_config.rdb_enabled = rdb ? 1 : 0;
+    g_config.aof_enabled = aof ? 1 : 0;
+    return true;
 }
 
 static int apply_config_key(const std::string& raw_key, const std::string& raw_value) {
@@ -313,17 +311,19 @@ static int apply_config_key(const std::string& raw_key, const std::string& raw_v
     if (key == "persistence_mode" || key == "persistence") {
         int rdb = 0;
         int aof = 0;
-        if (!parse_persistence_mode(value, &rdb, &aof)) {
+        if (!parse_persistence_mode(value, &rdb, &aof) ||
+            !set_persistence_flags(rdb, aof)) {
             return -1;
         }
-        g_config.rdb_enabled = rdb;
-        g_config.aof_enabled = aof;
         return 0;
     }
 
     if (key == "rdb" || key == "snapshot") {
         int parsed = 0;
         if (!parse_on_off(value, &parsed)) {
+            return -1;
+        }
+        if (parsed && g_config.aof_enabled) {
             return -1;
         }
         g_config.rdb_enabled = parsed;
@@ -333,6 +333,9 @@ static int apply_config_key(const std::string& raw_key, const std::string& raw_v
     if (key == "aof" || key == "appendonly") {
         int parsed = 0;
         if (!parse_on_off(value, &parsed)) {
+            return -1;
+        }
+        if (parsed && g_config.rdb_enabled) {
             return -1;
         }
         g_config.aof_enabled = parsed;
@@ -347,14 +350,6 @@ static int apply_config_key(const std::string& raw_key, const std::string& raw_v
             return -1;
         }
         g_config.network = parsed;
-        return 0;
-    }
-
-    if (key == "sync_tmp_file" || key == "sync_tmp" || key == "replication_tmp_file") {
-        if (value.empty() || value.size() >= sizeof(g_config.sync_tmp_file)) {
-            return -1;
-        }
-        snprintf(g_config.sync_tmp_file, sizeof(g_config.sync_tmp_file), "%s", value.c_str());
         return 0;
     }
 
@@ -442,17 +437,13 @@ void kvs_config_set_defaults(void) {
     g_config.role = 0;
     g_config.master_ip[0] = '\0';
     g_config.master_port = 0;
-    // 默认关闭 RDB 与 AOF，需要时通过配置文件或命令行开关显式开启。
+    // 默认不持久化；RDB 与 AOF 只能择一开启。
     g_config.rdb_enabled = 0;
     g_config.aof_enabled = 0;
 
     // 默认网络框架为 NtyCo；kvstore.conf 的 network_architecture
     // 或命令行 --network 可在启动时覆盖。
     g_config.network = KVS_NETWORK_NTYCO;
-
-    // 主从全量同步的临时快照文件：Master 写、Replica 读，单机验证时共享同一路径。
-    snprintf(g_config.sync_tmp_file, sizeof(g_config.sync_tmp_file), "%s",
-             "../data/kvstore.sync.tmp");
 
     // 阶段 2：RDMA 搬运由独立进程完成，这里给出可执行文件与端口的默认值。
     snprintf(g_config.rdma_client_bin, sizeof(g_config.rdma_client_bin), "%s", "./rdma-client");
@@ -585,7 +576,10 @@ int kvs_config_parse_switches(int* argc, char*** argv) {
         return -1;
     }
 
-    int output_index = 1;
+    // 命令行开关允许覆盖配置文件，因此先记录持久化相关的最终选择，全部解析完
+    // 再校验 RDB/AOF 互斥，避免开关顺序影响 --rdb off --aof on 这类合法切换。
+    int rdb_override = -1;
+    int aof_override = -1;
     for (int i = 1; i < input_count;) {
         const char* value = nullptr;
         int consumed = 0;
@@ -630,20 +624,30 @@ int kvs_config_parse_switches(int* argc, char*** argv) {
             int rdb = 0;
             int aof = 0;
             if (!parse_persistence_mode(value == nullptr ? "" : value, &rdb, &aof)) {
+                fprintf(stderr, "Invalid --persistence-mode value: %s\n",
+                        value == nullptr ? "" : value);
                 return -1;
             }
-            g_config.rdb_enabled = rdb;
-            g_config.aof_enabled = aof;
+            rdb_override = rdb;
+            aof_override = aof;
             match = 1;
         } else if (get_option_value(args, input_count, i, "--rdb", &value, &consumed) == 0) {
-            if (!parse_on_off(value == nullptr ? "" : value, &g_config.rdb_enabled)) {
+            int rdb = 0;
+            if (!parse_on_off(value == nullptr ? "" : value, &rdb)) {
+                fprintf(stderr, "Invalid --rdb value: %s\n",
+                        value == nullptr ? "" : value);
                 return -1;
             }
+            rdb_override = rdb;
             match = 1;
         } else if (get_option_value(args, input_count, i, "--aof", &value, &consumed) == 0) {
-            if (!parse_on_off(value == nullptr ? "" : value, &g_config.aof_enabled)) {
+            int aof = 0;
+            if (!parse_on_off(value == nullptr ? "" : value, &aof)) {
+                fprintf(stderr, "Invalid --aof value: %s\n",
+                        value == nullptr ? "" : value);
                 return -1;
             }
+            aof_override = aof;
             match = 1;
         } else if (get_option_value(args, input_count, i, "--network", &value, &consumed) ==
                        0 ||
@@ -665,11 +669,22 @@ int kvs_config_parse_switches(int* argc, char*** argv) {
             return -1;
         }
 
-        args[output_index++] = args[i++];
+        fprintf(stderr,
+                "Unexpected positional argument: %s\n"
+                "Positional arguments are not supported; use named options or --config.\n",
+                args[i] == nullptr ? "" : args[i]);
+        return -1;
     }
 
-    args[output_index] = nullptr;
-    *argc = output_index;
+    int final_rdb = rdb_override >= 0 ? rdb_override : g_config.rdb_enabled;
+    int final_aof = aof_override >= 0 ? aof_override : g_config.aof_enabled;
+    if (!set_persistence_flags(final_rdb, final_aof)) {
+        fprintf(stderr, "RDB and AOF cannot be enabled together\n");
+        return -1;
+    }
+
+    // 配置项已全部消费，主程序不应再看到任何位置参数。
+    *argc = 1;
     return 0;
 }
 
@@ -688,8 +703,6 @@ int kvs_config_master_port(void) { return g_config.master_port; }
 int kvs_config_rdb_enabled(void) { return g_config.rdb_enabled; }
 
 int kvs_config_aof_enabled(void) { return g_config.aof_enabled; }
-
-const char* kvs_config_sync_tmp_file(void) { return g_config.sync_tmp_file; }
 
 const char* kvs_config_rdma_client_bin(void) { return g_config.rdma_client_bin; }
 

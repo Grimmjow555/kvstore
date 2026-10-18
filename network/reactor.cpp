@@ -10,13 +10,9 @@
 
 #include "kvs_config.h"
 #include "kvs_replication.h"
-#include "kvs_shutdown.h"
-#include "kvs_sync.h"
+#include "network.h"
 #include "server.h"
 
-//定义了一个类型别s名msg_handler
-//它代表的类型就是“返回值 int、参数 (char*, int, char*, int)的函数指针”。
-typedef int (*msg_handler)(char* msg, int length, char* response, int response_size);
 static msg_handler kvs_handler;
 
 int kvs_request(struct conn* c) {
@@ -184,8 +180,9 @@ int recv_cb(int clientfd) {
 
     // 检查消息体长度是否超过缓冲区（留一个字节给 '\0'）
     // 检查消息长度是否在允许范围内
-    if (msg_len > MAX_ALLOWED_LEN) {
-        kvs_log(KVS_LOG_WARN, "[NETWORK] message too long: %u (max: %u)", msg_len, MAX_ALLOWED_LEN);
+    if (msg_len > KVS_NET_MAX_MESSAGE_SIZE) {
+        kvs_log(KVS_LOG_WARN, "[NETWORK] message too long: %u (max: %u)", msg_len,
+                KVS_NET_MAX_MESSAGE_SIZE);
         // 可选：发送错误响应并继续服务，或直接关闭连接
         const char* err = "-ERR message too long\r\n";
         send(clientfd, err, strlen(err), 0);
@@ -231,7 +228,7 @@ int recv_cb(int clientfd) {
 
     // 响应缓冲区同样按需分配：分配后 kvs_handler 最多可写 wbuffer.size()-4 字节，
     // 发送时再在最前面补 4 字节长度头。
-    if (conn_list[clientfd].ensure_wbuffer(MAX_ALLOWED_LEN + 4) != 0) {
+    if (conn_list[clientfd].ensure_wbuffer(KVS_NET_MAX_MESSAGE_SIZE + 4) != 0) {
         kvs_log(KVS_LOG_WARN, "[NETWORK] wbuffer resize failed, clientfd: %d", clientfd);
         close_client_conn(clientfd);
         return 0;
@@ -289,8 +286,9 @@ int send_cb(int clientfd) {
 
 #else
 int recv_cb(int clientfd) {
-    memset(conn_list[clientfd].rbuffer, 0, BUFFER_LENGTH);
-    int count = recv(clientfd, conn_list[clientfd].rbuffer, BUFFER_LENGTH, 0);
+    memset(conn_list[clientfd].rbuffer, 0, KVS_NET_INITIAL_BUFFER_SIZE);
+    int count =
+        recv(clientfd, conn_list[clientfd].rbuffer, KVS_NET_INITIAL_BUFFER_SIZE, 0);
     if (count == 0) {
         kvs_log(KVS_LOG_INFO, "[NETWORK] client disconnect: %d", clientfd);
         epoll_ctl(epfd, EPOLL_CTL_DEL, clientfd, nullptr);

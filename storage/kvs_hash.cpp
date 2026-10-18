@@ -70,7 +70,7 @@ int kvs_hash_create(kvs_hash_t* hash) {
         return -1;
 
     // nodes 数组中的槽位必须初始化为 NULL，否则销毁时会遍历到未初始化指针，
-    // 二次 RDB LOAD 可能触发 double free 或内存破坏。
+    // 二次快照加载可能触发 double free 或内存破坏。
     memset(hash->nodes, 0, sizeof(hashnode_t*) * MAX_TABLE_SIZE);
 
     hash->max_slots = MAX_TABLE_SIZE;

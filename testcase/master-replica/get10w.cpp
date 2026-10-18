@@ -63,6 +63,22 @@ int build_resp_request(char* buf, size_t capacity, const char* cmd, int argc, co
     return (int)offset;
 }
 
+/**
+ * @brief 打印一次统计的命令数、耗时与 QPS
+ *
+ * @param name      统计项名称，如 "GET ARRAY GET"
+ * @param cmd_count 统计到的命令条数
+ * @param time_ms   统计到的累计耗时（毫秒）
+ */
+static void print_stats(const char* name, long long cmd_count, long long time_ms) {
+    long long safe_ms = time_ms > 0 ? time_ms : 1; // 避免除零
+    double qps = (double)cmd_count * 1000.0 / (double)safe_ms;
+    double avg_ms = cmd_count > 0 ? (double)time_ms / (double)cmd_count : 0.0;
+
+    printf("%s --> commands: %lld, time_used: %lld ms, qps: %.0f, avg: %.4f ms/cmd\n", name,
+           cmd_count, time_ms, qps, avg_ms);
+}
+
 void testcase(int connfd, const char* msg, const char* expected_pattern, const char* casename,
               int thread_id) {
     if (!msg || !expected_pattern || !casename)
@@ -104,6 +120,8 @@ int connect_tcpserver(const char* ip, unsigned short port) {
 
 void array_testcase(int connfd) {
     char req[REQ_BUF_SIZE];
+    struct timeval tv_begin, tv_end;
+    gettimeofday(&tv_begin, NULL);
 
     // GET 与 SAVE 使用相同数量的数据，逐条验证 RDB 恢复结果
     for (int i = 0; i < GET_NUMS / 4; i++) {
@@ -119,10 +137,15 @@ void array_testcase(int connfd) {
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
         testcase(connfd, req, expected, "GET-Teacher", 0);
     }
+
+    gettimeofday(&tv_end, NULL);
+    print_stats("GET ARRAY GET", GET_NUMS / 4, TIME_SUB_MS(tv_end, tv_begin));
 }
 
 void rbtree_testcase(int connfd) {
     char req[REQ_BUF_SIZE];
+    struct timeval tv_begin, tv_end;
+    gettimeofday(&tv_begin, NULL);
 
     for (int i = 0; i < GET_NUMS / 4; i++) {
         char key[32];
@@ -137,10 +160,15 @@ void rbtree_testcase(int connfd) {
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
         testcase(connfd, req, expected, "RGET-Teacher", 0);
     }
+
+    gettimeofday(&tv_end, NULL);
+    print_stats("GET RBTREE RGET", GET_NUMS / 4, TIME_SUB_MS(tv_end, tv_begin));
 }
 
 void hash_testcase(int connfd) {
     char req[REQ_BUF_SIZE];
+    struct timeval tv_begin, tv_end;
+    gettimeofday(&tv_begin, NULL);
 
     for (int i = 0; i < GET_NUMS / 4; i++) {
         char key[32];
@@ -155,10 +183,15 @@ void hash_testcase(int connfd) {
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
         testcase(connfd, req, expected, "HGET-Teacher", 0);
     }
+
+    gettimeofday(&tv_end, NULL);
+    print_stats("GET HASH HGET", GET_NUMS / 4, TIME_SUB_MS(tv_end, tv_begin));
 }
 
 void skiptable_testcase(int connfd) {
     char req[REQ_BUF_SIZE];
+    struct timeval tv_begin, tv_end;
+    gettimeofday(&tv_begin, NULL);
 
     // const char* args1[] = {"SSET","Teacher", "King","SEXIST","Teacher"};
 
@@ -175,6 +208,9 @@ void skiptable_testcase(int connfd) {
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
         testcase(connfd, req, expected, "SGET-Teacher", 0);
     }
+
+    gettimeofday(&tv_end, NULL);
+    print_stats("GET SKIPTABLE SGET", GET_NUMS / 4, TIME_SUB_MS(tv_end, tv_begin));
 }
 
 //   ./test 192.168.234.135  2000 1
@@ -192,6 +228,9 @@ int main(int argc, char* argv[]) {
 
     int connfd = connect_tcpserver(ip, port);
 
+    struct timeval tv_all_begin, tv_all_end;
+    gettimeofday(&tv_all_begin, NULL);
+
     rbtree_testcase(connfd);
 
     array_testcase(connfd);
@@ -199,6 +238,9 @@ int main(int argc, char* argv[]) {
     hash_testcase(connfd);
 
     skiptable_testcase(connfd);
+
+    gettimeofday(&tv_all_end, NULL);
+    print_stats("GET 10W TOTAL", GET_NUMS, TIME_SUB_MS(tv_all_end, tv_all_begin));
 
     printf("***get 10w test case finished***\n");
 

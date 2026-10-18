@@ -64,6 +64,22 @@ int build_resp_request(char* buf, size_t capacity, const char* cmd, int argc, co
     return (int)offset;
 }
 
+/**
+ * @brief 打印一次统计的命令数、耗时与 QPS
+ *
+ * @param name      统计项名称，如 "INSERT ARRAY SET"
+ * @param cmd_count 统计到的命令条数
+ * @param time_ms   统计到的累计耗时（毫秒）
+ */
+static void print_stats(const char* name, long long cmd_count, long long time_ms) {
+    long long safe_ms = time_ms > 0 ? time_ms : 1; // 避免除零
+    double qps = (double)cmd_count * 1000.0 / (double)safe_ms;
+    double avg_ms = cmd_count > 0 ? (double)time_ms / (double)cmd_count : 0.0;
+
+    printf("%s --> commands: %lld, time_used: %lld ms, qps: %.0f, avg: %.4f ms/cmd\n", name,
+           cmd_count, time_ms, qps, avg_ms);
+}
+
 void testcase(int connfd, const char* msg, const char* expected_pattern, const char* casename,
               int thread_id) {
     if (!msg || !expected_pattern || !casename)
@@ -106,6 +122,8 @@ int connect_tcpserver(const char* ip, unsigned short port) {
 
 void array_testcase(int connfd) {
     char req[128];
+    struct timeval tv_begin, tv_end;
+    gettimeofday(&tv_begin, NULL);
 
     for (int i = 0; i < SET_NUMS / 4; i++) {
         // SET Teacher King
@@ -120,10 +138,15 @@ void array_testcase(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "SET-Teacher", 0);
     }
+
+    gettimeofday(&tv_end, NULL);
+    print_stats("INSERT ARRAY SET", SET_NUMS / 4, TIME_SUB_MS(tv_end, tv_begin));
 }
 
 void rbtree_testcase(int connfd) {
     char req[128];
+    struct timeval tv_begin, tv_end;
+    gettimeofday(&tv_begin, NULL);
 
     for (int i = 0; i < SET_NUMS / 4; i++) {
         char key[32];
@@ -137,10 +160,15 @@ void rbtree_testcase(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "RSET-Teacher", 0);
     }
+
+    gettimeofday(&tv_end, NULL);
+    print_stats("INSERT RBTREE RSET", SET_NUMS / 4, TIME_SUB_MS(tv_end, tv_begin));
 }
 
 void hash_testcase(int connfd) {
     char req[128];
+    struct timeval tv_begin, tv_end;
+    gettimeofday(&tv_begin, NULL);
 
     for (int i = 0; i < SET_NUMS / 4; i++) {
         char key[32];
@@ -154,10 +182,15 @@ void hash_testcase(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "HSET-Teacher", 0);
     }
+
+    gettimeofday(&tv_end, NULL);
+    print_stats("INSERT HASH HSET", SET_NUMS / 4, TIME_SUB_MS(tv_end, tv_begin));
 }
 
 void skiptable_testcase(int connfd) {
     char req[128];
+    struct timeval tv_begin, tv_end;
+    gettimeofday(&tv_begin, NULL);
 
     // const char* args1[] = {"SSET","Teacher", "King","SEXIST","Teacher"};
 
@@ -173,6 +206,9 @@ void skiptable_testcase(int connfd) {
             exit(1);
         testcase(connfd, req, "+OK\r\n", "SSET-Teacher", 0);
     }
+
+    gettimeofday(&tv_end, NULL);
+    print_stats("INSERT SKIPTABLE SSET", SET_NUMS / 4, TIME_SUB_MS(tv_end, tv_begin));
 }
 
 //   ./test 192.168.234.135  2000 1
@@ -190,6 +226,11 @@ int main(int argc, char* argv[]) {
 
     int connfd = connect_tcpserver(ip, port);
 
+    printf("INSERT key range: [%d, %d)\n", START_NUM / 4, START_NUM / 4 + SET_NUMS / 4);
+
+    struct timeval tv_all_begin, tv_all_end;
+    gettimeofday(&tv_all_begin, NULL);
+
     rbtree_testcase(connfd);
 
     array_testcase(connfd);
@@ -197,6 +238,9 @@ int main(int argc, char* argv[]) {
     hash_testcase(connfd);
 
     skiptable_testcase(connfd);
+
+    gettimeofday(&tv_all_end, NULL);
+    print_stats("INSERT TOTAL", SET_NUMS, TIME_SUB_MS(tv_all_end, tv_all_begin));
 
     printf("***insert %d records done***\n", SET_NUMS);
 

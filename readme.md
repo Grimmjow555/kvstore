@@ -10,7 +10,8 @@
 - **内存分配**：业务代码统一走 `kvs_malloc` / `kvs_calloc` / `kvs_free`，由编译期宏
   `ENABLE_MEMORYPOOL` 决定使用内置 slab 内存池还是系统 `malloc` / `free`。
 - **协议**：外层 4 字节长度前缀帧 + 内层 RESP 数组/批量字符串，支持半包与粘包。
-- **持久化**：RDB 全量快照 + AOF 增量日志，启动后不自动恢复，需命令手动触发。
+- **持久化**：RDB 全量快照或 AOF 增量日志二选一；启用后启动时自动恢复，RDB/AOF
+  不支持同时开启。
 - **复制**：`SYNC` 驱动的全量同步（`.tmp` 快照经独立 `rdma-client` / `rdma-server` 搬运）
   + 增量同步（独立 `ebpf-agent` 采集与转发）。详见
   [docs/replication-redesign.md](docs/replication-redesign.md)。
@@ -110,22 +111,17 @@ cmake -S . -B build -DNTYCO_ROOT=/path/to/NtyCo
 > 持久化路径在代码中是 `../data/kvstore.data` 和 `../data/append.aof`（相对进程工作目录），
 > 因此必须从 `build/` 目录启动服务，否则会写到错误的位置。
 
-位置参数形式：
-
-```bash
-./kvstore <监听端口> <角色> [主节点IP] [主节点端口]
-```
-
-角色 `0` 为 Master，`1` 为 Replica。
+启动参数只接受命名开关，不再支持旧的位置参数形式：
 
 ```bash
 cd build
 
 # Master，监听 9999
-./kvstore 9999 0
+./kvstore --port 9999 --role master
 
 # Replica，监听 10001，连接 Master 的 9999
-./kvstore 10001 1 127.0.0.1 9999
+./kvstore --port 10001 --role replica \
+  --master-ip 127.0.0.1 --master-port 9999
 ```
 
 配置文件形式：默认依次尝试 `./kvstore.conf` 与 `../kvstore.conf`，也可用 `--config <path>`
@@ -142,12 +138,12 @@ cd build
 - `log_level`：`debug`、`info`、`warn`、`error` 或 `off`。
 - `role`：`master` 或 `replica`（也接受 `slave`、`0`、`1`）。
 - `master_ip` / `master_port`：角色为 `replica` 时连接的主节点地址与端口。
-- `persistence_mode`：`none`、`rdb`、`aof` 或 `both`；也可用 `rdb on/off`、`aof on/off`
-  分别控制。默认为 `none`，需要持久化时再显式打开。
+- `persistence_mode`：`none`、`rdb` 或 `aof`，RDB 与 AOF 互斥；也可用
+  `rdb on/off`、`aof on/off` 分别控制，但不能同时开启。默认为 `none`。
 - `network_architecture`：`reactor`（或 `epoll`）、`ntyco`（或 `coroutine`）、
   `proactor`（或 `io_uring`），默认 `ntyco`；启动时确定，运行期间不能切换。
 
-命令行开关可以覆盖配置文件中的值，旧的位置参数方式仍然兼容：
+命令行开关可以覆盖配置文件中的值：
 
 ```bash
 ./kvstore --config ../kvstore.conf --port 7000 --role replica \
@@ -178,8 +174,8 @@ cd build
 
 | 用例 | 测试代码 | 执行方式 | 验证点 | 结果 |
 | --- | --- | --- | --- | --- |
-| AOF 增量恢复 | `testcase/AOF/{save,load}.cpp` | `testcase/run_aof_cycle.sh` | `AOF CLEAR` 后写入 10 万条，重启服务 `AOF LOAD` 后数据完整 | 已通过 |
-| RDB 全量恢复 | `testcase/RDB/{save,load}.cpp` | `testcase/run_rdb_cycle.sh` | 写入 10 万条 → `RDB SAVE` → 重启服务 → `RDB LOAD` 后数据完整 | 已通过 |
+| AOF 增量恢复 | `testcase/AOF/{save,load}.cpp` | `testcase/run_aof_cycle.sh` | `AOF CLEAR` 后写入 10 万条，重启服务时自动恢复后数据完整 | 已通过 |
+| RDB 全量恢复 | `testcase/RDB/{save,load}.cpp` | `testcase/run_rdb_cycle.sh` | 写入 10 万条 → `RDB SAVE` → 重启服务时自动恢复后数据完整 | 已通过 |
 | 主从全量同步（重设计阶段 1+2） | `testcase/master-replica/*.cpp` | `testcase/run_sync_fullsync.sh` | Master 写入 10 万条 → `SYNC` → `rdma-server`/`rdma-client` 搬运 → 逐条比对一致 | 已通过 |
 | 主从全量+增量（重设计阶段 3） | `testcase/master-replica/*.cpp` | `testcase/run_sync_increment.sh` | 前 5 万全量、后 5 万由独立 `ebpf-agent` 缓存/转发 → Replica 10 万条一致 | 已通过 |
 | 三网络后端协议回归（重设计阶段 4） | 内嵌 python 校验 | `testcase/run_backends_check.sh` | reactor / ntyco / proactor 四引擎命令与异常响应一致 | 已通过 |
@@ -193,10 +189,10 @@ cd build
 ```bash
 cd /path/to/kvstore
 
-# AOF：写入 10 万条 -> 重启服务 -> AOF LOAD -> 校验
+# AOF：写入 10 万条 -> 重启服务自动恢复 -> 校验
 ./testcase/run_aof_cycle.sh
 
-# RDB：写入 10 万条 -> RDB SAVE -> 重启服务 -> RDB LOAD -> 校验
+# RDB：写入 10 万条 -> RDB SAVE -> 重启服务自动恢复 -> 校验
 ./testcase/run_rdb_cycle.sh
 
 # 主从全量同步（重设计阶段 1+2）：Master 写入 10 万条 -> SYNC -> RDMA 搬运 -> 逐条比对
@@ -233,11 +229,12 @@ cd build
     --master 127.0.0.1:9999 --replica 127.0.0.1:10001 &
 
 # 2. 启动 Master，并写入前 5 万条
-./kvstore 9999 0 &
+./kvstore --port 9999 --role master &
 ./testcase/master-replica/insert_before5w 127.0.0.1 9999
 
 # 3. 另开终端启动 Replica，触发 SYNC 全量同步（快照经 rdma-client/rdma-server 搬运）
-./kvstore 10001 1 127.0.0.1 9999 &
+./kvstore --port 10001 --role replica \
+    --master-ip 127.0.0.1 --master-port 9999 &
 
 # 4. 向 Master 写入后 5 万条，由 agent 走 REPL_INC 增量通道转发
 ./testcase/master-replica/insert_after5w 127.0.0.1 9999
@@ -328,11 +325,11 @@ $5\r\nvalue\r\n
 - rbtree：`RSET RGET RDEL RMOD REXIST`
 - hash：`HSET HGET HDEL HMOD HEXIST`
 - skiptable：`SSET SGET SDEL SMOD SEXIST`
-- 持久化：`RDB SAVE`、`RDB LOAD`、`AOF LOAD`、`AOF CLEAR`
+- 持久化：`RDB SAVE`、`AOF CLEAR`；恢复只在服务启动时自动执行
 - 主从全量同步（重设计阶段 1）：`SYNC`、`SYNC FINISHED`（由服务端之间使用，详见
   [docs/replication-redesign.md](docs/replication-redesign.md)）
 
-> `RDB SAVE`、`AOF LOAD` 等带空格的命令是一个整体 token，不是两个参数。
+> `RDB SAVE` 等带空格的命令是一个整体 token，不是两个参数。
 
 响应约定：
 
@@ -369,8 +366,8 @@ $5\r\nvalue\r\n
   「缓存窗口 ⊇ 快照窗口」由顺序本身保证，不依赖额外水位。
 - **eBPF 强制**：Master 只在 agent 注册（`EBPF` 握手）后才受理 `SYNC`；采集不可用时
   直接回 `-ERROR`，不会静默降级。
-- **重同步**：`RDB LOAD` / `AOF LOAD` 之后 Master 往采集流写一条 `INVALIDATE` 记录，
-  agent 断开增量通道，Replica 检测到断开后重新走一次 `SYNC`。
+- **启动恢复顺序**：持久化数据在网络服务和 Replica 同步线程启动前加载，因此不会引入
+  在线重同步窗口。客户端不再提供运行期 `RDB LOAD` / `AOF LOAD` 命令。
 - **断连处理**：fd 生命周期归网络层，各后端在断连路径调用
   `kvs_replication_remove_replica()` 清理复制/同步会话登记，避免 fd 复用后旧映射仍生效。
 - 存储引擎没有内部锁，所有访问都经过 `kvstore.cpp` 的可重入存储锁。
@@ -380,7 +377,7 @@ $5\r\nvalue\r\n
 编译时能找到 libibverbs/librdmacm 会额外构建 `rdma-client` 与 `rdma-server` 两个可执行文件；
 **`kvstore` 自身不再链接 RDMA 库**（`ldd build/kvstore` 无 ibverbs/rdmacm 依赖）：
 
-- Master 收到 `SYNC` 后把快照写到 `sync_tmp_file`，再派生 `rdma-client` 把文件发给
+- Master 收到 `SYNC` 后把快照写到固定的 `data/kvstore.sync.tmp`（不可配置），再派生 `rdma-client` 把文件发给
   Replica 侧的 `rdma-server`；后者原子落盘（`.partial` + rename）后退出，Replica 以
   「子进程退出」作为文件就绪信号。
 - Replica 在发 `SYNC` 之前先派生 `rdma-server` 并等它创建就绪文件，避免 `rdma-client`
@@ -499,27 +496,30 @@ sim 模式的记录格式与内核 ringbuf 完全一致（同一条消费代码�
 
 ## 数据持久化与恢复
 
-服务启动后不会自动加载持久化数据，需要通过命令手动触发恢复。持久化路径在代码中写死为
+服务启动时会按 `persistence_mode` 自动加载持久化数据；文件不存在时以空数据集启动，
+文件存在但读取失败时启动失败。RDB 与 AOF 只能择一开启。持久化路径在代码中写死为
 `../data/kvstore.data`（RDB）和 `../data/append.aof`（AOF），所以必须从 `build/` 目录启动。
 
 ### RDB 全量恢复
 
 - `RDB SAVE`：把四种存储引擎的当前状态序列化为全量快照 `data/kvstore.data`。
-- `RDB LOAD`：先清空现有数据，再从快照恢复；完成后会对在线 Replica 重新全量同步。
+- 启动自动恢复：在 RDB 模式下读取并加载 `data/kvstore.data`。运行期不提供外部
+  `RDB LOAD` 命令。
 
 ### AOF 增量恢复
 
 - 正常写入时（非 AOF 恢复、非 Replica 重放阶段）会把写命令追加到 `data/append.aof`。
-- `AOF LOAD`：读取并重放 `append.aof` 中的写命令；完成后会对在线 Replica 重新全量同步。
+- 启动自动恢复：在 AOF 模式下读取并重放 `append.aof`。运行期不提供外部
+  `AOF LOAD` 命令。
 - `AOF CLEAR`：刷新缓冲并以 `w` 模式重新打开文件，清空日志。
 - AOF 采用批量落盘，进程被强杀时最多丢失未达刷新阈值的内存缓冲数据；优雅关闭或执行
-  `AOF LOAD` / `AOF CLEAR` 会先刷新缓冲区。
+  `AOF CLEAR` 会先刷新缓冲区。
 
 ### 常见排查提示
 
 - 找不到持久化文件：确认进程工作目录是 `build/`。
-- 服务启动或 `LOAD` 时段错误：快照格式、`kvs_reset_data()` 或存储引擎 destroy 逻辑可能有问题；
-  修改这些代码后至少执行一次 `RDB SAVE` / `RDB LOAD` 回归。
+- 服务启动自动恢复时段错误：快照格式、`kvs_reset_data()` 或存储引擎 destroy 逻辑可能有问题；
+  修改这些代码后至少执行一次 `RDB SAVE` + 重启自动恢复回归。
 
 ## 常见问题
 
@@ -538,7 +538,7 @@ git submodule update --init --recursive
 sudo apt-get install -y liburing-dev libjemalloc-dev
 ```
 
-liburing 是构建期必需依赖。内存分配由 `include/memorypool.h` 的 `ENABLE_MEMORYPOOL` 决定：
+liburing 是构建期必需依赖。内存分配由 `memorypool/memorypool.h` 的 `ENABLE_MEMORYPOOL` 决定：
 置 `1` 时 `kvs_malloc` / `kvs_calloc` / `kvs_free` 走内置 slab 内存池，置 `0` 时走系统
 `malloc` / `calloc` / `free`；若构建时链接了 jemalloc，置 `0` 实际使用的是 jemalloc。
 

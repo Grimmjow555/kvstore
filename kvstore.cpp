@@ -5,17 +5,16 @@
 #include "kvs_hash.h"
 #include "kvs_rbtree.h"
 #include "kvs_replication.h"
-#include "kvs_shutdown.h"
 #include "kvs_skiptable.h"
 #include "kvs_snapshot.h"
-#include "kvs_sync.h"
 #include "kvstore.h"
-#include "memorypool.h"
+#include "memorypool/memorypool.h"
 #include "network.h"
 #include <arpa/inet.h>
 #include <cerrno>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <iostream>
 #include <pthread.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -169,7 +168,7 @@ const char* command[] = {"SET",      "GET",      "DEL",      "MOD",      "EXIST"
 
                          "SSET",     "SGET",     "SDEL",     "SMOD",     "SEXIST",
 
-                         "RDB SAVE", "RDB LOAD", "AOF LOAD", "AOF CLEAR",
+                         "RDB SAVE", "AOF CLEAR",
 
                          "SYNC",     "SYNC FINISHED"};
 
@@ -204,8 +203,6 @@ enum KVS_CMD {
     KVS_CMD_SEXIST,
 
     KVS_CMD_RDB_SAVE,
-    KVS_CMD_RDB_LOAD,
-    KVS_CMD_AOF_LOAD,
     KVS_CMD_AOF_CLEAR,
 
     // 主从全量同步（重设计阶段 1，见 docs/replication-redesign.md）
@@ -716,40 +713,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
         break;
     }
 
-    case (KVS_CMD_RDB_LOAD): {
-        if (!kvs_config_rdb_enabled()) {
-            length = snprintf(response, response_size, "-ERROR\r\n");
-            break;
-        }
-
-        int ret = kvs_snapshot_load("../data/kvstore.data");
-
-        if (ret == 0) {
-            kvs_replication_resync();
-            length = snprintf(response, response_size, "+OK\r\n");
-        } else {
-            length = snprintf(response, response_size, "-ERROR\r\n");
-        }
-        break;
-    }
-
 #if AOF_ENABLE
-    case KVS_CMD_AOF_LOAD: {
-        if (!kvs_config_aof_enabled()) {
-            length = snprintf(response, response_size, "-ERROR\r\n");
-            break;
-        }
-
-        int ret = kvs_aof_replay("../data/append.aof");
-        if (ret == 0) {
-            kvs_replication_resync();
-            length = snprintf(response, response_size, "+OK\r\n");
-        } else {
-            length = snprintf(response, response_size, "-ERROR\r\n");
-        }
-        break;
-    }
-
     case KVS_CMD_AOF_CLEAR: {
         if (!kvs_config_aof_enabled()) {
             length = snprintf(response, response_size, "-ERROR\r\n");
@@ -779,6 +743,9 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     }
 
     default: {
+        // 命令表已删除的旧命令（例如 RDB LOAD / AOF LOAD）以及未知命令
+        // 统一返回协议错误，避免发送 0 长度帧。
+        length = snprintf(response, response_size, "-ERROR\r\n");
         break;
     }
     }
@@ -905,10 +872,55 @@ static int ensure_data_directory() {
     return -1;
 }
 
-// ./kvstore <port> <role> <master_ip> <master_port>
-// role: 0(Master) 1(Replica)
-// ./kvstore 9999 0
-// ./kvstore 2000 1 39.97.42.225 9999
+// 启动时按配置恢复唯一一种持久化数据。文件不存在代表首次启动，
+// 继续以空数据集运行；文件存在但读取失败则中止启动，避免带病提供服务。
+static int auto_load_persistence() {
+    const int rdb_enabled = kvs_config_rdb_enabled();
+    const int aof_enabled = kvs_config_aof_enabled();
+    if (rdb_enabled && aof_enabled) {
+        kvs_log(KVS_LOG_ERROR, "RDB and AOF cannot be enabled together");
+        return -1;
+    }
+    if (!rdb_enabled && !aof_enabled) {
+        return 0;
+    }
+
+    const char* type = rdb_enabled ? "RDB" : "AOF";
+    const char* path = rdb_enabled ? "../data/kvstore.data" : "../data/append.aof";
+    if (access(path, F_OK) != 0) {
+        if (errno == ENOENT) {
+            kvs_log(KVS_LOG_INFO, "%s persistence enabled, no file at %s; starting empty", type,
+                    path);
+            return 0;
+        }
+        kvs_log(KVS_LOG_ERROR, "Cannot access %s persistence file %s: %s", type, path,
+                strerror(errno));
+        return -1;
+    }
+
+    int ret = rdb_enabled ? kvs_snapshot_load(path) : kvs_aof_replay(path);
+    if (ret != 0) {
+        kvs_log(KVS_LOG_ERROR, "Failed to auto-load %s persistence file %s", type, path);
+        return -1;
+    }
+
+    kvs_log(KVS_LOG_INFO, "Auto-loaded %s persistence file %s", type, path);
+    return 0;
+}
+
+static void print_usage(const char* program) {
+    printf("Usage:\n"
+           "  %s [--config kvstore.conf]\n"
+           "     [--bind 0.0.0.0] [--port 9999]\n"
+           "     [--role master|replica]\n"
+           "     [--master-ip 127.0.0.1] [--master-port 19001]\n"
+           "     [--log-level debug|info|warn|error|off]\n"
+           "     [--persistence-mode none|rdb|aof]\n"
+           "     [--network reactor|ntyco|proactor]\n",
+           program);
+}
+
+// 启动参数只接受命名开关或配置文件，不再支持旧的纯位置参数形式。
 int main(int argc, char* argv[]) {
 
     // 尽早安装信号处理：保证 SIGINT/SIGTERM 只置停止标志，
@@ -917,52 +929,24 @@ int main(int argc, char* argv[]) {
 
     kvs_config_set_defaults();
     if (kvs_config_parse_switches(&argc, &argv) != 0) {
-        kvs_log(KVS_LOG_ERROR,
-                "Failed to parse configuration. Use --config <file> or see usage below.");
+        kvs_log(KVS_LOG_ERROR, "Failed to parse configuration.");
+        print_usage(argv[0]);
         return -1;
     }
 
     const char* bind_ip = kvs_config_bind_ip();
-    int port = kvs_config_port();
-    int role = kvs_config_role();
+    const int port = kvs_config_port();
+    const int role = kvs_config_role();
     const char* master_ip = kvs_config_master_ip();
-    int master_port = kvs_config_master_port();
+    const int master_port = kvs_config_master_port();
     struct in_addr bind_addr;
     int bind_ip_valid = bind_ip != nullptr && inet_pton(AF_INET, bind_ip, &bind_addr) == 1;
-
-    // 兼容旧的纯位置参数调用方式。位置参数会覆盖配置文件或命令行开关。
-    if (argc >= 2 && argv[1] != nullptr && argv[1][0] != '\0') {
-        port = atoi(argv[1]);
-    }
-    if (argc >= 3 && argv[2] != nullptr && argv[2][0] != '\0') {
-        if (strcmp(argv[2], "master") == 0) {
-            role = 0;
-        } else if (strcmp(argv[2], "replica") == 0 || strcmp(argv[2], "slave") == 0) {
-            role = 1;
-        } else {
-            role = atoi(argv[2]);
-        }
-    }
-    if (role == KVS_ROLE_REPLICA && argc >= 5) {
-        master_ip = argv[3];
-        master_port = atoi(argv[4]);
-    }
 
     if (port <= 0 || port > 65535 || (role != 0 && role != 1) || bind_ip == nullptr ||
         bind_ip[0] == '\0' || bind_ip_valid != 1 ||
         (role == KVS_ROLE_REPLICA && (master_ip == nullptr || master_ip[0] == '\0' ||
                                       master_port <= 0 || master_port > 65535))) {
-        printf("Usage:\n"
-               "  %s [--config kvstore.conf]\n"
-               "     [--bind 0.0.0.0] [--port 9999]\n"
-               "     [--role master|replica]\n"
-               "     [--master-ip 127.0.0.1] [--master-port 19001]\n"
-               "     [--log-level debug|info|warn|error|off]\n"
-               "     [--persistence-mode none|rdb|aof|both]\n"
-               "     [--network reactor|ntyco|proactor]\n"
-               "  Legacy Master : %s <port> 0\n"
-               "  Legacy Replica: %s <port> 1 <master_ip> <master_port>\n",
-               argv[0], argv[0], argv[0]);
+        print_usage(argv[0]);
         return -1;
     }
 
@@ -1015,6 +999,14 @@ int main(int argc, char* argv[]) {
         }
         // 全量搬运由独立的 rdma-client 进程完成（见 docs/replication-redesign.md
         // §8.3），Master 进程内不再有任何 RDMA 代码（阶段 4 已删除旧监听）。
+    }
+
+    // 自动恢复必须在网络服务与 Replica 同步线程启动前完成。
+    if (auto_load_persistence() != 0) {
+        return -1;
+    }
+
+    if (role == KVS_ROLE_MASTER) {
         if (kvs_config_aof_enabled() && kvs_aof_init("../data/append.aof") != 0) {
             kvs_log(KVS_LOG_ERROR, "AOF init failed");
             return -1;

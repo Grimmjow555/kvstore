@@ -13,7 +13,7 @@ SERVER_LOG="${TMPDIR:-/tmp}/kvstore-aof-cycle.$$.log"
 start_server() {
     (
         cd "$BUILD_DIR"
-        exec ./kvstore 9999 0 --rdb off --aof on
+        exec ./kvstore --port 9999 --role master --rdb off --aof on
     ) >"$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
 }
@@ -63,10 +63,10 @@ wait_for_server
 "$SAVE_CLIENT" 0.0.0.0 9999
 stop_server
 
-echo "Starting kvstore for AOF load..."
+echo "Restarting kvstore for AOF auto-load..."
 start_server
 wait_for_server
 "$LOAD_CLIENT" 0.0.0.0 9999
 stop_server
 
-echo "AOF save/load cycle completed."
+echo "AOF save/auto-load cycle completed."

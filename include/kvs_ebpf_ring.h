@@ -57,8 +57,8 @@ int kvs_ebpf_ring_pop(unsigned int* out_seq, char* argbuf, size_t argbuf_size, c
 // 生产端累计丢弃的记录数（用于诊断；agent 侧读到 0）。
 uint64_t kvs_ebpf_ring_dropped(void);
 
-// 判断一条命令是否适合进采集通道（参数个数与长度都在上限内），
-// 与 include/kvs_ebpf.h 中的同名接口共用实现。
+// 判断一条命令是否适合进采集通道（参数个数与长度都在上限内）。
+// 声明位于本头文件，Master 与 agent 共用 replication/kvs_ebpf_ring.cpp 的实现。
 int kvs_ebpf_event_fits(int argc, char* argv[]);
 
 // 解析一条记录：参数内容按顺序拷进 argbuf，argv 指向 argbuf 内部。

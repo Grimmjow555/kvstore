@@ -2,8 +2,7 @@
 
 #include "kvs_config.h"
 #include "kvs_replication.h"
-#include "kvs_shutdown.h"
-#include "kvs_sync.h"
+#include "network.h"
 #include "nty_coroutine.h"
 #include <arpa/inet.h> // htonl, ntohl
 #include <arpa/inet.h>
@@ -15,10 +14,6 @@
 #include <sys/socket.h>
 #include <unistd.h> // recv, send, close
 
-#define MAX_ALLOWED_LEN 1024 * 1024 // 1MBS
-#define BUFFER_SIZE 1024
-
-typedef int (*msg_handler)(char* msg, int length, char* response, int response_size);
 static msg_handler kvs_handler;
 
 struct nty_server_args {
@@ -174,7 +169,7 @@ void server_reader(void* arg) {
         uint32_t msg_len = ntohl(net_len);
 
         // 2. 检查消息长度是否在允许范围内
-        if (msg_len == 0 || msg_len > MAX_ALLOWED_LEN) {
+        if (msg_len == 0 || msg_len > KVS_NET_MAX_MESSAGE_SIZE) {
             const char* err = "-ERR invalid message length\r\n";
             send(fd, err, strlen(err), 0);
             kvs_replication_remove_replica(fd);
@@ -212,7 +207,7 @@ void server_reader(void* arg) {
 
         // 5. 动态分配响应缓冲区，并在头部额外预留 4 字节长度头空间，
         //    这样长度头和响应体可以合并成一次 send 发出。
-        char* resp_frame = (char*)malloc(sizeof(uint32_t) + MAX_ALLOWED_LEN + 1);
+        char* resp_frame = (char*)malloc(sizeof(uint32_t) + KVS_NET_MAX_MESSAGE_SIZE + 1);
         if (!resp_frame) {
             free(buf);
             kvs_replication_remove_replica(fd);
@@ -224,17 +219,18 @@ void server_reader(void* arg) {
         // 6. 处理请求
         int slength;
         if (is_replica) {
-            slength = snprintf(response, MAX_ALLOWED_LEN + 1, "+OK\r\n");
+            slength = snprintf(response, KVS_NET_MAX_MESSAGE_SIZE + 1, "+OK\r\n");
         } else {
-            slength = kvs_handler(buf, (int)msg_len, response, MAX_ALLOWED_LEN + 1);
+            slength =
+                kvs_handler(buf, (int)msg_len, response, KVS_NET_MAX_MESSAGE_SIZE + 1);
         }
         if (slength < 0) {
             slength = 0; // 或发送错误响应
         }
 
         // 防止响应长度超过分配大小（理论上 kvs_handler 应保证不超）
-        if (slength > MAX_ALLOWED_LEN) {
-            slength = MAX_ALLOWED_LEN; // 截断或关闭连接，此处简单截断
+        if (slength > KVS_NET_MAX_MESSAGE_SIZE) {
+            slength = KVS_NET_MAX_MESSAGE_SIZE; // 截断或关闭连接，此处简单截断
         }
 
         // 7. 发送响应：把长度头写进预留的 4 字节，长度头与响应体一次 send 发完，

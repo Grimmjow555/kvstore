@@ -19,10 +19,11 @@
 #include "kvs_ebpf_agent.h"
 #include "kvs_ebpf_ring.h"
 #include "kvs_netutil.h"
-#include "kvs_repl_proto.h"
+#include "kvs_replication.h"
 #include "kvs_config.h"
 
 #include <arpa/inet.h>
+#include <cstdarg>
 #include <deque>
 #include <errno.h>
 #include <fcntl.h>
@@ -273,7 +274,7 @@ void on_capture_record(int argc, char* argv[]) {
         return;
     }
     if (argc == 1 && strcmp(argv[0], "INVALIDATE") == 0) {
-        // Master 做了 RDB/AOF LOAD 等改变全量数据的事：缓存与已投递的增量都不再
+        // Master 做了整库替换等改变全量数据的事：缓存与已投递的增量都不再
         // 能保证与 Master 一致，断开增量通道让 Replica 重新走一次全量同步。
         agent_log("INVALIDATE observed: dropping increment channel to force a re-sync");
         drop_replica_conn_locked("invalidate from master");

@@ -45,13 +45,15 @@ REPLICA_PID=""
 AGENT_PID=""
 
 start_master() {
-    kvs_test_start_bg "$MASTER_LOG" ./kvstore "$MASTER_PORT" 0 --config "$CONF"
+    kvs_test_start_bg "$MASTER_LOG" ./kvstore --config "$CONF" \
+        --port "$MASTER_PORT" --role master
     MASTER_PID=$KVS_TEST_LAST_PID
 }
 
 start_replica() {
-    kvs_test_start_bg "$REPLICA_LOG" ./kvstore "$REPLICA_PORT" 1 127.0.0.1 "$MASTER_PORT" \
-        --config "$CONF"
+    kvs_test_start_bg "$REPLICA_LOG" ./kvstore --config "$CONF" \
+        --port "$REPLICA_PORT" --role replica \
+        --master-ip 127.0.0.1 --master-port "$MASTER_PORT"
     REPLICA_PID=$KVS_TEST_LAST_PID
 }
 

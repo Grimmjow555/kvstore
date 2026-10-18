@@ -1,5 +1,7 @@
 #include "kvs_skiptable.h"
 #include "kvstore.h"
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 kvs_skiptable_t global_skiptable = {0};

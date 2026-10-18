@@ -38,7 +38,7 @@ static char g_ring_path[512] = {0};
 static int g_ring_is_creator = 0;
 
 // ==================== 记录编解码 ====================
-// 与 kvs_ebpf.cpp / 内核 ringbuf 里的记录布局保持一致。
+// 与 kvs_replication.cpp（Master 侧生产者） / 内核 ringbuf 里的记录布局保持一致。
 
 int kvs_ebpf_event_fits(int argc, char* argv[]) {
     if (argc < 1 || argc > KVS_EBPF_EVENT_MAX_ARGS || argv == NULL) {
