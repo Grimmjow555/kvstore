@@ -1,5 +1,5 @@
 #include "kvs_hash.h"
-#include "kvstore.h"
+#include "kvs_runtime.h"
 #include <cstring>
 
 // Key, Value -->

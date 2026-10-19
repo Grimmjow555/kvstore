@@ -1,6 +1,5 @@
-
-
-#include "testcase.h"
+int send_msg(int connfd, const char* msg, int length);
+int recv_msg(int connfd, char* msg, int length);
 #include <arpa/inet.h>
 #include <iostream>
 #include <pthread.h>
@@ -392,4 +391,87 @@ int main(int argc, char* argv[]) {
     printf("***memorypool test case finished***\n");
 
     return 0;
+}
+
+// 循环发送直到全部数据发出或失败。
+int send_all(int fd, const void* buffer, size_t length) {
+    const char* ptr = (const char*)buffer;
+    size_t sent = 0;
+    while (sent < length) {
+        ssize_t n = send(fd, ptr + sent, length - sent, 0);
+        if (n <= 0) {
+            if (n < 0 && errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        sent += (size_t)n;
+    }
+    return 0;
+}
+
+int send_msg(int connfd, const char* msg, int length) {
+    if (msg == NULL || length < 0) {
+        return -1;
+    }
+
+    uint32_t net_len = htonl((uint32_t)length);
+    size_t total_len = sizeof(net_len) + (size_t)length;
+
+    char stack_buf[512];
+    char* frame = stack_buf;
+    if (total_len > sizeof(stack_buf)) {
+        frame = (char*)malloc(total_len);
+        if (frame == NULL) {
+            return -1;
+        }
+    }
+
+    memcpy(frame, &net_len, sizeof(net_len));
+    if (length > 0) {
+        memcpy(frame + sizeof(net_len), msg, (size_t)length);
+    }
+
+    int rc = send_all(connfd, frame, total_len);
+    if (frame != stack_buf) {
+        free(frame);
+    }
+    return rc;
+}
+
+int recv_all(int fd, void* buffer, size_t length) {
+    char* ptr = (char*)buffer;
+    size_t received = 0;
+    while (received < length) {
+        ssize_t n = recv(fd, ptr + received, length - received, 0);
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n <= 0) {
+            return -1;
+        }
+        received += (size_t)n;
+    }
+    return 0;
+}
+
+int recv_msg(int connfd, char* msg, int length) {
+    if (msg == NULL || length < 0) {
+        return -1;
+    }
+
+    uint32_t net_len = 0;
+    if (recv_all(connfd, &net_len, sizeof(net_len)) != 0) {
+        return -1;
+    }
+    uint32_t data_len = ntohl(net_len);
+    if (data_len > (uint32_t)length) {
+        return -2;
+    }
+    if (recv_all(connfd, msg, data_len) != 0) {
+        return -1;
+    }
+
+    msg[data_len] = '\0';
+    return (int)data_len;
 }

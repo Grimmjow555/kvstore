@@ -1,4 +1,4 @@
-#include "aof.h"
+#include "kvs_aof.h"
 #include "kvs_array.h"
 #include "kvs_config.h"
 #include "kvs_ebpf.h"
@@ -7,9 +7,9 @@
 #include "kvs_replication.h"
 #include "kvs_skiptable.h"
 #include "kvs_snapshot.h"
-#include "kvstore.h"
+#include "kvs_runtime.h"
 #include "memorypool/memorypool.h"
-#include "network.h"
+#include "kvs_network.h"
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstdio>

@@ -15,7 +15,7 @@
 #include "kvs_netutil.h"
 #include "kvs_replication.h"
 #include "kvs_snapshot.h"
-#include "kvstore.h"
+#include "kvs_runtime.h"
 
 #include <arpa/inet.h>
 #include <errno.h>

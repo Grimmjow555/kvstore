@@ -20,6 +20,7 @@ KVS_TEST_DATA_DIR="$KVS_TEST_ROOT_DIR/data"
 
 KVS_TEST_MASTER_PORT="${KVS_TEST_MASTER_PORT:-9999}"
 KVS_TEST_REPLICA_PORT="${KVS_TEST_REPLICA_PORT:-10001}"
+KVS_TEST_RDMA_PORT="${KVS_TEST_RDMA_PORT:-10000}"
 # Master 的 rdma-client 要连的 Replica RDMA 网卡地址；回环地址 RDMA resolv 不了。
 KVS_TEST_RDMA_HOST="${KVS_TEST_RDMA_HOST:-192.168.234.135}"
 
@@ -113,7 +114,7 @@ persistence_mode none
 network_architecture ntyco
 rdma_client_bin ./rdma-client
 rdma_server_bin ./rdma-server
-rdma_port 10000
+rdma_port $KVS_TEST_RDMA_PORT
 replica_host $KVS_TEST_RDMA_HOST
 rdma_transfer_timeout_ms 60000
 sync_wait_timeout_ms 120000

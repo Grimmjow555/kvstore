@@ -46,6 +46,7 @@
 
 - CMake 3.10+、C/C++ 编译器、pthread
 - liburing（构建期必需）
+- OpenSSL `libcrypto`（SHA-256 完整性校验，构建期和运行期必需）
 - NtyCo（通过 Git submodule 接入）
 
 可选：
@@ -58,7 +59,7 @@ Ubuntu/Debian 安装依赖：
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential cmake liburing-dev libjemalloc-dev
+sudo apt-get install -y build-essential cmake liburing-dev libssl-dev libjemalloc-dev
 ```
 
 ### 2. 获取源码与 NtyCo 子模块
@@ -96,7 +97,7 @@ cmake --build build -j$(nproc)
 编译产物：
 
 - 服务端：`build/kvstore`
-- 测试客户端：`build/testcase/{AOF,RDB,test,master-replica,memorypool}/...`
+- 测试客户端：`build/testcase/{AOF,RDB,integrity,test,master-replica,memorypool}/...`
 
 需要自定义 NtyCo 路径时：
 
@@ -176,6 +177,7 @@ cd build
 | --- | --- | --- | --- | --- |
 | AOF 增量恢复 | `testcase/AOF/{save,load}.cpp` | `testcase/run_aof_cycle.sh` | `AOF CLEAR` 后写入 10 万条，重启服务时自动恢复后数据完整 | 已通过 |
 | RDB 全量恢复 | `testcase/RDB/{save,load}.cpp` | `testcase/run_rdb_cycle.sh` | 写入 10 万条 → `RDB SAVE` → 重启服务时自动恢复后数据完整 | 已通过 |
+| 持久化完整性校验 | `testcase/integrity/*` | `testcase/run_persistence_integrity.sh` | 快照/AOF 改字节、截断、删除、重排和旧格式均拒绝启动且保留文件 | 已通过 |
 | 主从全量同步（重设计阶段 1+2） | `testcase/master-replica/*.cpp` | `testcase/run_sync_fullsync.sh` | Master 写入 10 万条 → `SYNC` → `rdma-server`/`rdma-client` 搬运 → 逐条比对一致 | 已通过 |
 | 主从全量+增量（重设计阶段 3） | `testcase/master-replica/*.cpp` | `testcase/run_sync_increment.sh` | 前 5 万全量、后 5 万由独立 `ebpf-agent` 缓存/转发 → Replica 10 万条一致 | 已通过 |
 | 三网络后端协议回归（重设计阶段 4） | 内嵌 python 校验 | `testcase/run_backends_check.sh` | reactor / ntyco / proactor 四引擎命令与异常响应一致 | 已通过 |
@@ -503,21 +505,34 @@ sim 模式的记录格式与内核 ringbuf 完全一致（同一条消费代码�
 ### RDB 全量恢复
 
 - `RDB SAVE`：把四种存储引擎的当前状态序列化为全量快照 `data/kvstore.data`。
+- 快照格式为 `KVSDB02`、版本 2，文件末尾追加 32 字节 SHA-256，覆盖文件头、区块和全部记录。
 - 启动自动恢复：在 RDB 模式下读取并加载 `data/kvstore.data`。运行期不提供外部
   `RDB LOAD` 命令。
+- 加载时先校验长度和 SHA-256，再重置引擎并解析；摘要不匹配、异常截断或解析后仍有未解释字节
+  都会拒绝启动，原文件不会被自动截断或改写。
 
 ### AOF 增量恢复
 
 - 正常写入时（非 AOF 恢复、非 Replica 重放阶段）会把写命令追加到 `data/append.aof`。
+- AOF 以 `#KVSAOF02\r\n` 开头；每条 RESP 命令后紧跟 64 位十六进制 SHA-256 和 CRLF。
+- 每条摘要使用哈希链 `Hi = SHA256(Hi-1 || uint64 小端命令长度 || RESP 命令字节)`，
+  可发现命令内容修改、中间记录删除和重排。
 - 启动自动恢复：在 AOF 模式下读取并重放 `append.aof`。运行期不提供外部
   `AOF LOAD` 命令。
-- `AOF CLEAR`：刷新缓冲并以 `w` 模式重新打开文件，清空日志。
+- `AOF CLEAR`：刷新缓冲、清空日志并写入新的 `#KVSAOF02` 文件头。
 - AOF 采用批量落盘，进程被强杀时最多丢失未达刷新阈值的内存缓冲数据；优雅关闭或执行
   `AOF CLEAR` 会先刷新缓冲区。
+- 现有 `KVSDB01` 快照和无文件头的旧 AOF 不再兼容，服务会明确拒绝启动；本项目不提供旧格式
+  迁移工具，需要清空旧文件或从业务数据重建。
+- SHA-256 未使用密钥，能发现误写、截断和普通手工篡改；掌握文件格式的人仍可重新计算摘要并
+  伪造文件。如果需要抵抗有主动伪造能力的攻击者，应改用带外部密钥的 HMAC 方案。
 
 ### 常见排查提示
 
 - 找不到持久化文件：确认进程工作目录是 `build/`。
+- 日志出现 `Snapshot integrity check failed` 或 `AOF integrity check failed`：文件可能被修改、
+  截断或未完整落盘；服务会保留现场并拒绝启动，排查后再从可信数据恢复。
+- 升级后提示 `Unsupported snapshot/AOF format`：这是升级前的旧格式；当前版本不兼容旧文件。
 - 服务启动自动恢复时段错误：快照格式、`kvs_reset_data()` 或存储引擎 destroy 逻辑可能有问题；
   修改这些代码后至少执行一次 `RDB SAVE` + 重启自动恢复回归。
 

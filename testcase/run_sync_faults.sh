@@ -2,12 +2,13 @@
 #
 # 异常路径回归（重设计阶段 5，对应设计 §9 异常矩阵）。
 #
-# 覆盖三条可复现、可自动判定的异常与恢复：
+# 覆盖四条可复现、可自动判定的异常与恢复：
 #   A. SYNC 时 ebpf 未武装：Master 回 -ERROR，Replica 退避重试；agent 起来后同步成功
 #   B. 缓存溢出：agent 断开增量通道 -> Replica 重新全量同步 -> 最终一致
 #   C. rdma-client 首次失败：Replica 等文件失败后重试 -> 传输成功 -> 最终一致
+#   D. 发送前篡改 .tmp：Replica 拒绝加载且保留已有数据
 #
-# 依赖 python3 做小规模数据写入/校验（只需要十几条命令，跑得很快）。
+# 可用 KVS_TEST_SCENARIOS=A,C 只运行指定场景。
 
 set -euo pipefail
 
@@ -16,8 +17,10 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib_sync_test.sh"
 
 SERVER="$KVS_TEST_BUILD_DIR/kvstore"
 AGENT="$KVS_TEST_BUILD_DIR/ebpf-agent"
+CLIENT="$KVS_TEST_BUILD_DIR/testcase/integrity/integrity_client"
 
 TMP_FILE="$KVS_TEST_DATA_DIR/kvstore.sync.tmp"
+RECV_FILE="$TMP_FILE.recv"
 RING_FILE="$KVS_TEST_DATA_DIR/kvstore.ebpf.ring"
 
 MASTER_PORT="$KVS_TEST_MASTER_PORT"
@@ -29,6 +32,7 @@ STOP_FLAG=""
 CONF="$LOG_DIR/kvstore-faults.$$.conf"
 WRAPPER="$LOG_DIR/kvstore-faults-rdma-client.$$.sh"
 FLAG="$LOG_DIR/kvstore-faults-rdma-client.$$.flag"
+TAMPER_WRAPPER="$LOG_DIR/kvstore-faults-rdma-tamper.$$.sh"
 MASTER_LOG="$LOG_DIR/kvstore-faults-master.$$.log"
 REPLICA_LOG="$LOG_DIR/kvstore-faults-replica.$$.log"
 AGENT_LOG="$LOG_DIR/kvstore-faults-agent.$$.log"
@@ -36,10 +40,15 @@ AGENT_LOG="$LOG_DIR/kvstore-faults-agent.$$.log"
 MASTER_PID=""
 REPLICA_PID=""
 AGENT_PID=""
+SCENARIOS="${KVS_TEST_SCENARIOS:-A,B,C,D}"
 
 command -v python3 >/dev/null 2>&1 || {
     echo "skip: python3 not found" >&2
     exit 0
+}
+
+scenario_enabled() {
+    [[ ",$SCENARIOS," == *",$1,"* ]]
 }
 
 # 停掉本轮所有进程和遗留的 RDMA 辅助进程。
@@ -52,7 +61,7 @@ stop_all() {
 
 cleanup() {
     stop_all
-    rm -f "$CONF" "$WRAPPER" "$FLAG" "$STOP_FLAG"
+    rm -f "$CONF" "$WRAPPER" "$FLAG" "$TAMPER_WRAPPER" "$STOP_FLAG"
     rm -f "$MASTER_LOG" "$REPLICA_LOG" "$AGENT_LOG"
     kvs_test_remove_runtime_files
 }
@@ -151,9 +160,10 @@ start_agent() {
     return 1
 }
 
-kvs_test_require_executables "$SERVER" "$AGENT" || exit 1
+kvs_test_require_executables "$SERVER" "$AGENT" "$CLIENT" || exit 1
 
 # ==================== A. SYNC 时 ebpf 未武装 ====================
+if scenario_enabled A; then
 echo "A) SYNC 时 ebpf 未武装 -> -ERROR，agent 起来后恢复"
 stop_all
 rm -f "$RING_FILE" "$TMP_FILE"*
@@ -180,8 +190,10 @@ grep -q "full sync completed" "$REPLICA_LOG" || {
     exit 1
 }
 echo "   A passed"
+fi
 
 # ==================== B. 缓存溢出 ====================
+if scenario_enabled B; then
 echo "B) 缓存溢出 -> agent 断开增量通道 -> Replica 重新全量同步"
 stop_all
 rm -f "$RING_FILE" "$TMP_FILE"*
@@ -246,8 +258,10 @@ seed_and_verify 50 || {
     exit 1
 }
 echo "   B passed"
+fi
 
 # ==================== C. rdma-client 首次失败 ====================
+if scenario_enabled C; then
 echo "C) rdma-client 首次失败 -> Replica 重试 -> 传输成功"
 stop_all
 rm -f "$RING_FILE" "$TMP_FILE"* "$FLAG"
@@ -283,5 +297,70 @@ seed_and_verify 50 || {
     exit 1
 }
 echo "   C passed"
+fi
+
+# ==================== D. 篡改同步快照 ====================
+if scenario_enabled D; then
+echo "D) rdma-client 发送前篡改 .tmp -> Replica 拒绝加载且保留现有数据"
+stop_all
+rm -f "$RING_FILE" "$TMP_FILE"*
+cat >"$TAMPER_WRAPPER" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+args=("\$@")
+file=""
+while ((\$#)); do
+    case "\$1" in
+        --file)
+            file="\$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+printf '\\x00' | dd of="\$file" bs=1 seek=16 conv=notrunc status=none
+exec "$KVS_TEST_BUILD_DIR/rdma-client" "\${args[@]}"
+EOF
+chmod +x "$TAMPER_WRAPPER"
+write_conf sim "$TAMPER_WRAPPER" 60000 120000
+start_replica
+STABLE_KEY="stable_$$_$RANDOM"
+stable_response="$("$CLIENT" 127.0.0.1 "$REPLICA_PORT" RSET "$STABLE_KEY" preserved)"
+[[ "${stable_response%$'\r'}" == "+OK" ]]
+
+# Replica 已先有本地数据；随后启动 Master/agent，让 Replica 收到一份被篡改的
+# 全量快照。校验失败后必须继续保留上面的键。
+start_master
+source_response="$("$CLIENT" 127.0.0.1 "$MASTER_PORT" RSET source master_value)"
+[[ "${source_response%$'\r'}" == "+OK" ]]
+start_agent
+
+tamper_detected=0
+for _ in {1..600}; do
+    if grep -q "Snapshot integrity check failed" "$REPLICA_LOG" 2>/dev/null; then
+        tamper_detected=1
+        break
+    fi
+    sleep 0.2
+done
+if [[ "$tamper_detected" != "1" ]]; then
+    echo "D FAILED: Replica 未检测到被篡改的同步快照" >&2
+    tail -30 "$REPLICA_LOG" >&2
+    exit 1
+fi
+if [[ ! -f "$RECV_FILE" ]]; then
+    echo "D FAILED: 未保留被拒绝的接收快照现场" >&2
+    exit 1
+fi
+stable_response="$("$CLIENT" 127.0.0.1 "$REPLICA_PORT" RGET "$STABLE_KEY")"
+stable_response="${stable_response%$'\r'}"
+if [[ "$stable_response" != $'$9\r\npreserved' ]]; then
+    echo "D FAILED: 校验失败覆盖了 Replica 现有数据: $stable_response" >&2
+    exit 1
+fi
+echo "   D passed"
+fi
 
 echo "Fault-injection checks completed."

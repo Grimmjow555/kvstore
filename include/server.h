@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <vector>
 
-#include "network.h"
+#include "kvs_network.h"
 
 #define CONN_SIZE 1024
 

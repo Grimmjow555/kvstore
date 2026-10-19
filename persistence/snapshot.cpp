@@ -1,10 +1,12 @@
 #include "kvs_array.h"
+#include "kvs_config.h"
 #include "kvs_hash.h"
+#include "kvs_integrity.h"
 #include "kvs_io_uring.h"
 #include "kvs_rbtree.h"
 #include "kvs_skiptable.h"
 #include "kvs_snapshot.h"
-#include "kvstore.h"
+#include "kvs_runtime.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -20,9 +22,10 @@ extern kvs_rbtree_t global_rbtree;
 extern kvs_hash_t global_hash;
 extern kvs_skiptable_t global_skiptable;
 
-#define KVS_FILE_MAGIC "KVSDB01"
-#define KVS_FILE_VERSION 1
+#define KVS_FILE_MAGIC "KVSDB02"
+#define KVS_FILE_VERSION 2
 #define KVS_SNAPSHOT_PATH "../data/kvstore.data"
+#define KVS_SNAPSHOT_TRAILER_SIZE KVS_SHA256_DIGEST_SIZE
 
 int init_kvengine();
 int destroy_kvengine();
@@ -396,6 +399,14 @@ static int kvs_snapshot_build(std::vector<char>* buffer) {
     }
 #endif
 
+    unsigned char digest[KVS_SHA256_DIGEST_SIZE];
+    if (kvs_sha256_digest(buffer->data(), buffer->size(), digest) != 0) {
+        return -1;
+    }
+    if (kvs_write_exact(buffer, digest, sizeof(digest)) != 0) {
+        return -1;
+    }
+
     return 0;
 }
 
@@ -443,15 +454,48 @@ int kvs_snapshot_save(const char* filename) {
     return ret;
 }
 
-// 解析内存中的 RDB 格式快照。成功时会先重置全部引擎数据。
+// 验证并解析 KVSDB02 快照。摘要通过后才会重置全部引擎数据。
 static int kvs_snapshot_parse(const void* mapped, size_t mapped_size) {
-    kvs_mmap_reader_t reader;
-    reader.base = (const unsigned char*)mapped;
-    reader.size = mapped_size;
-    reader.offset = 0;
+    const size_t minimum_size = sizeof(kvs_file_header_t) + KVS_SNAPSHOT_TRAILER_SIZE;
+    if (mapped == NULL || mapped_size < minimum_size) {
+        kvs_log(KVS_LOG_ERROR, "Snapshot integrity check failed: file is too short");
+        return -1;
+    }
 
     kvs_file_header_t header;
     memset(&header, 0, sizeof(header));
+    memcpy(&header, mapped, sizeof(header));
+    if (memcmp(header.magic, KVS_FILE_MAGIC, sizeof(header.magic)) != 0 ||
+        header.version != KVS_FILE_VERSION) {
+        kvs_log(KVS_LOG_ERROR,
+                "Unsupported snapshot format; expected KVSDB02 version 2 with SHA-256");
+        return -1;
+    }
+
+    const size_t payload_size = mapped_size - KVS_SNAPSHOT_TRAILER_SIZE;
+    unsigned char actual_digest[KVS_SHA256_DIGEST_SIZE];
+    if (kvs_sha256_digest(mapped, payload_size, actual_digest) != 0) {
+        kvs_log(KVS_LOG_ERROR, "Snapshot integrity check failed: cannot compute SHA-256");
+        return -1;
+    }
+    const unsigned char* expected_digest =
+        (const unsigned char*)mapped + payload_size;
+    if (!kvs_sha256_equal(expected_digest, actual_digest)) {
+        char expected_hex[KVS_SHA256_HEX_SIZE + 1] = {0};
+        char actual_hex[KVS_SHA256_HEX_SIZE + 1] = {0};
+        kvs_sha256_hex_encode(expected_digest, expected_hex);
+        kvs_sha256_hex_encode(actual_digest, actual_hex);
+        kvs_log(KVS_LOG_ERROR,
+                "Snapshot integrity check failed: expected sha256=%s actual sha256=%s",
+                expected_hex, actual_hex);
+        return -1;
+    }
+
+    kvs_mmap_reader_t reader;
+    reader.base = (const unsigned char*)mapped;
+    reader.size = payload_size;
+    reader.offset = 0;
+
     if (kvs_mmap_read_exact(&reader, &header, sizeof(header)) != 0) {
         return -1;
     }
@@ -501,6 +545,13 @@ static int kvs_snapshot_parse(const void* mapped, size_t mapped_size) {
         default:
             return -1;
         }
+    }
+
+    if (reader.offset != payload_size) {
+        kvs_log(KVS_LOG_ERROR,
+                "Snapshot format validation failed: %zu unexplained trailer bytes",
+                payload_size - reader.offset);
+        return -1;
     }
 
     return 0;

@@ -1,6 +1,6 @@
 #include "kvs_config.h"
 #include "kvs_replication.h"
-#include "network.h"
+#include "kvs_network.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <iostream>

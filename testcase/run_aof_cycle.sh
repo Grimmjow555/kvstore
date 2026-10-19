@@ -8,12 +8,15 @@ SERVER="$BUILD_DIR/kvstore"
 SAVE_CLIENT="$BUILD_DIR/testcase/AOF/save"
 LOAD_CLIENT="$BUILD_DIR/testcase/AOF/load"
 SERVER_PID=""
-SERVER_LOG="${TMPDIR:-/tmp}/kvstore-aof-cycle.$$.log"
+TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/kvstore-aof-cycle.XXXXXX")"
+RUN_DIR="$TEST_ROOT/run"
+SERVER_LOG="$TEST_ROOT/server.log"
+PORT="${KVSTORE_TEST_PORT:-9999}"
 
 start_server() {
     (
-        cd "$BUILD_DIR"
-        exec ./kvstore --port 9999 --role master --rdb off --aof on
+        cd "$RUN_DIR"
+        exec "$SERVER" --bind 127.0.0.1 --port "$PORT" --role master --rdb off --aof on
     ) >"$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
 }
@@ -28,18 +31,18 @@ stop_server() {
 
 wait_for_server() {
     for _ in {1..50}; do
-        if (echo > /dev/tcp/127.0.0.1/9999) 2>/dev/null; then
+        if (echo > "/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
             return 0
         fi
         sleep 0.1
     done
-    echo "kvstore did not start listening on port 9999" >&2
+    echo "kvstore did not start listening on port $PORT" >&2
     return 1
 }
 
 cleanup() {
     stop_server
-    rm -f "$SERVER_LOG"
+    rm -rf "$TEST_ROOT"
 }
 
 trap cleanup EXIT INT TERM
@@ -58,15 +61,16 @@ trap cleanup EXIT INT TERM
 }
 
 echo "Starting kvstore for AOF save..."
+mkdir -p "$RUN_DIR"
 start_server
 wait_for_server
-"$SAVE_CLIENT" 0.0.0.0 9999
+"$SAVE_CLIENT" 127.0.0.1 "$PORT"
 stop_server
 
 echo "Restarting kvstore for AOF auto-load..."
 start_server
 wait_for_server
-"$LOAD_CLIENT" 0.0.0.0 9999
+"$LOAD_CLIENT" 127.0.0.1 "$PORT"
 stop_server
 
 echo "AOF save/auto-load cycle completed."

@@ -10,7 +10,7 @@
 
 #include "kvs_config.h"
 #include "kvs_replication.h"
-#include "network.h"
+#include "kvs_network.h"
 #include "server.h"
 
 static msg_handler kvs_handler;

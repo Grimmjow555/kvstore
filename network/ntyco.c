@@ -2,7 +2,7 @@
 
 #include "kvs_config.h"
 #include "kvs_replication.h"
-#include "network.h"
+#include "kvs_network.h"
 #include "nty_coroutine.h"
 #include <arpa/inet.h> // htonl, ntohl
 #include <arpa/inet.h>

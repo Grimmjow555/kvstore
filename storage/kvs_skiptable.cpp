@@ -1,5 +1,5 @@
 #include "kvs_skiptable.h"
-#include "kvstore.h"
+#include "kvs_runtime.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

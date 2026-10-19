@@ -11,6 +11,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)   # 推荐关闭 GNU 扩展，提高可移植性
 
 # 查找线程库（必须）
 find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 
 # 允许用户通过 -D 覆盖 NtyCo 根目录（submodule 目录为 NtyCo）
 set(NTYCO_ROOT "${CMAKE_SOURCE_DIR}/NtyCo" CACHE PATH "Path to NtyCo library root")
@@ -113,6 +114,10 @@ set(KVSTORE_SOURCES
     replication/kvs_netutil.cpp
 )
 
+add_library(kvs_integrity STATIC persistence/integrity.cpp)
+target_include_directories(kvs_integrity PUBLIC ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(kvs_integrity PUBLIC OpenSSL::Crypto)
+
 # 添加可执行文件
 add_executable(kvstore ${KVSTORE_SOURCES})
 
@@ -164,6 +169,10 @@ add_executable(insert_before5w testcase/master-replica/insert_before5w.cpp)
 add_executable(test testcase/test/testcase.cpp)
 add_executable(memptest testcase/memorypool/memptest.cpp)
 add_executable(memptest_pthread testcase/memorypool/memptest_pthread.cpp)
+add_executable(integrity_test testcase/integrity/test_integrity.cpp)
+add_executable(integrity_client testcase/integrity/client.cpp)
+add_executable(batchsend testcase/batchsend/batchsend.cpp)
+add_executable(longdata testcase/longdata/longdata.cpp)
 
 set_target_properties(rdb_save PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/RDB" OUTPUT_NAME save)
 set_target_properties(rdb_load PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/RDB" OUTPUT_NAME load)
@@ -176,13 +185,22 @@ set_target_properties(test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_D
 set_target_properties(memptest memptest_pthread
     PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/memorypool"
 )
+set_target_properties(integrity_test
+    PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/integrity"
+)
+set_target_properties(integrity_client
+    PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/integrity"
+)
+set_target_properties(batchsend
+    PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/batchsend"
+)
+set_target_properties(longdata
+    PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/longdata"
+)
 
-foreach(testcase_target rdb_save rdb_load aof_save aof_load
-    get10w insert_after5w insert_before5w test memptest memptest_pthread)
-    target_include_directories(${testcase_target} PRIVATE
-        ${CMAKE_SOURCE_DIR}/testcase
-    )
-endforeach()
+target_include_directories(integrity_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(integrity_test OpenSSL::Crypto)
+target_link_libraries(integrity_test kvs_integrity)
 
 target_link_libraries(test Threads::Threads)
 target_link_libraries(memptest Threads::Threads)
@@ -197,6 +215,7 @@ target_include_directories(kvstore PRIVATE
 # 链接库
 target_link_libraries(kvstore
     ${URING_LIBRARY}
+    kvs_integrity
     # ${JEMALLOC_LIBRARY}
     # NtyCo 源码已随 KVSTORE_SOURCES 一起编译，无需再链接 libntyco.a
     Threads::Threads         # 提供 pthread
