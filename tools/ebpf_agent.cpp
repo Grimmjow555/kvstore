@@ -1,9 +1,9 @@
 // ebpf-agent：独立的增量采集与转发进程（重设计阶段 3）。
 //
 // 用法：
-//   ebpf-agent --master 127.0.0.1:9999 --replica 127.0.0.1:10001 \
+//   ebpf-agent --master 127.0.0.1:9999 --listen 0.0.0.0:11001 \
 //              --mode sim --ring ../data/kvstore.ebpf.ring
-//   ebpf-agent --master ... --replica ... --mode uprobe --pid <master_pid> \
+//   ebpf-agent --master ... --listen ... --mode uprobe --pid <master_pid> \
 //              --binary ./kvstore
 //
 // 职责（设计 §8.5）：
@@ -20,7 +20,7 @@
 #include "kvs_ebpf_ring.h"
 #include "kvs_netutil.h"
 #include "kvs_replication.h"
-#include "kvs_config.h"
+#include "kvs_agent_config.h"
 
 #include <arpa/inet.h>
 #include <cstdarg>
@@ -65,14 +65,14 @@ pthread_mutex_t g_agent_mutex = PTHREAD_MUTEX_INITIALIZER;
 unsigned long long g_forwarded = 0;
 unsigned long long g_forward_failed = 0;
 
-// 本轮全量同步窗口是否已经失效（缓存溢出等）。失效后不再建立增量通道，
-// 让 Replica 的等待超时并重新全量同步——避免「带着缺口进入实时转发」。
+// 本轮全量同步窗口是否已经失效（缓存溢出等）。失效后关闭反向增量通道，
+// 让 Replica 观察到断开并重新全量同步——避免「带着缺口进入实时转发」。
 bool g_round_invalid = false;
 
 char g_master_ip[64];
 int g_master_port = 0;
-char g_replica_ip[64];
-int g_replica_port = 0;
+char g_listen_ip[64];
+int g_listen_port = 0;
 
 
 // 增量通道发送缓冲上限：超过说明 Replica 明显跟不上，断开让它重新全量同步。
@@ -98,30 +98,6 @@ void agent_log(const char* fmt, ...) {
     fflush(stderr);
 }
 
-bool parse_host_port(const char* text, char* ip, size_t ip_size, int* port) {
-    const char* colon = strrchr(text, ':');
-    if (colon == NULL || colon == text) {
-        return false;
-    }
-    size_t len = (size_t)(colon - text);
-    if (len + 1 > ip_size) {
-        return false;
-    }
-    memcpy(ip, text, len);
-    ip[len] = '\0';
-    int p = atoi(colon + 1);
-    if (p <= 0 || p > 65535) {
-        return false;
-    }
-    *port = p;
-    return true;
-}
-
-
-
-
-
-
 // 把命令编码成 RESP 文本（增量通道上承载的就是这个）。
 bool encode_command(int argc, char* argv[], std::string* out) {
     if (argc <= 0 || argv == NULL || out == NULL) {
@@ -139,33 +115,6 @@ bool encode_command(int argc, char* argv[], std::string* out) {
     }
     out->resize((size_t)offset);
     return true;
-}
-
-// 确保增量通道已建立（含 REPL_INC 握手）。
-int ensure_replica_conn_locked() {
-    if (g_agent.replica_fd >= 0) {
-        return 0;
-    }
-
-    int fd = kvs_net_connect(g_replica_ip, g_replica_port, kHandshakeTimeoutMs);
-    if (fd < 0) {
-        return -1;
-    }
-    if (kvs_net_send_frame(fd, KVS_REPL_HANDSHAKE_REPL_INC, strlen(KVS_REPL_HANDSHAKE_REPL_INC), kHandshakeTimeoutMs) != 0) {
-        close(fd);
-        return -1;
-    }
-    // 读握手响应（Replica 回的是 +OK 帧），失败说明对端不认这条通道。
-    if (kvs_net_recv_frame_ok(fd, kHandshakeTimeoutMs) != 1) {
-        close(fd);
-        return -1;
-    }
-
-    g_agent.replica_fd = fd;
-    g_agent.outbuf.clear();
-    g_agent.outbuf_off = 0;
-    agent_log("increment channel connected to %s:%d", g_replica_ip, g_replica_port);
-    return 0;
 }
 
 void drop_replica_conn_locked(const char* why) {
@@ -213,7 +162,7 @@ void flush_outbuf_locked() {
 
 // 把一条命令排进增量通道（带 4 字节长度头）。通道不可用时返回 -1。
 int enqueue_command_locked(const std::string& payload) {
-    if (ensure_replica_conn_locked() != 0) {
+    if (g_agent.replica_fd < 0) {
         return -1;
     }
     if (g_agent.outbuf.size() - g_agent.outbuf_off + payload.size() + 4 > kOutbufLimit) {
@@ -246,7 +195,8 @@ void on_capture_record(int argc, char* argv[]) {
     if (argc == 1 && strcmp(argv[0], "SYNC FINISHED") == 0) {
         if (g_round_invalid) {
             // 这一轮的缓存已因溢出被丢弃：不能把不完整的数据接进实时转发。
-            // 这里不建立增量通道，Replica 等待超时后会重新走一次全量同步。
+            // 关闭已经接受的反向连接，让 Replica 立即观察到断开并重新全量同步。
+            drop_replica_conn_locked("full-sync window invalidated");
             g_round_invalid = false;
             g_agent.state = ST_IDLE;
             agent_log("full-sync window was invalidated (cache overflow); skipping this round so "
@@ -254,10 +204,15 @@ void on_capture_record(int argc, char* argv[]) {
             pthread_mutex_unlock(&g_agent_mutex);
             return;
         }
-        // 从机此刻已经加载完快照，可以把缓存按序补发过去了。
-        // 即使缓存为空也要先把增量通道建起来：从机在等这条通道接入才会转入
-        // 常规回放，否则它会一直停在「waiting for increment channel」。
-        ensure_replica_conn_locked();
+        // 从机在发送 SYNC FINISHED 前已经主动接入；此时可以把缓存按序补发。
+        if (g_agent.replica_fd < 0) {
+            agent_log("SYNC FINISHED observed without replica channel; this round is invalid");
+            g_agent.cache.clear();
+            g_agent.cache_bytes = 0;
+            g_agent.state = ST_IDLE;
+            pthread_mutex_unlock(&g_agent_mutex);
+            return;
+        }
         size_t flushed = g_agent.cache.size();
         while (!g_agent.cache.empty()) {
             const std::string& payload = g_agent.cache.front();
@@ -359,30 +314,153 @@ void log_stats() {
               (unsigned long long)kvs_ebpf_ring_dropped());
 }
 
+// ==================== Replica 反向增量通道 ====================
+
+int open_replica_listener(const char* ip, int port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        agent_log("create replica listener socket failed: %s", strerror(errno));
+        return -1;
+    }
+
+    int reuse = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+    struct sockaddr_in address;
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, ip, &address.sin_addr) != 1) {
+        agent_log("invalid replica listen ip: %s", ip);
+        close(fd);
+        return -1;
+    }
+    if (bind(fd, (struct sockaddr*)&address, sizeof(address)) != 0) {
+        agent_log("bind replica listener %s:%d failed: %s", ip, port, strerror(errno));
+        close(fd);
+        return -1;
+    }
+    if (listen(fd, 4) != 0) {
+        agent_log("listen replica channel on %s:%d failed: %s", ip, port, strerror(errno));
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+void reset_round_after_channel_loss() {
+    pthread_mutex_lock(&g_agent_mutex);
+    drop_replica_conn_locked("master disconnected");
+    g_agent.cache.clear();
+    g_agent.cache_bytes = 0;
+    g_agent.state = ST_IDLE;
+    g_round_invalid = false;
+    pthread_mutex_unlock(&g_agent_mutex);
+}
+
+// Replica 必须在发送 SYNC FINISHED 前先接入这里。握手失败时返回 -ERROR，
+// 单从机语义下新的有效连接替换旧连接。
+void accept_replica_connection(int listen_fd) {
+    struct sockaddr_in peer;
+    socklen_t peer_size = sizeof(peer);
+    int fd = accept(listen_fd, (struct sockaddr*)&peer, &peer_size);
+    if (fd < 0) {
+        if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
+            agent_log("accept replica channel failed: %s", strerror(errno));
+        }
+        return;
+    }
+
+    char payload[128];
+    int length = kvs_net_recv_frame(fd, payload, sizeof(payload), kHandshakeTimeoutMs);
+    bool valid = length > 0 &&
+                 (size_t)length == strlen(KVS_REPL_HANDSHAKE_REPL_INC) &&
+                 memcmp(payload, KVS_REPL_HANDSHAKE_REPL_INC, (size_t)length) == 0;
+    if (!valid) {
+        kvs_net_send_frame(fd, "-ERROR\r\n", strlen("-ERROR\r\n"), kHandshakeTimeoutMs);
+        agent_log("rejected invalid replica channel handshake");
+        close(fd);
+        return;
+    }
+    if (kvs_net_send_frame(fd, "+OK\r\n", strlen("+OK\r\n"), kHandshakeTimeoutMs) != 0) {
+        close(fd);
+        return;
+    }
+
+    char peer_ip[INET_ADDRSTRLEN] = {0};
+    inet_ntop(AF_INET, &peer.sin_addr, peer_ip, sizeof(peer_ip));
+    int old_fd = -1;
+    pthread_mutex_lock(&g_agent_mutex);
+    old_fd = g_agent.replica_fd;
+    g_agent.replica_fd = fd;
+    g_agent.outbuf.clear();
+    g_agent.outbuf_off = 0;
+    pthread_mutex_unlock(&g_agent_mutex);
+
+    if (old_fd >= 0 && old_fd != fd) {
+        close(old_fd);
+        agent_log("replica channel replaced: fd %d -> %d", old_fd, fd);
+    }
+    agent_log("increment channel accepted from %s:%d (fd=%d)", peer_ip, ntohs(peer.sin_port),
+              fd);
+}
+
+// Master 尚未连上时仍服务监听端口，避免短时重连窗口内 Replica 被拒绝。
+void service_replica_channels_without_master(int listen_fd, int timeout_ms) {
+    pthread_mutex_lock(&g_agent_mutex);
+    int replica_fd = g_agent.replica_fd;
+    pthread_mutex_unlock(&g_agent_mutex);
+
+    struct pollfd pfds[2];
+    pfds[0].fd = listen_fd;
+    pfds[0].events = POLLIN;
+    pfds[0].revents = 0;
+    pfds[1].fd = replica_fd;
+    pfds[1].events = replica_fd >= 0 ? POLLIN : 0;
+    pfds[1].revents = 0;
+
+    int pr = poll(pfds, replica_fd >= 0 ? 2 : 1, timeout_ms);
+    if (pr < 0 && errno != EINTR) {
+        return;
+    }
+    if (pfds[0].revents & POLLIN) {
+        accept_replica_connection(listen_fd);
+    }
+    if (replica_fd >= 0 && pfds[1].revents != 0) {
+        char tmp[64];
+        ssize_t n = recv(replica_fd, tmp, sizeof(tmp), MSG_DONTWAIT);
+        pthread_mutex_lock(&g_agent_mutex);
+        drop_replica_conn_locked(n > 0 ? "unexpected replica data" : "replica disconnected");
+        pthread_mutex_unlock(&g_agent_mutex);
+    }
+    drain_outbuf();
+}
+
 // ==================== master 注册连接 ====================
 
 // 注册并保持一条到 master 的控制连接：master 据此把 SYNC 放开（eBPF 强制）。
 // 连接断开时重连，期间 master 会拒绝新的 SYNC。
 // 返回进程退出码：0 = 正常停止，非 0 = 采集链路无法自愈（需要重启 agent）。
-int master_register_loop(volatile sig_atomic_t* running, const char* ring_path) {
+int master_register_loop(volatile sig_atomic_t* running, const char* ring_path,
+                         int replica_listen_fd) {
     bool first_registration = true;
 
     while (*running) {
         int fd = kvs_net_connect(g_master_ip, g_master_port, kHandshakeTimeoutMs);
         if (fd < 0) {
             agent_log("connect master %s:%d failed, retry", g_master_ip, g_master_port);
-            sleep(1);
+            service_replica_channels_without_master(replica_listen_fd, 1000);
             continue;
         }
         if (kvs_net_send_frame(fd, KVS_REPL_HANDSHAKE_EBPF, strlen(KVS_REPL_HANDSHAKE_EBPF), kHandshakeTimeoutMs) != 0) {
             close(fd);
-            sleep(1);
+            service_replica_channels_without_master(replica_listen_fd, 1000);
             continue;
         }
         if (kvs_net_recv_frame_ok(fd, kHandshakeTimeoutMs) != 1) {
             agent_log("master rejected EBPF registration");
             close(fd);
-            sleep(1);
+            service_replica_channels_without_master(replica_listen_fd, 1000);
             continue;
         }
         agent_log("registered with master %s:%d", g_master_ip, g_master_port);
@@ -391,6 +469,7 @@ int master_register_loop(volatile sig_atomic_t* running, const char* ring_path) 
         // 绑在旧进程上已经失效，必须重建；重建不了就退出，避免「已注册但采不到」
         // 这种会让 Master 误判可以同步的状态。
         if (!first_registration) {
+            reset_round_after_channel_loss();
             if (kvs_ebpf_agent_capture_reopen(ring_path) != 0) {
                 agent_log("capture could not be re-established after master restart; exiting "
                           "(uprobe mode needs a restart with the new master pid)");
@@ -400,25 +479,52 @@ int master_register_loop(volatile sig_atomic_t* running, const char* ring_path) 
         }
         first_registration = false;
 
-        // 保持连接：master 从不在这条连接上发数据，读到 EOF 即视为断开。
+        // 保持 Master 控制连接，同时接受 Replica 主动接入的反向增量通道。
         while (*running) {
-            struct pollfd pfd;
-            pfd.fd = fd;
-            pfd.events = POLLIN;
-            pfd.revents = 0;
-            // 10ms 一轮：既及时把积压发给 Replica，也不空转浪费 CPU。
-            int pr = poll(&pfd, 1, 10);
-            if (pr > 0) {
+            pthread_mutex_lock(&g_agent_mutex);
+            int replica_fd = g_agent.replica_fd;
+            pthread_mutex_unlock(&g_agent_mutex);
+
+            struct pollfd pfds[3];
+            pfds[0].fd = fd;
+            pfds[0].events = POLLIN;
+            pfds[0].revents = 0;
+            pfds[1].fd = replica_listen_fd;
+            pfds[1].events = POLLIN;
+            pfds[1].revents = 0;
+            pfds[2].fd = replica_fd;
+            pfds[2].events = replica_fd >= 0 ? POLLIN : 0;
+            pfds[2].revents = 0;
+
+            int poll_count = replica_fd >= 0 ? 3 : 2;
+            // 10ms 一轮：及时接受反向连接、清理断线并发送积压。
+            int pr = poll(pfds, (nfds_t)poll_count, 10);
+            if (pr < 0 && errno != EINTR) {
+                agent_log("poll agent channels failed: %s", strerror(errno));
+                break;
+            }
+            if (pr > 0 && (pfds[0].revents & (POLLIN | POLLHUP | POLLERR))) {
                 char tmp[64];
                 ssize_t n = recv(fd, tmp, sizeof(tmp), 0);
                 if (n <= 0) {
                     break;
                 }
-                continue;
+            }
+            if (pfds[1].revents & POLLIN) {
+                accept_replica_connection(replica_listen_fd);
+            }
+            if (replica_fd >= 0 && pfds[2].revents != 0) {
+                char tmp[64];
+                ssize_t n = recv(replica_fd, tmp, sizeof(tmp), MSG_DONTWAIT);
+                pthread_mutex_lock(&g_agent_mutex);
+                const char* reason = n > 0 ? "unexpected replica data" : "replica disconnected";
+                drop_replica_conn_locked(reason);
+                pthread_mutex_unlock(&g_agent_mutex);
             }
             drain_outbuf();
             log_stats();
         }
+        reset_round_after_channel_loss();
         close(fd);
         agent_log("master connection lost, re-registering");
         sleep(1);
@@ -428,9 +534,12 @@ int master_register_loop(volatile sig_atomic_t* running, const char* ring_path) 
 
 void usage(const char* prog) {
     fprintf(stderr,
-            "用法: %s --master <ip:port> --replica <ip:port> --mode <uprobe|sim>\n"
+            "用法: %s [--config <path>] [--master <ip:port>] [--listen <ip:port>]\n"
+            "          [--mode <uprobe|sim>]\n"
             "          [--ring <path>] [--pid <master_pid>] [--binary <master_exe>]\n"
             "          [--cache-max-bytes N] [--cache-max-records N]\n"
+            "  未指定 --config 时依次读取 ./ebpf-agent.conf、../ebpf-agent.conf；\n"
+            "  命令行参数覆盖配置文件中的同名字段。\n"
             "  --mode sim    读取 master 创建的共享内存环（无 CAP_BPF 时使用）\n"
             "  --mode uprobe  在 master 二进制上挂 uprobe + ringbuf（需要 --pid/--binary）\n",
             prog);
@@ -443,64 +552,62 @@ static volatile sig_atomic_t g_running = 1;
 static void on_signal(int) { g_running = 0; }
 
 int main(int argc, char* argv[]) {
-    int mode = KVS_EBPF_MODE_UPROBE;
-    const char* ring_path = NULL;
-    const char* master_binary = NULL;
-    int master_pid = 0;
-    const char* master_addr = NULL;
-    const char* replica_addr = NULL;
-    long cache_max_bytes = 256L * 1024 * 1024;
-    long cache_max_records = 500000;
-
     for (int i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--master") == 0 && i + 1 < argc) {
-            master_addr = argv[++i];
-        } else if (strcmp(argv[i], "--replica") == 0 && i + 1 < argc) {
-            replica_addr = argv[++i];
-        } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
-            const char* m = argv[++i];
-            if (strcmp(m, "sim") == 0) {
-                mode = KVS_EBPF_MODE_SIM;
-            } else if (strcmp(m, "uprobe") == 0) {
-                mode = KVS_EBPF_MODE_UPROBE;
-            } else {
-                usage(argv[0]);
-                return 2;
-            }
-        } else if (strcmp(argv[i], "--ring") == 0 && i + 1 < argc) {
-            ring_path = argv[++i];
-        } else if (strcmp(argv[i], "--binary") == 0 && i + 1 < argc) {
-            master_binary = argv[++i];
-        } else if (strcmp(argv[i], "--pid") == 0 && i + 1 < argc) {
-            master_pid = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--cache-max-bytes") == 0 && i + 1 < argc) {
-            cache_max_bytes = strtol(argv[++i], NULL, 10);
-        } else if (strcmp(argv[i], "--cache-max-records") == 0 && i + 1 < argc) {
-            cache_max_records = strtol(argv[++i], NULL, 10);
-        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(argv[0]);
             return 0;
-        } else {
-            fprintf(stderr, "未知参数: %s\n", argv[i]);
-            usage(argv[0]);
-            return 2;
         }
     }
 
-    if (master_addr == NULL || replica_addr == NULL ||
-        !parse_host_port(master_addr, g_master_ip, sizeof(g_master_ip), &g_master_port) ||
-        !parse_host_port(replica_addr, g_replica_ip, sizeof(g_replica_ip), &g_replica_port)) {
+    kvs_agent_config_t config;
+    kvs_agent_config_init(&config);
+
+    char config_path[512];
+    int has_explicit_path = 0;
+    if (kvs_agent_config_select_path(argc, argv, config_path, sizeof(config_path),
+                                     &has_explicit_path) != 0) {
+        fprintf(stderr, "--config 需要且只能指定一个文件路径\n");
         usage(argv[0]);
         return 2;
     }
-    if (mode == KVS_EBPF_MODE_UPROBE && (master_pid <= 0 || master_binary == NULL)) {
-        fprintf(stderr, "uprobe 模式需要 --pid 与 --binary\n");
+
+    int config_rc = has_explicit_path ? kvs_agent_config_load_file(&config, config_path)
+                                      : kvs_agent_config_load_default(&config);
+    if (config_rc < 0) {
+        fprintf(stderr, "无法加载 ebpf-agent 配置%s%s\n", has_explicit_path ? ": " : "（默认文件）",
+                has_explicit_path ? config_path : "");
         return 2;
     }
-    if (mode == KVS_EBPF_MODE_SIM && ring_path == NULL) {
-        fprintf(stderr, "sim 模式需要 --ring\n");
+
+    int parse_rc = kvs_agent_config_parse_args(&config, argc, argv);
+    if (parse_rc != 0) {
+        if (parse_rc < 0) {
+            fprintf(stderr, "未知参数或参数值非法\n");
+        }
+        usage(argv[0]);
         return 2;
     }
+    if (kvs_agent_config_validate(&config) != 0) {
+        fprintf(stderr, "配置不完整：需要 master 地址和 listen 地址");
+        if (config.mode == KVS_EBPF_MODE_SIM) {
+            fprintf(stderr, "、--ring");
+        } else {
+            fprintf(stderr, "、--pid 与 --binary");
+        }
+        fprintf(stderr, "\n");
+        usage(argv[0]);
+        return 2;
+    }
+
+    snprintf(g_master_ip, sizeof(g_master_ip), "%s", config.master_ip);
+    g_master_port = config.master_port;
+    snprintf(g_listen_ip, sizeof(g_listen_ip), "%s", config.listen_ip);
+    g_listen_port = config.listen_port;
+
+    const int mode = config.mode;
+    const char* ring_path = config.ring_path[0] == '\0' ? NULL : config.ring_path;
+    const char* master_binary = config.master_binary[0] == '\0' ? NULL : config.master_binary;
+    const int master_pid = config.master_pid;
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -511,8 +618,8 @@ int main(int argc, char* argv[]) {
 
     g_agent.state = ST_IDLE;
     g_agent.cache_bytes = 0;
-    g_agent.cache_max_bytes = (size_t)(cache_max_bytes > 0 ? cache_max_bytes : 1);
-    g_agent.cache_max_records = (size_t)(cache_max_records > 0 ? cache_max_records : 1);
+    g_agent.cache_max_bytes = (size_t)config.cache_max_bytes;
+    g_agent.cache_max_records = (size_t)config.cache_max_records;
     g_agent.replica_fd = -1;
     g_agent.outbuf_off = 0;
 
@@ -523,11 +630,20 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "[EBPF-AGENT] capture start failed\n");
         return 1;
     }
-    agent_log("capture started (mode=%s), master=%s replica=%s",
-              mode == KVS_EBPF_MODE_SIM ? "sim" : "uprobe", master_addr, replica_addr);
+    agent_log("capture started (mode=%s), master=%s:%d listen=%s:%d",
+              mode == KVS_EBPF_MODE_SIM ? "sim" : "uprobe", g_master_ip, g_master_port,
+              g_listen_ip, g_listen_port);
 
-    int rc = master_register_loop(&g_running, ring_path);
+    int replica_listen_fd = open_replica_listener(g_listen_ip, g_listen_port);
+    if (replica_listen_fd < 0) {
+        kvs_ebpf_agent_capture_stop();
+        return 1;
+    }
+    agent_log("listening for replica on %s:%d", g_listen_ip, g_listen_port);
 
+    int rc = master_register_loop(&g_running, ring_path, replica_listen_fd);
+
+    close(replica_listen_fd);
     kvs_ebpf_agent_capture_stop();
     pthread_mutex_lock(&g_agent_mutex);
     drop_replica_conn_locked("agent exiting");

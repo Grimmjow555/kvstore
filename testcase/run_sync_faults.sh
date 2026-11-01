@@ -149,7 +149,7 @@ start_agent() {
     local extra="${1:-}"
     # shellcheck disable=SC2086
     kvs_test_start_bg "$AGENT_LOG" ./ebpf-agent --mode sim --ring ../data/kvstore.ebpf.ring \
-        --master "127.0.0.1:$MASTER_PORT" --replica "127.0.0.1:$REPLICA_PORT" $extra
+        --master "127.0.0.1:$MASTER_PORT" --listen "127.0.0.1:$KVS_TEST_AGENT_PORT" $extra
     AGENT_PID=$KVS_TEST_LAST_PID
     for _ in {1..100}; do
         grep -q "registered with master" "$AGENT_LOG" 2>/dev/null && return 0

@@ -139,6 +139,8 @@ cd build
 - `log_level`：`debug`、`info`、`warn`、`error` 或 `off`。
 - `role`：`master` 或 `replica`（也接受 `slave`、`0`、`1`）。
 - `master_ip` / `master_port`：角色为 `replica` 时连接的主节点地址与端口。
+- `agent_port`：Replica 主动连接 Master 主机上 `ebpf-agent` 的增量端口，默认 `11001`。
+- `rdma_advertise_host`：Replica 上报给 Master 的可选 RDMA 地址覆盖；默认自动检测。
 - `persistence_mode`：`none`、`rdb` 或 `aof`，RDB 与 AOF 互斥；也可用
   `rdb on/off`、`aof on/off` 分别控制，但不能同时开启。默认为 `none`。
 - `network_architecture`：`reactor`（或 `epoll`）、`ntyco`（或 `coroutine`）、
@@ -148,7 +150,7 @@ cd build
 
 ```bash
 ./kvstore --config ../kvstore.conf --port 7000 --role replica \
-  --master-ip 127.0.0.1 --master-port 9999 --persistence-mode aof \
+  --master-ip 127.0.0.1 --master-port 9999 --agent-port 11001 --persistence-mode aof \
   --network reactor
 ```
 
@@ -180,6 +182,7 @@ cd build
 | 持久化完整性校验 | `testcase/integrity/*` | `testcase/run_persistence_integrity.sh` | 快照/AOF 改字节、截断、删除、重排和旧格式均拒绝启动且保留文件 | 已通过 |
 | 主从全量同步（重设计阶段 1+2） | `testcase/master-replica/*.cpp` | `testcase/run_sync_fullsync.sh` | Master 写入 10 万条 → `SYNC` → `rdma-server`/`rdma-client` 搬运 → 逐条比对一致 | 已通过 |
 | 主从全量+增量（重设计阶段 3） | `testcase/master-replica/*.cpp` | `testcase/run_sync_increment.sh` | 前 5 万全量、后 5 万由独立 `ebpf-agent` 缓存/转发 → Replica 10 万条一致 | 已通过 |
+| 反向增量通道（无 RDMA mock） | `testcase/run_sync_reverse_inc.sh` | 同左 | Replica 主动连 Agent、缓存冲刷、断线重同步 | 已通过 |
 | 三网络后端协议回归（重设计阶段 4） | 内嵌 python 校验 | `testcase/run_backends_check.sh` | reactor / ntyco / proactor 四引擎命令与异常响应一致 | 已通过 |
 | 同步异常路径回归（重设计阶段 5） | 内嵌 python 校验 | `testcase/run_sync_faults.sh` | 未武装拒绝 / 缓存溢出重同步 / rdma-client 失败重试 三条异常均按预期恢复 | 已通过 |
 | 主从全量 + 增量同步 | `testcase/master-replica/*.cpp` | 手动分步执行（见下） | 先写 5 万条启动 Replica 做全量同步，再写 5 万条走增量，Replica 读到 10 万条 | 已通过 |
@@ -203,6 +206,9 @@ cd /path/to/kvstore
 # 主从全量+增量（重设计阶段 3）：额外的 5 万条由独立 ebpf-agent 缓存/转发 -> 逐条比对
 ./testcase/run_sync_increment.sh
 
+# 反向增量通道（用 mock RDMA，无需硬件）：Replica 主动连 Agent + 断线重同步
+./testcase/run_sync_reverse_inc.sh
+
 # 三个网络后端（reactor / ntyco / proactor）的协议级回归
 ./testcase/run_backends_check.sh
 
@@ -217,31 +223,42 @@ cd /path/to/kvstore
 ### 主从同步用例（手动）
 
 重设计后 eBPF 是**强制依赖**：Master 只在 `ebpf-agent` 注册后才受理 `SYNC`，因此手动跑
-必须先把 agent 起来。下面是最小步骤（采集用 `sim` 模式，免 capability；用 uprobe 模式则需
-先按 [setup_ebpf.sh](setup_ebpf.sh) 给 `build/ebpf-agent` 授权限）：
+必须在 Replica 发起同步前让 agent 完成注册。`ebpf-agent` 默认读取仓库根目录的
+[ebpf-agent.conf](ebpf-agent.conf)，从 `build/` 直接运行即可；命令行开关仍可覆盖配置。
+下面是最小步骤（采集用 `sim` 模式，免 capability；用 uprobe 模式则需先按
+[setup_ebpf.sh](setup_ebpf.sh) 给 `build/ebpf-agent` 授权限）：
 
 ```bash
 cd build
 
-# 0. 准备：kvstore.conf 里配好 rdma_port、replica_host（必须是 RDMA 网卡 IP，
-#    不能是 127.0.0.1）、ebpf_capture_mode sim；RDMA 链路用 setup_rdma.sh 准备。
+# 0. 准备：
+#    * kvstore.conf 里配好 rdma_port、agent_port、ebpf_capture_mode sim；
+#      Replica 默认自动上报控制连接使用的本地 RDMA 地址，无需配置 replica_host；
+#    * ebpf-agent.conf 里配好 master_ip/master_port、listen_ip/listen_port、
+#      mode sim 和 ring；
+#    * RDMA 链路用 setup_rdma.sh 准备。
 
-# 1. 先起采集进程（未注册时 Master 会拒绝 SYNC）
-./ebpf-agent --mode sim --ring ../data/kvstore.ebpf.ring \
-    --master 127.0.0.1:9999 --replica 127.0.0.1:10001 &
-
-# 2. 启动 Master，并写入前 5 万条
+# 1. 启动 Master（sim 模式的共享内存环由 Master 创建）
 ./kvstore --port 9999 --role master &
+
+# 2. 启动 agent 并等待 registered with master
+./ebpf-agent
+
+# 临时切换地址或模式时，命令行参数覆盖配置文件：
+# ./ebpf-agent --master 127.0.0.1:9999 --listen 127.0.0.1:11001 \
+#     --mode sim --ring ../data/kvstore.ebpf.ring
+
+# 3. 写入前 5 万条
 ./testcase/master-replica/insert_before5w 127.0.0.1 9999
 
-# 3. 另开终端启动 Replica，触发 SYNC 全量同步（快照经 rdma-client/rdma-server 搬运）
+# 4. 另开终端启动 Replica，触发 SYNC 全量同步（快照经 rdma-client/rdma-server 搬运）
 ./kvstore --port 10001 --role replica \
     --master-ip 127.0.0.1 --master-port 9999 &
 
-# 4. 向 Master 写入后 5 万条，由 agent 走 REPL_INC 增量通道转发
+# 5. 向 Master 写入后 5 万条，由 Replica 主动建立的 REPL_INC 通道拉取
 ./testcase/master-replica/insert_after5w 127.0.0.1 9999
 
-# 5. 在 Replica 上校验 10 万条（前 5 万全量 + 后 5 万增量）
+# 6. 在 Replica 上校验 10 万条（前 5 万全量 + 后 5 万增量）
 ./testcase/master-replica/get10w 127.0.0.1 10001
 ```
 
@@ -361,8 +378,9 @@ $5\r\nvalue\r\n
 - **全量**：Replica 发 `SYNC` → Master 把快照写成 `data/kvstore.sync.tmp` 并派生
   `rdma-client` → 文件经 RDMA 到 Replica 侧 `rdma-server`（落在 `<tmp>.recv`）→
   Replica 加载后回 `SYNC FINISHED`，Master 删除 `.tmp` 并回收 `rdma-client`。
-- **增量**：`ebpf-agent` 通过 `REPL_INC` 专用握手连 Replica；全量窗口内的写命令由 agent
-  缓存，读到 `SYNC FINISHED` 记录后按序补发，之后转实时转发。
+- **增量**：Replica 在加载快照后、发送 `SYNC FINISHED` 前主动连接 Agent
+  (`master_ip:agent_port`) 并发送 `REPL_INC`；全量窗口内的写命令由 agent 缓存，
+  读到 `SYNC FINISHED` 记录后按序补发，之后转实时转发。
 - **顺序保证**：写命令与 `SYNC` / `SYNC FINISHED` 都经同一个 uprobe 挂载点
   （`kvs_ebpf_notify_write`）在存储锁内取号，采集流顺序 == 提交顺序，因此
   「缓存窗口 ⊇ 快照窗口」由顺序本身保证，不依赖额外水位。
@@ -370,8 +388,9 @@ $5\r\nvalue\r\n
   直接回 `-ERROR`，不会静默降级。
 - **启动恢复顺序**：持久化数据在网络服务和 Replica 同步线程启动前加载，因此不会引入
   在线重同步窗口。客户端不再提供运行期 `RDB LOAD` / `AOF LOAD` 命令。
-- **断连处理**：fd 生命周期归网络层，各后端在断连路径调用
-  `kvs_replication_remove_replica()` 清理复制/同步会话登记，避免 fd 复用后旧映射仍生效。
+- **断连处理**：Master 的 EBPF 注册 fd 由网络后端通过
+  `kvs_replication_remove_replica()` 清理；Replica 主动建立的增量 fd 由同步接收线程
+  检测关闭并触发重新全量同步。
 - 存储引擎没有内部锁，所有访问都经过 `kvstore.cpp` 的可重入存储锁。
 
 ## RDMA 全量搬运（独立进程）
@@ -399,9 +418,11 @@ rdma link show                # 应显示 siw1/1 state ACTIVE
 注意事项：
 
 - `rdma link add` 创建的 SoftiWARP 链路不持久化，重启后需重新执行 `setup_rdma.sh`。
-- **`replica_host` 必须是 RDMA 网卡 IP**（例如 `192.168.234.135`），**不能用 127.0.0.1**：
-  RDMA 无法 resolve 回环地址（`rdma_resolve_addr` 返回 EINVAL）。Master 用它作为
-  `rdma-client` 的目标地址。
+- Replica 在 `SYNC <rdma_ip> <rdma_port>` 中动态上报 RDMA endpoint，Master 直接使用该
+  地址启动 `rdma-client`，因此无需提前配置 `replica_host`。
+- 自动地址来自 Replica 到 Master 控制连接所用的本地接口。多网卡、控制网卡与 RDMA
+  网卡不同或单机测试时可配置 `rdma_advertise_host`；该地址必须是实际 RDMA 网卡 IPv4，
+  不能使用 `127.0.0.1`，否则 `rdma_resolve_addr` 会返回 EINVAL。
 - `rdma_port` 是独立配置项（默认 `10000`），不再沿用旧实现的「数据端口 + 1」——那个端口
   曾被进程内 RDMA 监听占用，容易和 `rdma-server` 冲突。
 - 实现使用「普通 `IBV_WR_RDMA_WRITE` + 一条 SEND 通知」，不要改回
@@ -420,7 +441,8 @@ Master 写路径 / SYNC / SYNC FINISHED（都在存储锁内）
        sim   模式：函数体把记录写进共享内存环
   -> ebpf-agent 消费（ringbuf 或共享内存环），校验序号连续性
   -> 状态机：IDLE -> CACHING（读到 SYNC）-> LIVE（读到 SYNC FINISHED）
-  -> REPL_INC 增量通道投递给 Replica
+  <- Replica 主动建立 REPL_INC 通道
+  -> 通过该连接把增量投递给 Replica
 ```
 
 关键点：
@@ -477,7 +499,29 @@ sudo setcap cap_bpf,cap_perfmon,cap_sys_admin+ep ./build/ebpf-agent
 ebpf_capture_mode sim
 ebpf_ring_file ../data/kvstore.ebpf.ring
 
-# 启动时 agent 传 --mode sim --ring ../data/kvstore.ebpf.ring
+# ebpf-agent.conf
+master_ip 192.168.234.135
+master_port 9999
+listen_ip 0.0.0.0
+listen_port 11001
+mode sim
+ring ../data/kvstore.ebpf.ring
+
+# 从 build/ 直接启动；如配置不在默认路径，可传 --config
+./ebpf-agent
+```
+
+`ebpf-agent` 默认依次查找 `./ebpf-agent.conf`、`../ebpf-agent.conf`。使用 `--config`
+可以指定其他文件；显式指定的文件不存在或内容非法时 agent 会直接退出。无论配置来自哪里，
+命令行中的 `--master`、`--listen`、`--mode`、`--ring`、`--pid`、`--binary` 和缓存上限
+都会覆盖文件中的对应值。
+
+配置解析和“从 `build/` 直接运行”的行为可单独验证：
+
+```bash
+cmake --build build --target agent_config_test agent_startup_test -j"$(nproc)"
+./build/testcase/ebpf-agent/agent_config_test
+./build/testcase/ebpf-agent/agent_startup_test
 ```
 
 sim 模式的记录格式与内核 ringbuf 完全一致（同一条消费代码），启动日志会显示
@@ -493,6 +537,7 @@ sim 模式的记录格式与内核 ringbuf 完全一致（同一条消费代码�
 | `tracefs not writable` / 无 uprobe PMU | 容器未暴露 tracefs 或内核无 uprobe PMU | 改用 `ebpf_capture_mode sim` |
 | `perf_event_open failed` EPERM | `perf_event_paranoid` 过高或缺 `CAP_PERFMON` | 调整 `kernel.perf_event_paranoid` 或补 capability |
 | Replica 日志 `master rejected SYNC: -ERROR` | eBPF 强制：agent 未注册（或已掉线） | 先启动 agent 并确认 `registered with master` |
+| Replica 日志 `connect agent ... failed` | Agent 未监听、`agent_port` 不一致或防火墙阻断 | 检查 agent 的 `listen_ip/listen_port` 与 Replica 的 `agent_port` |
 | agent 日志 `capture stream lost N event(s)` / `cache overflow` | 采集环满或缓存超限 | 已自动断开增量通道触发重同步；频繁出现可调大 `KVS_EBPF_RINGBUF_SIZE` / `--cache-max-*` |
 | Master 重启后 agent 退出码 3 | uprobe 绑在旧进程上，无法自动重挂 | 用新的 `--pid` 重启 agent；sim 模式会自动重开环 |
 

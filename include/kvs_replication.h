@@ -9,9 +9,9 @@ extern "C" {
 // 握手负载本身也是 RESP 数组（外层仍是「4 字节长度头 + 负载」），由复制双方共用：
 //
 //   KVS_REPL_HANDSHAKE_EBPF     ebpf-agent -> Master   采集进程注册
-//   KVS_REPL_HANDSHAKE_REPL_INC ebpf-agent -> Replica  增量通道建立
+//   KVS_REPL_HANDSHAKE_REPL_INC Replica -> ebpf-agent  增量通道建立
 //
-// 接收侧在 replication/kvs_sync.cpp，发送侧在 tools/ebpf_agent.cpp。
+// 接收侧在 tools/ebpf_agent.cpp，发送侧在 replication/kvs_sync.cpp。
 // 两侧必须字面一致，因此集中定义在这里。
 #define KVS_REPL_HANDSHAKE_EBPF "*1\r\n$4\r\nEBPF\r\n"
 #define KVS_REPL_HANDSHAKE_REPL_INC "*1\r\n$8\r\nREPL_INC\r\n"
@@ -27,7 +27,7 @@ typedef enum { KVS_ROLE_MASTER = 0, KVS_ROLE_REPLICA = 1 } kvs_role_t;
 //
 // 因此 kvstore 进程里只剩四件事：
 //   1) 写路径把成功执行的命令交给有序采集流（kvs_replication_append）；
-//   2) 网络层识别 EBPF / REPL_INC 握手（kvs_replication_accept_handshake）；
+//   2) 网络层识别 EBPF 握手（kvs_replication_accept_handshake）；
 //   3) 断连时清理同步会话登记（kvs_replication_remove_replica）；
 //   4) 区分「复制回放线程」与「本地客户端线程」，避免回放误记 AOF
 //      （kvs_replication_is_replaying / _set_replaying）。
@@ -41,8 +41,8 @@ int kvs_replication_init(kvs_role_t role);
 // 写命令入口：把命令交给有序采集流，由 ebpf-agent 采集并转发给 Replica。
 int kvs_replication_append(int argc, char* argv[]);
 
-// 握手入口：识别 Master 侧的 EBPF（采集进程注册）与 Replica 侧的 REPL_INC
-// （增量通道）。返回 1 表示「这条连接已被复制模块受理」，网络层据此回 +OK。
+// 握手入口：识别 Master 侧的 EBPF（采集进程注册）。返回 1 表示
+// 「这条连接已被复制模块受理」，网络层据此回 +OK。
 int kvs_replication_accept_handshake(int fd, const char* data, int length);
 
 // 握手响应发送完成后由网络层调用。新架构下握手本身不触发任何服务端动作
@@ -62,12 +62,12 @@ void kvs_replication_set_replaying(int value);
 
 // ==================== 主从全量同步控制流 ====================
 //
-//   Replica --SYNC--> Master
+//   Replica --SYNC <rdma_ip> <rdma_port>--> Master
 //   Master  : 序列化快照 -> 原子写 data/kvstore.sync.tmp -> 派生 rdma-client
-//   Replica : 接收 .tmp -> kvs_snapshot_load() -> --SYNC FINISHED--> Master
+//   Replica : 接收 .tmp -> kvs_snapshot_load() -> 主动连接 Agent -> --SYNC FINISHED--> Master
 //   Master  : 回收 rdma-client -> 删除 .tmp -> +OK
 //
-// Replica 随后等待 ebpf-agent 建立增量通道；通道超时或断开时重新执行全量同步。
+// Replica 在反向 REPL_INC 通道断开时重新执行全量同步。
 
 // 角色初始化。Master 准备同步路径，Replica 记录 Master 地址。
 int kvs_sync_init(kvs_role_t role);
@@ -77,7 +77,7 @@ void kvs_sync_set_master_addr(const char* ip, int port);
 
 // Master 命令处理。两个函数都必须在 kvs_filter_protocol 内、持有存储锁时调用：
 // SYNC 需要在锁内序列化，保证文件内容就是命令到达时刻的一致快照。
-int kvs_sync_handle_sync(char* response, int response_size);
+int kvs_sync_handle_sync(char* tokens[], int count, char* response, int response_size);
 int kvs_sync_handle_sync_finished(char* response, int response_size);
 
 // Replica 同步驱动。start() 只拉起后台线程，Master 未启动时也会按退避重试。
@@ -86,16 +86,11 @@ void kvs_sync_stop();
 void kvs_sync_destroy();
 
 // Master 侧：ebpf-agent 通过 EBPF 握手注册；未注册时 Master 拒绝 SYNC。
-// Replica 侧：ebpf-agent 通过 REPL_INC 握手建立增量通道。
-// 两个函数都返回 1 表示连接已被复制模块受理，网络层据此回 +OK。
+// Master 侧识别 Agent 注册；返回 1 表示连接已被复制模块受理。
 int kvs_sync_accept_ebpf_handshake(int fd, const char* data, int length);
-int kvs_sync_accept_repl_inc_handshake(int fd, const char* data, int length);
 
 // 采集进程是否已注册（Master 只在已注册时受理 SYNC）。
 int kvs_sync_ebpf_armed(void);
-
-// Replica 侧：若 fd 是增量通道，把 payload 当 RESP 命令回放，返回 1；否则返回 0。
-int kvs_sync_try_replay(int fd, char* payload, int length);
 
 // 连接断开时清理该 fd 在同步模块里登记的会话。
 void kvs_sync_forget_fd(int fd);

@@ -18,14 +18,6 @@ static msg_handler kvs_handler;
 int kvs_request(struct conn* c) {
     // printf("[kvs_request]recv %d: %s\n", c->rlength, c->rbuffer);
 
-    // 重设计阶段 3：增量通道（ebpf-agent -> Replica）上的负载按复制回放处理，
-    // 不走普通命令语义（回放需要置 replaying 标记），并且不回任何响应——
-    // agent 只写不读，回响应会把从机发送缓冲区堆满并阻塞事件循环。
-    if (c != nullptr && kvs_sync_try_replay(c->fd, c->rbuffer.data(), c->rlength)) {
-        c->wlength = 0;
-        return 1;
-    }
-
     // 容量留出 4 字节：发送时在响应体前面补长度头，一次 send 发完
     c->wlength =
         kvs_handler(c->rbuffer.data(), c->rlength, c->wbuffer.data(), c->wbuffer.size() - 4);
@@ -235,20 +227,15 @@ int recv_cb(int clientfd) {
     }
 
     int is_replica = kvs_replication_accept_handshake(clientfd, buffer, msg_len) == 1;
-    int replayed = 0;
     if (is_replica) {
         conn_list[clientfd].wlength = snprintf(conn_list[clientfd].wbuffer.data(),
                                                conn_list[clientfd].wbuffer.size() - 4, "+OK\r\n");
     } else {
         // printf("[%d]RECV: %s\n", conn_list[clientfd].rlength, conn_list[clientfd].rbuffer);
-
-        // 封装 kvs 请求；增量通道回放时不需要发送响应。
-        replayed = kvs_request(&conn_list[clientfd]) == 1;
+        kvs_request(&conn_list[clientfd]);
     }
 
-    if (!replayed) {
-        set_event(clientfd, EPOLLOUT, 0);
-    }
+    set_event(clientfd, EPOLLOUT, 0);
 
     return msg_len;
 }

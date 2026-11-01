@@ -249,24 +249,15 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
                 // 数据完整，处理请求
                 ctx->rbuffer[ctx->msg_len] = '\0'; // 确保字符串结尾
                 int ret;
-                int no_response = 0;
                 if (kvs_replication_accept_handshake(ctx->clientfd, ctx->rbuffer.data(),
                                                      ctx->msg_len) == 1) {
                     ret = snprintf(ctx->wbuffer.data(), ctx->wbuffer.size() - 4, "+OK\r\n");
-                } else if (kvs_sync_try_replay(ctx->clientfd, ctx->rbuffer.data(),
-                                               (int)ctx->msg_len)) {
-                    // 增量通道（ebpf-agent -> Replica）：按复制回放处理，不回任何响应
-                    // （agent 只写不读，回响应会把从机发送缓冲区堆满）。
-                    ret = 0;
-                    no_response = 1;
                 } else {
                     ret = kvs_handler(ctx->rbuffer.data(), ctx->msg_len, ctx->wbuffer.data(),
                                       (int)(ctx->wbuffer.size() - 4));
                 }
-                // 转入发送阶段，不要 delete ctx；增量回放不需要发送。
-                if (!no_response) {
-                    set_event_send(ring, ctx, ret, 0);
-                }
+                // 转入发送阶段，不要 delete ctx。
+                set_event_send(ring, ctx, ret, 0);
             }
         }
         break;

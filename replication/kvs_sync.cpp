@@ -3,7 +3,8 @@
 // 设计与阶段划分见 docs/replication-redesign.md。
 //   * Master：SYNC -> 序列化 -> 写 <data/kvstore.sync.tmp> -> 派生 rdma-client -> +OK；
 //             SYNC FINISHED -> 回收 rdma-client -> 删除 .tmp -> +OK；
-//   * Replica：派生 rdma-server -> 连 Master 发 SYNC -> 等 RDMA 文件落盘 ->
+//   * Replica：派生 rdma-server -> 连 Master 发 SYNC <rdma_ip> <rdma_port>
+//              -> 等 RDMA 文件落盘 ->
 //             加载 -> SYNC FINISHED -> 回收 rdma-server。
 //
 // SYNC 的序列化放在存储锁内，保证快照是「收到 SYNC 那一刻」的一致状态；
@@ -12,6 +13,7 @@
 #include "kvs_config.h"
 #include "kvs_ebpf.h"
 #include "kvs_io_uring.h"
+#include "kvs_network.h"
 #include "kvs_netutil.h"
 #include "kvs_replication.h"
 #include "kvs_snapshot.h"
@@ -37,6 +39,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <vector>
+
 extern char** environ;
 
 // 增量回放复用命令分发入口（同 kvs_replication.cpp 的做法）。
@@ -49,9 +53,6 @@ extern int kvs_protocol(char* msg, int length, char* response, int response_size
 #define KVS_SYNC_IO_TIMEOUT_MS 120000
 // Replica 等待 rdma-server 就绪（端口开始监听）的最长时间。
 #define KVS_SYNC_RDMA_READY_TIMEOUT_MS 10000
-// 全量同步完成后等待 ebpf-agent 接入增量通道的最长时间。超时说明 agent 侧
-// 这一轮同步失效（例如缓存溢出后主动放弃），需要重新全量同步。
-#define KVS_SYNC_INCREMENT_WAIT_MS 10000
 // 失败后的重试退避区间。
 #define KVS_SYNC_BACKOFF_MIN_MS 200
 #define KVS_SYNC_BACKOFF_MAX_MS 5000
@@ -74,6 +75,7 @@ static pthread_t g_sync_tid;
 static volatile int g_sync_running = 0;
 static char g_master_ip[INET_ADDRSTRLEN] = {0};
 static int g_master_port = 0;
+static int g_agent_port = 0;
 // Replica 派生的 rdma-server 进程；-1 表示当前没有。
 static pid_t g_rdma_server_pid = -1;
 
@@ -81,8 +83,11 @@ static pid_t g_rdma_server_pid = -1;
 static int g_ebpf_agent_fd = -1;
 // 阶段 3：Replica 侧已建立的增量通道连接；-1 表示未接入。
 static int g_repl_inc_fd = -1;
+static pthread_t g_inc_tid;
+static volatile int g_inc_running = 0;
+static bool g_inc_thread_started = false;
 
-// 增量通道状态变化通知：Replica 全量同步完成后靠它等待接入/断开。
+// 增量通道状态变化通知：Replica 全量同步完成后靠它等待断开。
 static pthread_mutex_t g_inc_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_inc_cond = PTHREAD_COND_INITIALIZER;
 
@@ -114,6 +119,58 @@ static void sync_sleep_interruptible(int ms, volatile int* running) {
 static int sync_send_command(int fd, const char* cmd) {
     char payload[64];
     int n = snprintf(payload, sizeof(payload), "*1\r\n$%zu\r\n%s\r\n", strlen(cmd), cmd);
+    if (n <= 0 || (size_t)n >= sizeof(payload)) {
+        return -1;
+    }
+    return kvs_net_send_frame(fd, payload, (size_t)n, KVS_SYNC_IO_TIMEOUT_MS);
+}
+
+// Replica 在 SYNC 中上报本次可访问的 RDMA endpoint。默认取控制连接使用的
+// 本地地址；多网卡/测试环境可用 rdma_advertise_host 覆盖。
+static int sync_resolve_advertised_endpoint(int fd, char* ip, size_t ip_size, int* port) {
+    if (fd < 0 || ip == NULL || ip_size == 0 || port == NULL) {
+        return -1;
+    }
+
+    const char* override = kvs_config_rdma_advertise_host();
+    if (override != NULL && override[0] != '\0') {
+        struct in_addr address;
+        if (inet_pton(AF_INET, override, &address) != 1 ||
+            strlen(override) >= ip_size) {
+            kvs_log(KVS_LOG_ERROR, "[SYNC] invalid rdma_advertise_host: %s", override);
+            return -1;
+        }
+        snprintf(ip, ip_size, "%s", override);
+    } else {
+        struct sockaddr_in local;
+        socklen_t local_size = sizeof(local);
+        if (getsockname(fd, (struct sockaddr*)&local, &local_size) != 0 ||
+            local.sin_family != AF_INET ||
+            inet_ntop(AF_INET, &local.sin_addr, ip, (socklen_t)ip_size) == NULL) {
+            kvs_log(KVS_LOG_ERROR, "[SYNC] cannot determine local RDMA address");
+            return -1;
+        }
+    }
+
+    *port = kvs_config_rdma_port();
+    if (*port <= 0 || *port > 65535) {
+        return -1;
+    }
+    kvs_log(KVS_LOG_INFO, "[SYNC] advertising RDMA endpoint %s:%d", ip, *port);
+    return 0;
+}
+
+static int sync_send_sync_request(int fd, const char* rdma_ip, int rdma_port) {
+    char port_text[16];
+    char payload[256];
+    int port_len =
+        snprintf(port_text, sizeof(port_text), "%d", rdma_port);
+    if (port_len <= 0 || (size_t)port_len >= sizeof(port_text) || rdma_ip == NULL) {
+        return -1;
+    }
+    int n = snprintf(payload, sizeof(payload),
+                     "*3\r\n$4\r\nSYNC\r\n$%zu\r\n%s\r\n$%d\r\n%s\r\n", strlen(rdma_ip),
+                     rdma_ip, port_len, port_text);
     if (n <= 0 || (size_t)n >= sizeof(payload)) {
         return -1;
     }
@@ -237,11 +294,11 @@ static int sync_write_tmp_atomic(const char* path, const void* data, size_t len)
 }
 
 // 派生 rdma-client 把 .tmp 搬到 Replica。log 文件与 .tmp 同目录，便于排查。
-static int sync_spawn_rdma_client(const char* tmp_path) {
+static int sync_spawn_rdma_client(const char* tmp_path, const char* peer_ip, int peer_port) {
     char port_str[16];
     char timeout_str[16];
     char log_path[512];
-    snprintf(port_str, sizeof(port_str), "%d", kvs_config_rdma_port());
+    snprintf(port_str, sizeof(port_str), "%d", peer_port);
     snprintf(timeout_str, sizeof(timeout_str), "%d", kvs_config_rdma_transfer_timeout_ms());
     snprintf(log_path, sizeof(log_path), "%s.rdma-client.log", tmp_path);
 
@@ -249,7 +306,7 @@ static int sync_spawn_rdma_client(const char* tmp_path) {
                     (char*)"--file",
                     (char*)tmp_path,
                     (char*)"--peer",
-                    (char*)kvs_config_replica_host(),
+                    (char*)peer_ip,
                     (char*)"--port",
                     port_str,
                     (char*)"--timeout-ms",
@@ -260,11 +317,11 @@ static int sync_spawn_rdma_client(const char* tmp_path) {
         return -1;
     }
     kvs_log(KVS_LOG_INFO, "[SYNC] rdma-client spawned (pid=%d) -> %s:%d, log=%s",
-            (int)g_rdma_client_pid, kvs_config_replica_host(), kvs_config_rdma_port(), log_path);
+            (int)g_rdma_client_pid, peer_ip, peer_port, log_path);
     return 0;
 }
 
-int kvs_sync_handle_sync(char* response, int response_size) {
+int kvs_sync_handle_sync(char* tokens[], int count, char* response, int response_size) {
     if (g_sync_role != KVS_ROLE_MASTER) {
         return snprintf(response, response_size, "-ERROR\r\n");
     }
@@ -283,6 +340,32 @@ int kvs_sync_handle_sync(char* response, int response_size) {
     // 否则「全量窗口内的新写入」没有采集方，会静默丢失。
     if (!kvs_sync_ebpf_armed()) {
         kvs_log(KVS_LOG_WARN, "[SYNC] rejected: ebpf-agent is not registered");
+        return snprintf(response, response_size, "-ERROR\r\n");
+    }
+
+    char replica_ip[INET_ADDRSTRLEN] = {0};
+    int replica_port = 0;
+    if (count == 1) {
+        snprintf(replica_ip, sizeof(replica_ip), "%s", kvs_config_replica_host());
+        replica_port = kvs_config_rdma_port();
+        kvs_log(KVS_LOG_WARN,
+                "[SYNC] legacy SYNC without advertised endpoint; using replica_host=%s:%d",
+                replica_ip, replica_port);
+    } else if (count == 3 && tokens != NULL && tokens[1] != NULL && tokens[2] != NULL) {
+        struct in_addr parsed_address;
+        char* end = NULL;
+        long parsed_port = strtol(tokens[2], &end, 10);
+        if (inet_pton(AF_INET, tokens[1], &parsed_address) != 1 || end == tokens[2] ||
+            *end != '\0' || parsed_port <= 0 || parsed_port > 65535) {
+            kvs_log(KVS_LOG_WARN, "[SYNC] invalid advertised RDMA endpoint");
+            return snprintf(response, response_size, "-ERROR\r\n");
+        }
+        snprintf(replica_ip, sizeof(replica_ip), "%s", tokens[1]);
+        replica_port = (int)parsed_port;
+        kvs_log(KVS_LOG_INFO, "[SYNC] replica advertised RDMA endpoint %s:%d", replica_ip,
+                replica_port);
+    } else {
+        kvs_log(KVS_LOG_WARN, "[SYNC] invalid SYNC argument count: %d", count);
         return snprintf(response, response_size, "-ERROR\r\n");
     }
 
@@ -311,7 +394,7 @@ int kvs_sync_handle_sync(char* response, int response_size) {
 
     // 阶段 2：全量搬运交给独立进程。派生失败说明这次同步无法完成，直接回 -ERROR，
     // 让 Replica 重试，避免留下一个永远等不到文件的半成品状态。
-    if (sync_spawn_rdma_client(path) != 0) {
+    if (sync_spawn_rdma_client(path, replica_ip, replica_port) != 0) {
         unlink(path);
         return snprintf(response, response_size, "-ERROR\r\n");
     }
@@ -377,44 +460,142 @@ int kvs_sync_accept_ebpf_handshake(int fd, const char* data, int length) {
     return 1;
 }
 
-int kvs_sync_accept_repl_inc_handshake(int fd, const char* data, int length) {
-    if (g_sync_role != KVS_ROLE_REPLICA || fd < 0) {
-        return 0;
+// 读取增量通道上的定长内容。返回 1 = 成功，0 = 复制驱动停止，-1 = 连接断开/错误。
+static int sync_read_exact(int fd, void* buffer, size_t length) {
+    char* output = (char*)buffer;
+    size_t received = 0;
+    while (received < length && g_inc_running) {
+        struct pollfd pfd;
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+        int ready = poll(&pfd, 1, 200);
+        if (ready == 0) {
+            continue;
+        }
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        ssize_t count = recv(fd, output + received, length - received, 0);
+        if (count > 0) {
+            received += (size_t)count;
+            continue;
+        }
+        if (count == 0) {
+            return -1;
+        }
+        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+            continue;
+        }
+        return -1;
     }
-    if (!sync_handshake_matches(data, length, KVS_REPL_HANDSHAKE_REPL_INC)) {
-        return 0;
-    }
-    if (g_repl_inc_fd >= 0 && g_repl_inc_fd != fd) {
-        kvs_log(KVS_LOG_WARN, "[SYNC] increment channel replaced: fd %d -> %d", g_repl_inc_fd, fd);
-    }
-    pthread_mutex_lock(&g_inc_mutex);
-    __atomic_store_n(&g_repl_inc_fd, fd, __ATOMIC_RELEASE);
-    pthread_cond_broadcast(&g_inc_cond);
-    pthread_mutex_unlock(&g_inc_mutex);
-    kvs_log(KVS_LOG_INFO, "[SYNC] increment channel established (fd=%d)", fd);
-    return 1;
+    return received == length ? 1 : 0;
 }
 
-// 增量回放：把 payload 当作 Master 的命令执行。回放期间置线程局部 replaying 标记，
-// 使写分支跳过 AOF 记录与再转发（与旧复制回放一致的语义）。
-int kvs_sync_try_replay(int fd, char* payload, int length) {
-    if (fd < 0 || fd != __atomic_load_n(&g_repl_inc_fd, __ATOMIC_ACQUIRE) || payload == NULL) {
-        return 0;
-    }
+static void sync_replay_increment(int fd, char* payload, int length) {
     if (length <= 0) {
-        return 1; // 空帧（例如握手响应）直接吞掉
+        return;
     }
-
     static unsigned long long replayed = 0;
     char response[256] = {0};
     kvs_replication_set_replaying(1);
     kvs_protocol(payload, length, response, sizeof(response));
     kvs_replication_set_replaying(0);
-
     if (++replayed % 5000 == 0) {
         kvs_log(KVS_LOG_INFO, "[SYNC] replayed %llu increment command(s)", replayed);
     }
-    return 1;
+    (void)fd;
+}
+
+static void* sync_increment_reader_thread(void* argument) {
+    int fd = (int)(intptr_t)argument;
+    while (g_inc_running) {
+        uint32_t network_length = 0;
+        int read_rc = sync_read_exact(fd, &network_length, sizeof(network_length));
+        if (read_rc != 1) {
+            break;
+        }
+        uint32_t length = ntohl(network_length);
+        if (length == 0 || length > KVS_NET_MAX_MESSAGE_SIZE) {
+            kvs_log(KVS_LOG_WARN, "[SYNC] invalid increment frame length: %u", length);
+            break;
+        }
+        std::vector<char> payload((size_t)length + 1);
+        read_rc = sync_read_exact(fd, payload.data(), length);
+        if (read_rc != 1) {
+            break;
+        }
+        payload[length] = '\0';
+        sync_replay_increment(fd, payload.data(), (int)length);
+    }
+
+    close(fd);
+    pthread_mutex_lock(&g_inc_mutex);
+    if (__atomic_load_n(&g_repl_inc_fd, __ATOMIC_ACQUIRE) == fd) {
+        __atomic_store_n(&g_repl_inc_fd, -1, __ATOMIC_RELEASE);
+    }
+    pthread_cond_broadcast(&g_inc_cond);
+    pthread_mutex_unlock(&g_inc_mutex);
+    kvs_log(KVS_LOG_WARN, "[SYNC] increment channel closed (fd=%d)", fd);
+    return NULL;
+}
+
+static int sync_connect_increment_channel() {
+    int fd = kvs_net_connect(g_master_ip, g_agent_port, KVS_SYNC_CONNECT_TIMEOUT_MS);
+    if (fd < 0) {
+        kvs_log(KVS_LOG_WARN, "[SYNC] connect agent %s:%d failed", g_master_ip, g_agent_port);
+        return -1;
+    }
+    if (kvs_net_send_frame(fd, KVS_REPL_HANDSHAKE_REPL_INC,
+                           strlen(KVS_REPL_HANDSHAKE_REPL_INC), KVS_SYNC_IO_TIMEOUT_MS) != 0 ||
+        kvs_net_recv_frame_ok(fd, KVS_SYNC_IO_TIMEOUT_MS) != 1) {
+        kvs_log(KVS_LOG_WARN, "[SYNC] agent rejected REPL_INC handshake");
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static int sync_start_increment_reader(int fd) {
+    if (fd < 0 || g_inc_thread_started) {
+        return -1;
+    }
+    g_inc_running = 1;
+    pthread_mutex_lock(&g_inc_mutex);
+    __atomic_store_n(&g_repl_inc_fd, fd, __ATOMIC_RELEASE);
+    pthread_cond_broadcast(&g_inc_cond);
+    pthread_mutex_unlock(&g_inc_mutex);
+    if (pthread_create(&g_inc_tid, NULL, sync_increment_reader_thread,
+                       (void*)(intptr_t)fd) != 0) {
+        g_inc_running = 0;
+        __atomic_store_n(&g_repl_inc_fd, -1, __ATOMIC_RELEASE);
+        close(fd);
+        return -1;
+    }
+    g_inc_thread_started = true;
+    kvs_log(KVS_LOG_INFO, "[SYNC] increment channel connected to agent %s:%d (fd=%d)",
+            g_master_ip, g_agent_port, fd);
+    return 0;
+}
+
+static void sync_stop_increment_reader() {
+    if (!g_inc_thread_started) {
+        return;
+    }
+    g_inc_running = 0;
+    int fd = __atomic_load_n(&g_repl_inc_fd, __ATOMIC_ACQUIRE);
+    if (fd >= 0) {
+        shutdown(fd, SHUT_RDWR);
+    }
+    pthread_join(g_inc_tid, NULL);
+    g_inc_thread_started = false;
+    pthread_mutex_lock(&g_inc_mutex);
+    __atomic_store_n(&g_repl_inc_fd, -1, __ATOMIC_RELEASE);
+    pthread_cond_broadcast(&g_inc_cond);
+    pthread_mutex_unlock(&g_inc_mutex);
 }
 
 void kvs_sync_forget_fd(int fd) {
@@ -426,13 +607,6 @@ void kvs_sync_forget_fd(int fd) {
         kvs_ebpf_capture_enable(0);
         kvs_log(KVS_LOG_WARN, "[SYNC] ebpf-agent disconnected (fd=%d), SYNC disabled", fd);
     }
-    pthread_mutex_lock(&g_inc_mutex);
-    if (__atomic_load_n(&g_repl_inc_fd, __ATOMIC_ACQUIRE) == fd) {
-        __atomic_store_n(&g_repl_inc_fd, -1, __ATOMIC_RELEASE);
-        kvs_log(KVS_LOG_WARN, "[SYNC] increment channel closed (fd=%d)", fd);
-    }
-    pthread_cond_broadcast(&g_inc_cond);
-    pthread_mutex_unlock(&g_inc_mutex);
 }
 
 // 等待增量通道接入（wait_connected=1）或断开（0）。返回 1 表示达到目标状态。
@@ -548,6 +722,10 @@ static int sync_run_replica_once(int fd) {
     int rc = -1;
     int waited = 0;
     int load_rc = -1;
+    int increment_fd = -1;
+    bool increment_started = false;
+    char advertise_ip[INET_ADDRSTRLEN] = {0};
+    int advertise_port = 0;
 
     // (1) 先起接收端并等它就绪，再向 Master 要快照——否则 Master 派生的
     //     rdma-client 可能先到、连接被拒。
@@ -555,8 +733,10 @@ static int sync_run_replica_once(int fd) {
         return -1;
     }
 
-    // (2) 请求全量同步。
-    if (sync_send_command(fd, "SYNC") != 0) {
+    // (2) 上报本次可访问的 RDMA endpoint 并请求全量同步。
+    if (sync_resolve_advertised_endpoint(fd, advertise_ip, sizeof(advertise_ip),
+                                         &advertise_port) != 0 ||
+        sync_send_sync_request(fd, advertise_ip, advertise_port) != 0) {
         kvs_log(KVS_LOG_WARN, "[SYNC] send SYNC failed");
         goto cleanup;
     }
@@ -592,7 +772,15 @@ static int sync_run_replica_once(int fd) {
     }
     kvs_log(KVS_LOG_INFO, "[SYNC] snapshot loaded from %s", recv_path);
 
-    // (5) 告诉 Master 可以删 .tmp、回收 rdma-client 了。
+    // (5) Replica 在发送 SYNC FINISHED 前主动接入 Agent。Agent 读到 FINISHED
+    //     后会立刻冲刷全量窗口内的缓存，因此通道必须先就绪。
+    increment_fd = sync_connect_increment_channel();
+    if (increment_fd < 0 || sync_start_increment_reader(increment_fd) != 0) {
+        goto cleanup;
+    }
+    increment_started = true;
+
+    // (6) 告诉 Master 可以删 .tmp、回收 rdma-client 了。
     if (sync_send_command(fd, "SYNC FINISHED") != 0) {
         kvs_log(KVS_LOG_WARN, "[SYNC] send SYNC FINISHED failed");
         goto cleanup;
@@ -605,6 +793,10 @@ static int sync_run_replica_once(int fd) {
         kvs_log(KVS_LOG_WARN, "[SYNC] master rejected SYNC FINISHED: %s", resp);
         goto cleanup;
     }
+    if (__atomic_load_n(&g_repl_inc_fd, __ATOMIC_ACQUIRE) < 0) {
+        kvs_log(KVS_LOG_WARN, "[SYNC] increment channel closed during SYNC FINISHED");
+        goto cleanup;
+    }
     rc = 0;
 
 cleanup:
@@ -612,6 +804,8 @@ cleanup:
     unlink(ready_path);
     if (rc == 0) {
         unlink(recv_path); // 已加载进内存，本地副本不再需要
+    } else if (increment_started) {
+        sync_stop_increment_reader();
     }
     return rc;
 }
@@ -637,18 +831,11 @@ static void* sync_replica_thread(void*) {
                     g_master_port);
             backoff = KVS_SYNC_BACKOFF_MIN_MS;
 
-            // 阶段 3：全量完成后等待 ebpf-agent 的增量通道接入。通道断开说明
-            // 采集侧丢过事件（或 agent 重启），按设计 §8.2 步骤 7 重新全量同步。
-            kvs_log(KVS_LOG_INFO, "[SYNC] waiting for increment channel from ebpf-agent");
-            if (!kvs_sync_wait_increment(1, KVS_SYNC_INCREMENT_WAIT_MS)) {
-                if (!g_sync_running) {
-                    break; // 收到停止请求
-                }
-                // 通道迟迟不出现：agent 可能放弃了这一轮（如缓存溢出后主动
-                // 放弃），此时快照窗口期间的数据无法补齐，必须重新同步。
-                kvs_log(KVS_LOG_WARN,
-                        "[SYNC] increment channel did not appear in %dms, re-running full sync",
-                        KVS_SYNC_INCREMENT_WAIT_MS);
+            // Replica 已在 SYNC FINISHED 前主动建立增量通道；此后只等待它断开。
+            // 断开说明采集侧丢过事件或 agent 重启，必须重新全量同步。
+            if (__atomic_load_n(&g_repl_inc_fd, __ATOMIC_ACQUIRE) < 0) {
+                kvs_log(KVS_LOG_WARN, "[SYNC] increment channel unavailable after full sync");
+                sync_stop_increment_reader();
                 continue;
             }
             kvs_log(KVS_LOG_INFO, "[SYNC] increment channel online, replaying increments");
@@ -656,6 +843,7 @@ static void* sync_replica_thread(void*) {
                 break; // 收到停止请求
             }
             kvs_log(KVS_LOG_WARN, "[SYNC] increment channel lost, re-running full sync");
+            sync_stop_increment_reader();
             continue;
         }
 
@@ -677,9 +865,13 @@ int kvs_sync_init(kvs_role_t role) {
             snprintf(g_master_ip, sizeof(g_master_ip), "%s", ip);
         }
         g_master_port = kvs_config_master_port();
+        g_agent_port = kvs_config_agent_port();
+        kvs_log(KVS_LOG_INFO, "[SYNC] tmp snapshot file: %s, rdma port: %d, agent port: %d",
+                kSyncTmpFile, kvs_config_rdma_port(), g_agent_port);
+    } else {
+        kvs_log(KVS_LOG_INFO, "[SYNC] tmp snapshot file: %s, rdma port: %d", kSyncTmpFile,
+                kvs_config_rdma_port());
     }
-    kvs_log(KVS_LOG_INFO, "[SYNC] tmp snapshot file: %s, rdma port: %d",
-            kSyncTmpFile, kvs_config_rdma_port());
     return 0;
 }
 
@@ -696,8 +888,9 @@ int kvs_sync_start() {
     if (g_sync_role != KVS_ROLE_REPLICA || g_sync_running) {
         return -1;
     }
-    if (g_master_ip[0] == '\0' || g_master_port <= 0) {
-        kvs_log(KVS_LOG_ERROR, "[SYNC] master address is not configured");
+    if (g_master_ip[0] == '\0' || g_master_port <= 0 || g_agent_port <= 0 ||
+        g_agent_port > 65535) {
+        kvs_log(KVS_LOG_ERROR, "[SYNC] master or agent address is not configured");
         return -1;
     }
 
@@ -715,7 +908,12 @@ void kvs_sync_stop() {
         return;
     }
     g_sync_running = 0;
+    int increment_fd = __atomic_load_n(&g_repl_inc_fd, __ATOMIC_ACQUIRE);
+    if (increment_fd >= 0) {
+        shutdown(increment_fd, SHUT_RDWR);
+    }
     pthread_join(g_sync_tid, NULL);
+    sync_stop_increment_reader();
     sync_kill_child(&g_rdma_server_pid);
     kvs_log(KVS_LOG_INFO, "[SYNC] replica sync driver stopped");
 }

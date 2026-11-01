@@ -194,16 +194,8 @@ void server_reader(void* arg) {
         }
         buf[msg_len] = '\0'; // 确保字符串结束
 
-        // 4.5 先处理复制相关消息：
-        //   * 握手（REPLICA / EBPF / REPL_INC）：回 +OK；
-        //   * 增量通道上的命令：直接回放，不回任何响应，也不需要响应缓冲区。
-        // 增量回放必须走这条捷径：旧流程会为每条命令 malloc 一个 1MB 响应缓冲，
-        // 全量同步期间数万条增量会把 ntyco 协程饿死（连接还在，但不再响应）。
+        // 4.5 先处理 Master 侧的 EBPF 注册握手：回 +OK。
         int is_replica = kvs_replication_accept_handshake(fd, buf, (int)msg_len) == 1;
-        if (!is_replica && kvs_sync_try_replay(fd, buf, (int)msg_len)) {
-            free(buf);
-            continue;
-        }
 
         // 5. 动态分配响应缓冲区，并在头部额外预留 4 字节长度头空间，
         //    这样长度头和响应体可以合并成一次 send 发出。

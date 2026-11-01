@@ -26,7 +26,9 @@ typedef struct {
     char rdma_client_bin[256]; // Master 派生的发送端可执行文件
     char rdma_server_bin[256]; // Replica 派生的接收端可执行文件
     char replica_host[64];     // Master 侧：Replica 的 RDMA 网卡 IP
+    char rdma_advertise_host[64]; // Replica 侧：可选 RDMA 地址覆盖；空表示自动检测
     int rdma_port;             // RDMA 端口
+    int agent_port;            // Replica 主动连接 Agent 的增量通道端口
     int rdma_transfer_timeout_ms; // rdma-client / rdma-server 的整体超时
     int sync_wait_timeout_ms;     // Replica 等待 RDMA 文件落盘的超时
     int ebpf_capture_mode;        // 0 = uprobe，1 = sim
@@ -378,12 +380,31 @@ static int apply_config_key(const std::string& raw_key, const std::string& raw_v
         return 0;
     }
 
+    if (key == "rdma_advertise_host" || key == "rdma_advertise_ip") {
+        std::string ip = trim(value);
+        if (ip.empty() || ip.size() >= sizeof(g_config.rdma_advertise_host)) {
+            return -1;
+        }
+        snprintf(g_config.rdma_advertise_host, sizeof(g_config.rdma_advertise_host), "%s",
+                 ip.c_str());
+        return 0;
+    }
+
     if (key == "rdma_port") {
         int parsed = 0;
         if (!parse_port(value, &parsed)) {
             return -1;
         }
         g_config.rdma_port = parsed;
+        return 0;
+    }
+
+    if (key == "agent_port") {
+        int parsed = 0;
+        if (!parse_port(value, &parsed)) {
+            return -1;
+        }
+        g_config.agent_port = parsed;
         return 0;
     }
 
@@ -450,6 +471,7 @@ void kvs_config_set_defaults(void) {
     snprintf(g_config.rdma_server_bin, sizeof(g_config.rdma_server_bin), "%s", "./rdma-server");
     snprintf(g_config.replica_host, sizeof(g_config.replica_host), "%s", "127.0.0.1");
     g_config.rdma_port = 10000;
+    g_config.agent_port = 11001;
     g_config.rdma_transfer_timeout_ms = 60000;
     g_config.sync_wait_timeout_ms = 120000;
 
@@ -619,6 +641,21 @@ int kvs_config_parse_switches(int* argc, char*** argv) {
                 return -1;
             }
             match = 1;
+        } else if (get_option_value(args, input_count, i, "--agent-port", &value, &consumed) ==
+                   0) {
+            if (!parse_port(value == nullptr ? "" : value, &g_config.agent_port)) {
+                return -1;
+            }
+            match = 1;
+        } else if (get_option_value(args, input_count, i, "--rdma-advertise-host", &value,
+                                    &consumed) == 0) {
+            if (value == nullptr || value[0] == '\0' ||
+                strlen(value) >= sizeof(g_config.rdma_advertise_host)) {
+                return -1;
+            }
+            snprintf(g_config.rdma_advertise_host, sizeof(g_config.rdma_advertise_host), "%s",
+                     value);
+            match = 1;
         } else if (get_option_value(args, input_count, i, "--persistence-mode", &value,
                                     &consumed) == 0) {
             int rdb = 0;
@@ -710,7 +747,11 @@ const char* kvs_config_rdma_server_bin(void) { return g_config.rdma_server_bin; 
 
 const char* kvs_config_replica_host(void) { return g_config.replica_host; }
 
+const char* kvs_config_rdma_advertise_host(void) { return g_config.rdma_advertise_host; }
+
 int kvs_config_rdma_port(void) { return g_config.rdma_port; }
+
+int kvs_config_agent_port(void) { return g_config.agent_port; }
 
 int kvs_config_rdma_transfer_timeout_ms(void) { return g_config.rdma_transfer_timeout_ms; }
 

@@ -7,7 +7,7 @@
 #   Replica: 派生 rdma-server -> SYNC -> 收 RDMA 文件 -> 加载 -> SYNC FINISHED
 #   Master: 回收 rdma-client -> 删 .tmp
 #
-# 前提：RDMA 可用（siw）且 kvstore.conf 的 replica_host 是 RDMA 网卡 IP
+# 前提：RDMA 可用（siw）。单机测试通过 rdma_advertise_host 上报可用网卡地址
 # （RDMA 不能 resolve 127.0.0.1）。可用 setup_rdma.sh 准备 siw 链路。
 
 set -euo pipefail
@@ -60,7 +60,7 @@ start_replica() {
 # 阶段 3 起 eBPF 是强制的：必须先有 ebpf-agent 注册，Master 才受理 SYNC。
 start_agent() {
     kvs_test_start_bg "$AGENT_LOG" ./ebpf-agent --mode sim --ring ../data/kvstore.ebpf.ring \
-        --master "127.0.0.1:$MASTER_PORT" --replica "127.0.0.1:$REPLICA_PORT"
+        --master "127.0.0.1:$MASTER_PORT" --listen "127.0.0.1:$KVS_TEST_AGENT_PORT"
     AGENT_PID=$KVS_TEST_LAST_PID
 }
 

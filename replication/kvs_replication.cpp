@@ -7,7 +7,7 @@
 //   * 全局采集序号与 kvs_ebpf_notify_command()：保证写命令与 SYNC/SYNC FINISHED
 //     控制记录落在同一条有序流里（设计 §7.1 的正确性基础）；
 //   * 写路径入口 kvs_replication_append()：只把命令交给上面这条流；
-//   * 网络层握手路由（EBPF / REPL_INC）、断连清理、回放线程标记；
+//   * 网络层 EBPF 注册路由、断连清理、回放线程标记；
 //   * 运行期整库替换后写入 INVALIDATE 记录，触发从机重新全量同步。
 //
 // 之所以把「采集挂载点」和「复制入口」放在同一个文件：它们都是 kvstore 进程内、
@@ -146,12 +146,8 @@ int kvs_replication_append(int argc, char* argv[]) {
 }
 
 int kvs_replication_accept_handshake(int fd, const char* data, int length) {
-    // Master 侧的 EBPF（ebpf-agent 注册）与 Replica 侧的 REPL_INC（增量通道）：
-    // 网络层对返回 1 的连接统一回 +OK，三个后端因此不需要各自识别 token。
+    // Master 侧的 EBPF 注册。Replica 的增量通道是主动外连，不经过网络后端。
     if (kvs_sync_accept_ebpf_handshake(fd, data, length) == 1) {
-        return 1;
-    }
-    if (kvs_sync_accept_repl_inc_handshake(fd, data, length) == 1) {
         return 1;
     }
     return 0;

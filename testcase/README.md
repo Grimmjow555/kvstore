@@ -38,7 +38,21 @@ build/testcase/...
 | `run_backends_check.sh` | 是 | 三种网络后端的协议一致性 |
 | `run_sync_fullsync.sh` | 是 | 主从全量同步 |
 | `run_sync_increment.sh` | 是 | 主从全量加增量同步 |
+| `run_sync_reverse_inc.sh` | 是 | 用本地 mock RDMA 验证 Replica 主动连接 Agent 及断线重同步 |
 | `run_sync_faults.sh` | 是 | 主从同步异常和恢复 |
+
+`ebpf-agent` 的独立配置测试目标：
+
+```bash
+cmake --build build --target agent_config_test agent_startup_test -j"$(nproc)"
+./build/testcase/ebpf-agent/agent_config_test
+./build/testcase/ebpf-agent/agent_startup_test
+```
+
+`agent_config_test` 验证配置字段、默认路径、命令行覆盖和错误校验；
+`agent_startup_test` 在临时目录放置 `ebpf-agent.conf`，确认不带参数的
+`./ebpf-agent` 能从当前目录加载配置、启动 sim 采集，并正确处理反向
+`REPL_INC` 握手和非法握手。
 
 ## 公共函数库
 
@@ -59,8 +73,9 @@ build/testcase/...
 ```text
 Master TCP 端口：9999
 Replica TCP 端口：10001
+Agent 增量端口：11001
 RDMA 端口：10000
-RDMA 网卡地址：192.168.234.135
+测试用 RDMA 上报地址：192.168.234.135
 ```
 
 这些值可通过环境变量覆盖，具体见下文。
@@ -238,7 +253,7 @@ Full sync (RDMA process split) cycle completed.
 registered with master
 SYNC observed
 SYNC FINISHED observed
-increment channel established
+increment channel connected to agent
 full sync completed
 ```
 
@@ -252,6 +267,33 @@ bash testcase/run_sync_increment.sh
 
 ```text
 Increment sync (ebpf-agent process split) cycle completed.
+```
+
+### `run_sync_reverse_inc.sh`
+
+在无 RDMA 硬件的环境验证反向增量通道。脚本用本地文件复制包装脚本替代
+`rdma-client` / `rdma-server`，但仍启动真实的 Master、Replica 和 `ebpf-agent`。
+
+验证内容：
+
+1. Agent 监听 `11001`，Replica 主动连接并发送 `REPL_INC`。
+2. Replica 在 `SYNC` 中动态上报 RDMA endpoint，Master 的 mock `rdma-client`
+   必须收到该地址，而不是静态 `replica_host`。
+3. 全量窗口内的缓存由 Agent 通过已接受的连接冲刷。
+4. 后 5 万条实时增量到达 Replica，最终校验 10 万条。
+5. 停止并重启 Agent，确认 Replica 检测到通道断开后重新全量同步，并补齐
+   Agent 离线期间写入的数据。
+
+运行：
+
+```bash
+bash testcase/run_sync_reverse_inc.sh
+```
+
+成功时输出：
+
+```text
+Reverse increment sync cycle completed.
 ```
 
 ### `run_sync_faults.sh`

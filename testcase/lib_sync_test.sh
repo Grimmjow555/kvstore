@@ -20,8 +20,10 @@ KVS_TEST_DATA_DIR="$KVS_TEST_ROOT_DIR/data"
 
 KVS_TEST_MASTER_PORT="${KVS_TEST_MASTER_PORT:-9999}"
 KVS_TEST_REPLICA_PORT="${KVS_TEST_REPLICA_PORT:-10001}"
+KVS_TEST_AGENT_PORT="${KVS_TEST_AGENT_PORT:-11001}"
 KVS_TEST_RDMA_PORT="${KVS_TEST_RDMA_PORT:-10000}"
-# Master 的 rdma-client 要连的 Replica RDMA 网卡地址；回环地址 RDMA resolv 不了。
+# 单机测试通过控制连接自动取到的地址是 127.0.0.1，RDMA 无法 resolve；
+# 因此测试显式覆盖 Replica 上报的 RDMA 地址。
 KVS_TEST_RDMA_HOST="${KVS_TEST_RDMA_HOST:-192.168.234.135}"
 
 # kvs_test_start_bg 启动的子进程 pid；调用方启动后立刻取走。
@@ -115,12 +117,16 @@ network_architecture ntyco
 rdma_client_bin ./rdma-client
 rdma_server_bin ./rdma-server
 rdma_port $KVS_TEST_RDMA_PORT
-replica_host $KVS_TEST_RDMA_HOST
+agent_port $KVS_TEST_AGENT_PORT
 rdma_transfer_timeout_ms 60000
 sync_wait_timeout_ms 120000
 ebpf_capture_mode sim
 ebpf_ring_file ../data/kvstore.ebpf.ring
 EOF
+
+    if [[ -n "${KVS_TEST_RDMA_HOST:-}" ]]; then
+        printf 'rdma_advertise_host %s\n' "$KVS_TEST_RDMA_HOST" >>"$path"
+    fi
 
     local line
     for line in "$@"; do

@@ -2,7 +2,7 @@
 #
 # 主从「全量 + 增量」端到端验证（重设计阶段 3）。
 #
-# 链路：Master --(有序采集流)--> ebpf-agent --(REPL_INC 增量通道)--> Replica
+# 链路：Master --(有序采集流)--> ebpf-agent <--(REPL_INC 反向连接)-- Replica
 #   * ebpf-agent 独立进程先注册（EBPF 握手），Master 才受理 SYNC（eBPF 强制）；
 #   * 全量同步期间写入的命令由 agent 缓存，读到 SYNC FINISHED 后按序补发；
 #   * 之后的写入实时转发。
@@ -71,8 +71,8 @@ kvs_test_wait_for_port "$MASTER_PORT"
 "$INSERT_BEFORE" 127.0.0.1 "$MASTER_PORT"
 
 echo "2) 启动 ebpf-agent（采集 + 注册）"
-kvs_test_start_bg "$AGENT_LOG" ./ebpf-agent --mode sim --ring ../data/kvstore.ebpf.ring \
-    --master "127.0.0.1:$MASTER_PORT" --replica "127.0.0.1:$REPLICA_PORT"
+    kvs_test_start_bg "$AGENT_LOG" ./ebpf-agent --mode sim --ring ../data/kvstore.ebpf.ring \
+    --master "127.0.0.1:$MASTER_PORT" --listen "127.0.0.1:$KVS_TEST_AGENT_PORT"
 AGENT_PID=$KVS_TEST_LAST_PID
 for _ in {1..100}; do
     grep -q "registered with master" "$AGENT_LOG" 2>/dev/null && break
@@ -95,7 +95,7 @@ kvs_test_wait_for_port "$REPLICA_PORT"
 echo "4) 等待增量通道建立与缓存冲刷"
 for _ in {1..200}; do
     if grep -q "full sync completed" "$REPLICA_LOG" 2>/dev/null &&
-        grep -q "increment channel established" "$REPLICA_LOG" 2>/dev/null; then
+        grep -q "increment channel connected to agent" "$REPLICA_LOG" 2>/dev/null; then
         break
     fi
     sleep 0.5
@@ -105,7 +105,7 @@ if ! grep -q "full sync completed" "$REPLICA_LOG"; then
     cat "$REPLICA_LOG" >&2
     exit 1
 fi
-if ! grep -q "increment channel established" "$REPLICA_LOG"; then
+if ! grep -q "increment channel connected to agent" "$REPLICA_LOG"; then
     echo "增量通道未建立：" >&2
     cat "$REPLICA_LOG" >&2
     cat "$AGENT_LOG" >&2

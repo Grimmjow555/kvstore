@@ -733,7 +733,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     // 主从全量同步控制命令（重设计阶段 1）：在这里处理意味着天然持存储锁，
     // SYNC 的序列化因此就是「收到命令那一刻」的一致快照。
     case KVS_CMD_SYNC: {
-        length = kvs_sync_handle_sync(response, response_size);
+        length = kvs_sync_handle_sync(tokens, count, response, response_size);
         break;
     }
 
@@ -914,6 +914,8 @@ static void print_usage(const char* program) {
            "     [--bind 0.0.0.0] [--port 9999]\n"
            "     [--role master|replica]\n"
            "     [--master-ip 127.0.0.1] [--master-port 19001]\n"
+           "     [--agent-port 11001]\n"
+           "     [--rdma-advertise-host 192.168.234.129]\n"
            "     [--log-level debug|info|warn|error|off]\n"
            "     [--persistence-mode none|rdb|aof]\n"
            "     [--network reactor|ntyco|proactor]\n",

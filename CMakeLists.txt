@@ -129,11 +129,34 @@ add_executable(ebpf_agent
     replication/kvs_ebpf_ring.cpp
     replication/kvs_netutil.cpp
     config/kvs_config.cpp
+    config/kvs_agent_config.cpp
 )
 target_include_directories(ebpf_agent PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(ebpf_agent Threads::Threads)
 set_target_properties(ebpf_agent PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}" OUTPUT_NAME "ebpf-agent")
+
+add_executable(agent_config_test
+    testcase/ebpf-agent/test_agent_config.cpp
+    config/kvs_agent_config.cpp
+    config/kvs_config.cpp
+)
+target_include_directories(agent_config_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(agent_config_test Threads::Threads)
+set_target_properties(agent_config_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/ebpf-agent")
+
+add_executable(agent_startup_test
+    testcase/ebpf-agent/test_agent_startup.cpp
+    replication/kvs_ebpf_ring.cpp
+    replication/kvs_netutil.cpp
+)
+target_include_directories(agent_startup_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_definitions(agent_startup_test PRIVATE
+    KVS_AGENT_BINARY="$<TARGET_FILE:ebpf_agent>")
+add_dependencies(agent_startup_test ebpf_agent)
+set_target_properties(agent_startup_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/ebpf-agent")
 
 # 阶段 2：RDMA 全量搬运拆成两个独立进程。它们与 kvstore 分开构建，
 # 由 Master / Replica 在 SYNC 流程中按需派生（见 docs/replication-redesign.md）。
