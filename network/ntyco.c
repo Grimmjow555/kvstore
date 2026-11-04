@@ -1,8 +1,8 @@
 
 
 #include "kvs_config.h"
-#include "kvs_replication.h"
 #include "kvs_network.h"
+#include "kvs_replication.h"
 #include "nty_coroutine.h"
 #include <arpa/inet.h> // htonl, ntohl
 #include <arpa/inet.h>
@@ -13,6 +13,8 @@
 #include <string.h> // memcpy, memset
 #include <sys/socket.h>
 #include <unistd.h> // recv, send, close
+
+#define ECHO 0
 
 static msg_handler kvs_handler;
 
@@ -152,7 +154,6 @@ int send_full(int fd, const void* buffer, size_t len) {
     return 0;
 }
 
-#if 1
 // 头部存储长度的协议，并且根据长度设置buffer大小
 void server_reader(void* arg) {
     // int fd = *(int*)arg;
@@ -194,6 +195,33 @@ void server_reader(void* arg) {
         }
         buf[msg_len] = '\0'; // 确保字符串结束
 
+#if ECHO
+        // ECHO 模式只保留外层长度帧，收到完整 payload 后原样回发；
+        // 不进入复制握手和 RESP/命令解析。长度头和 payload 必须一次发送，
+        // 否则小帧会触发 Nagle/延迟 ACK，使每次 echo 额外等待约 40ms。
+        char* echo_frame = (char*)malloc(sizeof(net_len) + msg_len);
+        if (!echo_frame) {
+            free(buf);
+            kvs_replication_remove_replica(fd);
+            nty_client_close(fd);
+            break;
+        }
+        memcpy(echo_frame, &net_len, sizeof(net_len));
+        memcpy(echo_frame + sizeof(net_len), buf, msg_len);
+        int echo_send_ok = 1;
+        if (send_full(fd, echo_frame, sizeof(net_len) + msg_len) != 0) {
+            echo_send_ok = 0;
+        }
+        free(echo_frame);
+        free(buf);
+        if (!echo_send_ok) {
+            kvs_replication_remove_replica(fd);
+            nty_client_close(fd);
+            break;
+        }
+        continue;
+#endif
+
         // 4.5 先处理 Master 侧的 EBPF 注册握手：回 +OK。
         int is_replica = kvs_replication_accept_handshake(fd, buf, (int)msg_len) == 1;
 
@@ -213,8 +241,7 @@ void server_reader(void* arg) {
         if (is_replica) {
             slength = snprintf(response, KVS_NET_MAX_MESSAGE_SIZE + 1, "+OK\r\n");
         } else {
-            slength =
-                kvs_handler(buf, (int)msg_len, response, KVS_NET_MAX_MESSAGE_SIZE + 1);
+            slength = kvs_handler(buf, (int)msg_len, response, KVS_NET_MAX_MESSAGE_SIZE + 1);
         }
         if (slength < 0) {
             slength = 0; // 或发送错误响应
@@ -248,38 +275,6 @@ void server_reader(void* arg) {
         }
     }
 }
-#else
-// 原始的读写
-void server_reader(void* arg) {
-    int fd = *(int*)arg;
-    int ret = 0;
-
-    while (1) {
-
-        char buf[1024] = {0};
-        ret = recv(fd, buf, 1024, 0);
-        if (ret > 0) {
-            // printf("read from server: %.*s\n", ret, buf);
-
-            char response[1024] = {0};
-
-            // int slength = kvs_protocol(buf, ret, response);
-            int slength = kvs_handler(buf, ret, response);
-
-            ret = send(fd, response, slength, 0);
-
-            // ret = send(fd, buf, sizeof(buf), 0);
-            if (ret == -1) {
-                close(fd);
-                break;
-            }
-        } else if (ret == 0) {
-            close(fd);
-            break;
-        }
-    }
-}
-#endif
 
 static void server(void* arg) {
 

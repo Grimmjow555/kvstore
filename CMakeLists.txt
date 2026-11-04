@@ -196,6 +196,7 @@ add_executable(integrity_test testcase/integrity/test_integrity.cpp)
 add_executable(integrity_client testcase/integrity/client.cpp)
 add_executable(batchsend testcase/batchsend/batchsend.cpp)
 add_executable(longdata testcase/longdata/longdata.cpp)
+add_executable(echo_save testcase/ECHO/echo.cpp)
 
 set_target_properties(rdb_save PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/RDB" OUTPUT_NAME save)
 set_target_properties(rdb_load PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/RDB" OUTPUT_NAME load)
@@ -219,6 +220,9 @@ set_target_properties(batchsend
 )
 set_target_properties(longdata
     PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/longdata"
+)
+set_target_properties(echo_save
+    PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/ECHO" OUTPUT_NAME ECHO
 )
 
 target_include_directories(integrity_test PRIVATE ${CMAKE_SOURCE_DIR}/include)

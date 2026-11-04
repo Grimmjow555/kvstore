@@ -1,5 +1,3 @@
-int send_msg(int connfd, const char* msg, int length);
-int recv_msg(int connfd, char* msg, int length);
 #include <arpa/inet.h>
 #include <iostream>
 #include <stdarg.h>
@@ -9,6 +7,9 @@ int recv_msg(int connfd, char* msg, int length);
 #include <sys/time.h>
 #include <unistd.h>
 #include <vector>
+
+int send_msg(int connfd, const char* msg, int length);
+int recv_msg(int connfd, char* msg, int length);
 
 #define MAX_MSG_LENGTH 1024
 #define REQ_BUF_SIZE 256
@@ -26,7 +27,6 @@ int recv_msg(int connfd, char* msg, int length);
 #define LEVEL3 1 //使用多线程，每个线程9条测试样例，测试 TEST_COUNT 次
 //若只有一套样例，考虑到线程安全，需要对这一套样例加锁，实际上和串行无异。
 //所以我们多套样例应该互不相同，互不影响结果。这样可以不加锁使用多线程，具体做法是为每一套样例的key添加对应的fd
-
 
 /**
  * @brief 将命令构建为符合 RESP (Redis Serialization Protocol) 协议的请求字符串

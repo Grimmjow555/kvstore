@@ -1,5 +1,3 @@
-int send_msg(int connfd, const char* msg, int length);
-int recv_msg(int connfd, char* msg, int length);
 #include <arpa/inet.h>
 #include <iostream>
 #include <pthread.h>
@@ -10,6 +8,9 @@ int recv_msg(int connfd, char* msg, int length);
 #include <sys/time.h>
 #include <unistd.h>
 #include <vector>
+
+int send_msg(int connfd, const char* msg, int length);
+int recv_msg(int connfd, char* msg, int length);
 
 #define MAX_MSG_LENGTH 1024
 #define REQ_BUF_SIZE 256 // 请求内容较短，直接在栈上构建，避免频繁堆分配

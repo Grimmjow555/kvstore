@@ -36,6 +36,7 @@ build/testcase/...
 | `run_aof_cycle.sh` | 是 | AOF 写入、清空和启动回放 |
 | `run_persistence_integrity.sh` | 是 | 快照与 AOF 完整性、篡改检测 |
 | `run_backends_check.sh` | 是 | 三种网络后端的协议一致性 |
+| `ECHO/run_echo_test.sh` | 是 | 四引擎共十万条 ntyco 原样回发测试 |
 | `run_sync_fullsync.sh` | 是 | 主从全量同步 |
 | `run_sync_increment.sh` | 是 | 主从全量加增量同步 |
 | `run_sync_reverse_inc.sh` | 是 | 用本地 mock RDMA 验证 Replica 主动连接 Agent 及断线重同步 |
@@ -199,6 +200,34 @@ bash testcase/run_backends_check.sh
 
 ```text
 Backends protocol check completed.
+```
+
+### `ECHO/run_echo_test.sh`
+
+以 `testcase/AOF/save.cpp` 的四引擎用例为基础，验证 `network/ntyco.c` 的
+`ECHO=1` 模式：
+
+- 启动 ntyco 后端的真实 `kvstore` 服务。
+- 四引擎各发送 25,000 条，共 100,000 条：
+  - array：`SET`
+  - rbtree：`RSET`
+  - hash：`HSET`
+  - skiptable：`SSET`
+- 每条请求都逐字节校验回发的长度头、RESP 请求和 payload。
+- 输出四引擎各自的命令数、耗时和 QPS，以及总计统计。
+- 客户端默认限时 60 秒，可通过 `ECHO_TEST_TIMEOUT` 覆盖。
+
+运行前先构建 `kvstore` 和 `echo_save`：
+
+```bash
+cmake --build build --target kvstore echo_save -j"$(nproc)"
+bash testcase/ECHO/run_echo_test.sh
+```
+
+成功时输出：
+
+```text
+***ECHO TEST SUCCESS***
 ```
 
 ## 主从复制测试

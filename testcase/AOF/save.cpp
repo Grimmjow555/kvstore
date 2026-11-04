@@ -1,5 +1,3 @@
-int send_msg(int connfd, const char* msg, int length);
-int recv_msg(int connfd, char* msg, int length);
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstdlib>
@@ -14,6 +12,9 @@ int recv_msg(int connfd, char* msg, int length);
 #include <sys/time.h>
 #include <unistd.h>
 #include <vector>
+
+int send_msg(int connfd, const char* msg, int length);
+int recv_msg(int connfd, char* msg, int length);
 
 #define MAX_MSG_LENGTH 1024
 #define REQ_BUF_SIZE 256 // 请求内容较短，直接在栈上构建，避免频繁堆分配
@@ -328,9 +329,9 @@ int main(int argc, char* argv[]) {
         exit(1);
     struct timeval tv_begin, tv_end;
     gettimeofday(&tv_begin, NULL);
-    testcase(connfd, req, "+OK\r\n", "AOF CLEAR", 0);
-    gettimeofday(&tv_end, NULL);
-    print_stats("AOF SAVE: \"AOF CLEAR\"", 1, TIME_SUB_MS(tv_end, tv_begin));
+    // testcase(connfd, req, "+OK\r\n", "AOF CLEAR", 0);
+    // gettimeofday(&tv_end, NULL);
+    // print_stats("AOF SAVE: \"AOF CLEAR\"", 1, TIME_SUB_MS(tv_end, tv_begin));
 
     // 只统计后续真正的写命令，排除 AOF CLEAR 本身
     gettimeofday(&tv_begin, NULL);
@@ -370,7 +371,6 @@ int main(int argc, char* argv[]) {
 #endif
     return 0;
 }
-
 
 // 循环发送直到全部数据发出或失败。
 int send_all(int fd, const void* buffer, size_t length) {

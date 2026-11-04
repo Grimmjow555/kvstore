@@ -1,5 +1,3 @@
-int send_msg(int connfd, const char* msg, int length);
-int recv_msg(int connfd, char* msg, int length);
 #include <arpa/inet.h>
 #include <iostream>
 #include <stdarg.h>
@@ -9,6 +7,9 @@ int recv_msg(int connfd, char* msg, int length);
 #include <sys/time.h>
 #include <unistd.h>
 #include <vector>
+
+int send_msg(int connfd, const char* msg, int length);
+int recv_msg(int connfd, char* msg, int length);
 
 #define MAX_MSG_LENGTH 1024
 #define TIME_SUB_MS(tv1, tv2)                                                                      \
