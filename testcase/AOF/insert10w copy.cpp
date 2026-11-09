@@ -1,0 +1,310 @@
+#include <arpa/inet.h>
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <netinet/in.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+#include <vector>
+
+int send_msg(int connfd, const char* msg, int length);
+int recv_msg(int connfd, char* msg, int length);
+
+#define MAX_MSG_LENGTH 1024
+#define REQ_BUF_SIZE 256 // 请求内容较短，直接在栈上构建，避免频繁堆分配
+#define TIME_SUB_MS(tv1, tv2)                                                                      \
+    ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
+#define SET_NUMS 100000
+#define PRINT_PASS 0
+#define SAVE 1 // 测试保存功能
+
+/**
+ * @brief 将命令构建为符合 RESP (Redis Serialization Protocol) 协议的请求字符串
+ *
+ * RESP 协议格式：
+ *   *<参数个数>\r\n
+ *   $<参数1长度>\r\n
+ *   <参数1>\r\n
+ *   $<参数2长度>\r\n
+ *   <参数2>\r\n
+ *   ...
+ * 其中第一个参数固定为命令名（如 "SET"），后续为命令的参数。
+ *
+ * @param buf       调用者提供的缓冲区（通常是栈数组）
+ * @param capacity  缓冲区大小（字节数）
+ * @param cmd       命令名称（例如 "SET", "GET", "SSET" 等）
+ * @param argc      命令参数的个数（不包括命令名本身）
+ * @param argv      指向参数指针数组，每个元素是一个以 '\0' 结尾的字符串
+ *
+ * @return 写入的请求长度；缓冲区不足或参数非法时返回 -1。
+ *
+ * @note 该函数支持参数中包含任意字节（包括空格、换行等），因为长度前缀
+ *       保证了数据的边界，这是 RESP 协议的二进制安全特性。
+ */
+int build_resp_request(char* buf, size_t capacity, const char* cmd, int argc, const char* argv[]) {
+    size_t offset = 0;
+
+#define APPEND_FORMAT(...)                                                                         \
+    do {                                                                                           \
+        int written = snprintf(buf + offset, capacity - offset, __VA_ARGS__);                      \
+        if (written < 0 || (size_t)written >= capacity - offset)                                   \
+            return -1;                                                                             \
+        offset += (size_t)written;                                                                 \
+    } while (0)
+
+    APPEND_FORMAT("*%d\r\n", argc + 1); // +1 for command
+    APPEND_FORMAT("$%zu\r\n%s\r\n", strlen(cmd), cmd);
+    for (int i = 0; i < argc; i++) {
+        APPEND_FORMAT("$%zu\r\n%s\r\n", strlen(argv[i]), argv[i]);
+    }
+
+#undef APPEND_FORMAT
+    return (int)offset;
+}
+
+/**
+ * @brief 打印一次统计的命令数、耗时与 QPS
+ *
+ * @param name      统计项名称，如 "AOF SAVE array SET"
+ * @param cmd_count 统计到的命令条数
+ * @param time_ms   统计到的累计耗时（毫秒）
+ */
+static void print_stats(const char* name, long long cmd_count, long long time_ms) {
+    long long safe_ms = time_ms > 0 ? time_ms : 1; // 避免除零
+    double qps = (double)cmd_count * 1000.0 / (double)safe_ms;
+    double avg_ms = cmd_count > 0 ? (double)time_ms / (double)cmd_count : 0.0;
+
+    printf("%s --> commands: %lld, time_used: %lld ms, qps: %.0f, avg: %.4f ms/cmd\n", name,
+           cmd_count, time_ms, qps, avg_ms);
+}
+
+void testcase(int connfd, const char* msg, const char* expected_pattern, const char* casename) {
+    if (!msg || !expected_pattern || !casename)
+        return;
+
+    if (send_msg(connfd, msg, strlen(msg)) != 0) {
+        printf("==> FAILED -> %s, send error\n", casename);
+        exit(1);
+    }
+
+    char result[MAX_MSG_LENGTH] = {0};
+    int result_length = recv_msg(connfd, result, MAX_MSG_LENGTH);
+    if (result_length < 0) {
+        printf("==> FAILED -> %s, receive error\n", casename);
+        exit(1);
+    }
+
+    if (strcmp(result, expected_pattern) == 0) {
+#if PRINT_PASS
+        printf("==> PASS ->  %s\n", casename);
+#endif
+    } else {
+        printf("==> FAILED -> %s, '%s' != '%s'\n", casename, result, expected_pattern);
+        exit(1);
+    }
+}
+
+int connect_tcpserver(const char* ip, unsigned short port) {
+
+    int connfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (connfd < 0) {
+        perror("socket");
+        return -1;
+    }
+
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(struct sockaddr_in));
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = inet_addr(ip);
+    server_addr.sin_port = htons(port);
+
+    if (0 != connect(connfd, (struct sockaddr*)&server_addr, sizeof(struct sockaddr_in))) {
+        perror("connect");
+        close(connfd);
+        return -1;
+    }
+    printf("connect %s on port %d, fd: %d\n", ip, port, connfd);
+
+    return connfd;
+}
+
+// 基准阶段只负责完成请求/响应往返，严格内容校验放到计时结束后。
+void benchmark_hash_inserts(int connfd) {
+    char req[REQ_BUF_SIZE];
+    char result[MAX_MSG_LENGTH] = {0};
+
+    for (int i = 0; i < SET_NUMS; i++) {
+        char key[32];
+        int len = sprintf(key, "Teacher%d", i);
+        key[len] = '\0';
+        char value[32];
+        len = sprintf(value, "King%d", i);
+        value[len] = '\0';
+        const char* args[] = {key, value};
+        if (build_resp_request(req, sizeof(req), "HSET", 2, args) < 0)
+            exit(1);
+
+        if (send_msg(connfd, req, strlen(req)) != 0) {
+            printf("==> FAILED -> HSET-Teacher, send error\n");
+            exit(1);
+        }
+        if (recv_msg(connfd, result, MAX_MSG_LENGTH) < 0) {
+            printf("==> FAILED -> HSET-Teacher, receive error\n");
+            exit(1);
+        }
+    }
+}
+
+void verify_hash_records(int connfd) {
+    char req[REQ_BUF_SIZE];
+    for (int i = 0; i < SET_NUMS; i++) {
+        char key[32];
+        int len = sprintf(key, "Teacher%d", i);
+        key[len] = '\0';
+        const char* args[] = {key};
+        if (build_resp_request(req, sizeof(req), "HGET", 1, args) < 0)
+            exit(1);
+
+        char expected[64];
+        snprintf(expected, sizeof(expected), "$%zu\r\nKing%d\r\n",
+                 strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
+        testcase(connfd, req, expected, "HGET-Teacher");
+    }
+}
+
+//   ./test 192.168.234.135  2000 1
+//   ./test 39.97.42.225 9999 1
+// 0: rbtree; 1: array; 2: hash; 3: skiptable
+int main(int argc, char* argv[]) {
+
+    if (argc != 3) {
+        printf("arg error\n");
+        return -1;
+    }
+
+    char* ip = argv[1];
+    unsigned short port = atoi(argv[2]);
+
+    int connfd = connect_tcpserver(ip, port);
+
+#if SAVE
+    printf("AOF SAVE: insert %d records, and recorded to AOF file\n", SET_NUMS);
+
+    struct timeval tv_begin, tv_end;
+    gettimeofday(&tv_begin, NULL);
+    benchmark_hash_inserts(connfd);
+    gettimeofday(&tv_end, NULL);
+    print_stats("AOF SAVE TOTAL", SET_NUMS, TIME_SUB_MS(tv_end, tv_begin));
+
+    printf("AOF SAVE: verify %d records after benchmark\n", SET_NUMS);
+    verify_hash_records(connfd);
+    printf("***AOF SAVE HASH VERIFY SUCCESS***\n");
+
+#else
+
+    printf("AOF AUTO LOAD: verify %d records restored at startup\n", SET_NUMS);
+
+    // 持久化数据由服务启动时自动加载，这里只统计验证读取命令。
+    struct timeval tv_begin, tv_end;
+    gettimeofday(&tv_begin, NULL);
+
+    verify_hash_records(connfd);
+
+    gettimeofday(&tv_end, NULL);
+    print_stats("AOF AUTO LOAD TOTAL", SET_NUMS, TIME_SUB_MS(tv_end, tv_begin));
+
+    printf("***AOF TEST SUCCESS***\n");
+
+#endif
+    return 0;
+}
+
+// 循环发送直到全部数据发出或失败。
+int send_all(int fd, const void* buffer, size_t length) {
+    const char* ptr = (const char*)buffer;
+    size_t sent = 0;
+    while (sent < length) {
+        ssize_t n = send(fd, ptr + sent, length - sent, 0);
+        if (n <= 0) {
+            if (n < 0 && errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        sent += (size_t)n;
+    }
+    return 0;
+}
+
+int send_msg(int connfd, const char* msg, int length) {
+    if (msg == NULL || length < 0) {
+        return -1;
+    }
+
+    uint32_t net_len = htonl((uint32_t)length);
+    size_t total_len = sizeof(net_len) + (size_t)length;
+
+    char stack_buf[512];
+    char* frame = stack_buf;
+    if (total_len > sizeof(stack_buf)) {
+        frame = (char*)malloc(total_len);
+        if (frame == NULL) {
+            return -1;
+        }
+    }
+
+    memcpy(frame, &net_len, sizeof(net_len));
+    if (length > 0) {
+        memcpy(frame + sizeof(net_len), msg, (size_t)length);
+    }
+
+    int rc = send_all(connfd, frame, total_len);
+    if (frame != stack_buf) {
+        free(frame);
+    }
+    return rc;
+}
+
+int recv_all(int fd, void* buffer, size_t length) {
+    char* ptr = (char*)buffer;
+    size_t received = 0;
+    while (received < length) {
+        ssize_t n = recv(fd, ptr + received, length - received, 0);
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n <= 0) {
+            return -1;
+        }
+        received += (size_t)n;
+    }
+    return 0;
+}
+
+int recv_msg(int connfd, char* msg, int length) {
+    if (msg == NULL || length < 0) {
+        return -1;
+    }
+
+    uint32_t net_len = 0;
+    if (recv_all(connfd, &net_len, sizeof(net_len)) != 0) {
+        return -1;
+    }
+    uint32_t data_len = ntohl(net_len);
+    if (data_len > (uint32_t)length) {
+        return -2;
+    }
+    if (recv_all(connfd, msg, data_len) != 0) {
+        return -1;
+    }
+
+    msg[data_len] = '\0';
+    return (int)data_len;
+}

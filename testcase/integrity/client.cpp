@@ -86,8 +86,12 @@ int main(int argc, char* argv[]) {
     }
 
     uint32_t frame_length = htonl((uint32_t)request.size());
-    if (send_all(fd, &frame_length, sizeof(frame_length)) != 0 ||
-        send_all(fd, request.data(), request.size()) != 0) {
+    std::string frame(sizeof(frame_length) + request.size(), '\0');
+    std::memcpy(&frame[0], &frame_length, sizeof(frame_length));
+    if (!request.empty()) {
+        std::memcpy(&frame[sizeof(frame_length)], request.data(), request.size());
+    }
+    if (send_all(fd, frame.data(), frame.size()) != 0) {
         std::perror("send");
         close(fd);
         return 1;

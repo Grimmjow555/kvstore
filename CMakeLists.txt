@@ -186,6 +186,8 @@ add_executable(rdb_save testcase/RDB/save.cpp)
 add_executable(rdb_load testcase/RDB/load.cpp)
 add_executable(aof_save testcase/AOF/save.cpp)
 add_executable(aof_load testcase/AOF/load.cpp)
+add_executable(aof_insert10w testcase/AOF/insert10w.cpp)
+add_executable(aof_insert10w_copy "testcase/AOF/insert10w copy.cpp")
 add_executable(get10w testcase/master-replica/get10w.cpp)
 add_executable(insert_after5w testcase/master-replica/insert_after5w.cpp)
 add_executable(insert_before5w testcase/master-replica/insert_before5w.cpp)
@@ -195,6 +197,7 @@ add_executable(memptest_pthread testcase/memorypool/memptest_pthread.cpp)
 add_executable(integrity_test testcase/integrity/test_integrity.cpp)
 add_executable(integrity_client testcase/integrity/client.cpp)
 add_executable(batchsend testcase/batchsend/batchsend.cpp)
+add_executable(batchsend_hash testcase/batchsend/batchsend_hash.cpp)
 add_executable(longdata testcase/longdata/longdata.cpp)
 add_executable(echo_save testcase/ECHO/echo.cpp)
 
@@ -202,6 +205,8 @@ set_target_properties(rdb_save PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINA
 set_target_properties(rdb_load PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/RDB" OUTPUT_NAME load)
 set_target_properties(aof_save PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/AOF" OUTPUT_NAME save)
 set_target_properties(aof_load PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/AOF" OUTPUT_NAME load)
+set_target_properties(aof_insert10w PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/AOF" OUTPUT_NAME insert10w)
+set_target_properties(aof_insert10w_copy PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/AOF" OUTPUT_NAME insert10w_copy)
 set_target_properties(get10w insert_after5w insert_before5w
     PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/master-replica"
 )
@@ -215,7 +220,7 @@ set_target_properties(integrity_test
 set_target_properties(integrity_client
     PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/integrity"
 )
-set_target_properties(batchsend
+set_target_properties(batchsend batchsend_hash
     PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/batchsend"
 )
 set_target_properties(longdata

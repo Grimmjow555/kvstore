@@ -18,7 +18,7 @@ int recv_msg(int connfd, char* msg, int length);
 #define REQ_BUF_SIZE 256
 #define TIME_SUB_MS(tv1, tv2)                                                                      \
     ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
-#define SET_NUMS 100000
+#define SET_NUMS 400000
 #define PRINT_PASS 0
 
 // 与 testcase/AOF/save.cpp 使用相同的 RESP 请求构造方式和四引擎数据规模。
@@ -224,10 +224,10 @@ int main(int argc, char* argv[]) {
     struct timeval tv_begin, tv_end;
     gettimeofday(&tv_begin, NULL);
 
-    rbtree_testcase(connfd);
-    array_testcase(connfd);
+    // rbtree_testcase(connfd);
+    // array_testcase(connfd);
     hash_testcase(connfd);
-    skiptable_testcase(connfd);
+    // skiptable_testcase(connfd);
 
     gettimeofday(&tv_end, NULL);
     print_stats("ECHO TOTAL", SET_NUMS, TIME_SUB_MS(tv_end, tv_begin));

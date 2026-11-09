@@ -42,6 +42,30 @@ build/testcase/...
 | `run_sync_reverse_inc.sh` | 是 | 用本地 mock RDMA 验证 Replica 主动连接 Agent 及断线重同步 |
 | `run_sync_faults.sh` | 是 | 主从同步异常和恢复 |
 
+### 协议帧单次发送回归
+
+`test_frame_send_once.py` 使用本地 mock 服务和 `strace` 检查
+`batchsend`、`batchsend_hash`、`integrity_client` 是否正确地把“4 字节长度头 +
+RESP 负载”放在同一次 socket 发送中。分两次发送会在部分 TCP 环境中触发 Nagle
+和延迟 ACK，使每个批次额外等待约 40 ms。
+
+```bash
+python3 testcase/test_frame_send_once.py
+```
+
+测试依赖已构建的三个客户端，并需要系统中提供 `strace`。
+
+### Hash 引擎回归
+
+`hash_engine_test` 直接使用生产 hash 存储引擎和 slab 分配器，验证动态扩容、
+75% 负载因子、FNV-1a 分布、重复键、修改、删除、重新插入，以及节点和扩容分配
+失败后的清理语义。
+
+```bash
+cmake --build build --target hash_engine_test -j"$(nproc)"
+./build/testcase/hash/hash_engine_test
+```
+
 `ebpf-agent` 的独立配置测试目标：
 
 ```bash

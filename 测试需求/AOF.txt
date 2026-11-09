@@ -1,0 +1,79 @@
+测试echo，关闭增量持久化，开启增量持久化, redis的aof关闭，redis的aof开启的qps
+
+增量持久化	
+10w条HASH插入                   qps
+ECHO	                        10553
+关闭AOF	                        8108
+开启AOF	                        7018
+redis关闭AOF                    10488
+redis开启AOF                    9208
+
+
+redis关闭AOF
+
+REDIS_OFF_DIR=$(mktemp -d /tmp/redis-aof-off.XXXXXX)
+
+redis-server \
+    --port 16379 \
+    --bind 127.0.0.1 \
+    --dir "$REDIS_OFF_DIR" \
+    --save "" \
+    --appendonly no \
+    --daemonize yes \
+    --pidfile "$REDIS_OFF_DIR/redis.pid" \
+    --logfile "$REDIS_OFF_DIR/redis.log"
+
+until redis-cli -p 16379 PING >/dev/null 2>&1; do
+    sleep 0.1
+done
+
+redis-cli -p 16379 FLUSHALL
+
+redis-benchmark \
+    -h 127.0.0.1 \
+    -p 16379 \
+    -n 100000 \
+    -c 1 \
+    -P 1 \
+    -k 1 \
+    -r 100000 \
+    HSET bench:hash Teacher__rand_int__ King__rand_int__
+
+redis-cli -p 16379 HLEN bench:hash
+redis-cli -p 16379 OBJECT ENCODING bench:hash
+redis-cli -p 16379 SHUTDOWN NOSAVE
+
+
+redis开启AOF
+
+REDIS_ON_DIR=$(mktemp -d /tmp/redis-aof-on.XXXXXX)
+
+redis-server \
+    --port 16380 \
+    --bind 127.0.0.1 \
+    --dir "$REDIS_ON_DIR" \
+    --save "" \
+    --appendonly yes \
+    --appendfsync everysec \
+    --daemonize yes \
+    --pidfile "$REDIS_ON_DIR/redis.pid" \
+    --logfile "$REDIS_ON_DIR/redis.log"
+
+until redis-cli -p 16380 PING >/dev/null 2>&1; do
+    sleep 0.1
+done
+
+redis-cli -p 16380 FLUSHALL
+
+redis-benchmark \
+    -h 127.0.0.1 \
+    -p 16380 \
+    -n 100000 \
+    -c 1 \
+    -P 1 \
+    -k 1 \
+    -r 100000 \
+    HSET bench:hash Teacher__rand_int__ King__rand_int__
+
+redis-cli -p 16380 HLEN bench:hash
+redis-cli -p 16380 OBJECT ENCODING bench:hash

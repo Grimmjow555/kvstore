@@ -3,8 +3,8 @@
 #include "kvs_integrity.h"
 #include "kvs_io_uring.h"
 #include "kvs_runtime.h"
-#include <climits>
 #include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -18,7 +18,7 @@ extern int kvs_filter_protocol(char* tokens[], int count, char* response, int re
 
 #if AOF_ENABLE
 
-#define KVS_AOF_FLUSH_THRESHOLD 1024
+#define KVS_AOF_FLUSH_THRESHOLD 1024 * 10
 #define KVS_AOF_HEADER "#KVSAOF02\r\n"
 #define KVS_AOF_HEADER_SIZE (sizeof(KVS_AOF_HEADER) - 1)
 #define KVS_AOF_CHECKSUM_SIZE (KVS_SHA256_HEX_SIZE + 2)
@@ -381,8 +381,7 @@ int kvs_aof_replay(const char* filename) {
         }
 
         unsigned char actual_digest[KVS_SHA256_DIGEST_SIZE];
-        if (kvs_sha256_chain_digest(chain_digest, command, (size_t)consumed,
-                                    actual_digest) != 0) {
+        if (kvs_sha256_chain_digest(chain_digest, command, (size_t)consumed, actual_digest) != 0) {
             for (int i = 0; i < argc; ++i) {
                 free(argv[i]);
             }

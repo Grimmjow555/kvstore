@@ -130,10 +130,12 @@ bool send_frame(int fd, const std::string& payload) {
     }
 
     uint32_t network_length = htonl(static_cast<uint32_t>(payload.size()));
-    if (!send_all(fd, &network_length, sizeof(network_length))) {
-        return false;
+    std::string frame(sizeof(network_length) + payload.size(), '\0');
+    std::memcpy(&frame[0], &network_length, sizeof(network_length));
+    if (!payload.empty()) {
+        std::memcpy(&frame[sizeof(network_length)], payload.data(), payload.size());
     }
-    return payload.empty() || send_all(fd, payload.data(), payload.size());
+    return send_all(fd, frame.data(), frame.size());
 }
 
 bool recv_frame(int fd, std::string* payload) {

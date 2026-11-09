@@ -1,12 +1,19 @@
 #pragma once
 
+#include <stdint.h>
+
 #define ENABLE_HASH 1
 
 #if ENABLE_HASH
 
 #define MAX_KEY_LEN 128
 #define MAX_VALUE_LEN 512
-#define MAX_TABLE_SIZE 1024
+#define KVS_HASH_INITIAL_TABLE_SIZE 1024
+#define KVS_HASH_MAX_LOAD_NUMERATOR 3
+#define KVS_HASH_MAX_LOAD_DENOMINATOR 4
+
+// 兼容旧代码的初始桶数别名；运行期表大小由 max_slots 动态决定。
+#define MAX_TABLE_SIZE KVS_HASH_INITIAL_TABLE_SIZE
 
 #define ENABLE_KEY_POINTER 1
 
@@ -18,6 +25,7 @@ typedef struct hashnode_s {
     char key[MAX_KEY_LEN];
     char value[MAX_VALUE_LEN];
 #endif
+    uint32_t hash;
     struct hashnode_s* next;
 
 } hashnode_t;
