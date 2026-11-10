@@ -14,7 +14,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-extern int kvs_filter_protocol(char* tokens[], int count, char* response, int response_size);
+extern int kvs_filter_protocol(int client_fd, char* tokens[], int count, char* response,
+                               int response_size);
 
 #if AOF_ENABLE
 
@@ -416,7 +417,7 @@ int kvs_aof_replay(const char* filename) {
         // 执行命令
         char response[128];
 
-        kvs_filter_protocol(argv, argc, response, sizeof(response));
+        kvs_filter_protocol(-1, argv, argc, response, sizeof(response));
 
         for (int i = 0; i < argc; ++i) {
             free(argv[i]);

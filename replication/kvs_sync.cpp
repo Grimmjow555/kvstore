@@ -39,12 +39,15 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <atomic>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 extern char** environ;
 
 // 增量回放复用命令分发入口（同 kvs_replication.cpp 的做法）。
-extern int kvs_protocol(char* msg, int length, char* response, int response_size);
+extern int kvs_protocol(int client_fd, char* msg, int length, char* response, int response_size);
 
 // 控制通道沿用外层「4 字节网络序长度 + 负载」帧格式。
 // 连接 Master 的超时。
@@ -57,18 +60,31 @@ extern int kvs_protocol(char* msg, int length, char* response, int response_size
 #define KVS_SYNC_BACKOFF_MIN_MS 200
 #define KVS_SYNC_BACKOFF_MAX_MS 5000
 
-// 主从全量同步的临时快照文件。与 RDB/AOF 一样固定在运行目录的 ../data/ 下，
-// 不通过配置文件暴露（从 build/ 启动时即 data/kvstore.sync.tmp）。
-//   Master：发布 <path>；Replica 的 rdma-server 落到 <path>.recv；
-//   就绪信号为 <path>.ready，子进程日志为 <path>.rdma-{client,server}.log。
-static const char kSyncTmpFile[] = "../data/kvstore.sync.tmp";
-
 static kvs_role_t g_sync_role = KVS_ROLE_MASTER;
 
-// Master 侧：是否有一次全量同步正在进行（用于拒绝重复 SYNC）。
-static volatile int g_sync_in_progress = 0;
-// Master 派生的 rdma-client 进程；-1 表示当前没有。
-static pid_t g_rdma_client_pid = -1;
+enum master_session_state_t {
+    MASTER_SESSION_PREPARING = 0,
+    MASTER_SESSION_AWAITING_FINISHED = 1,
+};
+
+struct master_session_t {
+    std::string session_id;
+    int control_fd;
+    char tmp_path[512];
+    pid_t rdma_client_pid;
+    unsigned long long deadline_ms;
+    master_session_state_t state;
+};
+
+// Master 侧每个全量同步请求一个独立会话。会话表只保存尚未 SYNC FINISHED 的
+// 全量会话；进入增量阶段后由 Agent 的目标表接管。
+static std::unordered_map<std::string, master_session_t> g_master_sessions;
+static std::unordered_map<int, std::string> g_control_sessions;
+static pthread_mutex_t g_master_sessions_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_master_sessions_cond = PTHREAD_COND_INITIALIZER;
+static std::atomic<unsigned long long> g_next_session_id(1);
+static volatile int g_session_reaper_running = 0;
+static pthread_t g_session_reaper_tid;
 
 // Replica 侧状态。
 static pthread_t g_sync_tid;
@@ -115,14 +131,13 @@ static void sync_sleep_interruptible(int ms, volatile int* running) {
     }
 }
 
-// 发送一条单 token 的 RESP 命令（例如 SYNC / SYNC FINISHED）。
-static int sync_send_command(int fd, const char* cmd) {
-    char payload[64];
-    int n = snprintf(payload, sizeof(payload), "*1\r\n$%zu\r\n%s\r\n", strlen(cmd), cmd);
-    if (n <= 0 || (size_t)n >= sizeof(payload)) {
+static int sync_send_commands(int fd, const char* const argv[], int argc) {
+    char payload[256];
+    size_t payload_len = 0;
+    if (kvs_repl_build_resp_array(argv, argc, payload, sizeof(payload), &payload_len) != 0) {
         return -1;
     }
-    return kvs_net_send_frame(fd, payload, (size_t)n, KVS_SYNC_IO_TIMEOUT_MS);
+    return kvs_net_send_frame(fd, payload, payload_len, KVS_SYNC_IO_TIMEOUT_MS);
 }
 
 // Replica 在 SYNC 中上报本次可访问的 RDMA endpoint。默认取控制连接使用的
@@ -293,11 +308,19 @@ static int sync_write_tmp_atomic(const char* path, const void* data, size_t len)
     return 0;
 }
 
+static void sync_master_tmp_path(const char* session_id, char* out, size_t out_size) {
+    snprintf(out, out_size, "../data/kvstore.sync.%s.tmp", session_id);
+}
+
 // 派生 rdma-client 把 .tmp 搬到 Replica。log 文件与 .tmp 同目录，便于排查。
-static int sync_spawn_rdma_client(const char* tmp_path, const char* peer_ip, int peer_port) {
+static int sync_spawn_rdma_client(const char* tmp_path, const char* peer_ip, int peer_port,
+                                  pid_t* out_pid) {
     char port_str[16];
     char timeout_str[16];
     char log_path[512];
+    if (out_pid == NULL) {
+        return -1;
+    }
     snprintf(port_str, sizeof(port_str), "%d", peer_port);
     snprintf(timeout_str, sizeof(timeout_str), "%d", kvs_config_rdma_transfer_timeout_ms());
     snprintf(log_path, sizeof(log_path), "%s.rdma-client.log", tmp_path);
@@ -313,27 +336,99 @@ static int sync_spawn_rdma_client(const char* tmp_path, const char* peer_ip, int
                     timeout_str,
                     NULL};
 
-    if (sync_spawn_child(kvs_config_rdma_client_bin(), argv, log_path, &g_rdma_client_pid) != 0) {
+    if (sync_spawn_child(kvs_config_rdma_client_bin(), argv, log_path, out_pid) != 0) {
         return -1;
     }
     kvs_log(KVS_LOG_INFO, "[SYNC] rdma-client spawned (pid=%d) -> %s:%d, log=%s",
-            (int)g_rdma_client_pid, peer_ip, peer_port, log_path);
+            (int)*out_pid, peer_ip, peer_port, log_path);
     return 0;
 }
 
-int kvs_sync_handle_sync(char* tokens[], int count, char* response, int response_size) {
+static void sync_remove_session_files(const char* tmp_path) {
+    char partial[768];
+    unlink(tmp_path);
+    snprintf(partial, sizeof(partial), "%s.partial", tmp_path);
+    unlink(partial);
+}
+
+// 发布 ABORT 后回收单个会话。调用者不得持有会话锁或存储锁。
+static void sync_abort_master_session(const std::string& session_id, const char* reason) {
+    master_session_t session;
+    bool found = false;
+    pthread_mutex_lock(&g_master_sessions_mutex);
+    std::unordered_map<std::string, master_session_t>::iterator it =
+        g_master_sessions.find(session_id);
+    if (it != g_master_sessions.end()) {
+        session = it->second;
+        g_master_sessions.erase(it);
+        std::unordered_map<int, std::string>::iterator fd_it =
+            g_control_sessions.find(session.control_fd);
+        if (fd_it != g_control_sessions.end() && fd_it->second == session_id) {
+            g_control_sessions.erase(fd_it);
+        }
+        found = true;
+    }
+    pthread_cond_broadcast(&g_master_sessions_cond);
+    pthread_mutex_unlock(&g_master_sessions_mutex);
+    if (!found) {
+        return;
+    }
+
+    char* abort_args[] = {(char*)"SYNC ABORT", (char*)session_id.c_str()};
+    kvs_data_lock();
+    kvs_ebpf_notify_command(2, abort_args);
+    kvs_data_unlock();
+
+    sync_kill_child(&session.rdma_client_pid);
+    sync_remove_session_files(session.tmp_path);
+    kvs_log(KVS_LOG_WARN, "[SYNC] session %s aborted: %s", session_id.c_str(), reason);
+}
+
+static void sync_abort_all_master_sessions(const char* reason) {
+    std::vector<std::string> ids;
+    pthread_mutex_lock(&g_master_sessions_mutex);
+    for (std::unordered_map<std::string, master_session_t>::const_iterator it =
+             g_master_sessions.begin();
+         it != g_master_sessions.end(); ++it) {
+        ids.push_back(it->first);
+    }
+    pthread_mutex_unlock(&g_master_sessions_mutex);
+    for (size_t i = 0; i < ids.size(); ++i) {
+        sync_abort_master_session(ids[i], reason);
+    }
+}
+
+static void* sync_session_reaper_thread(void*) {
+    pthread_mutex_lock(&g_master_sessions_mutex);
+    while (g_session_reaper_running) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 1;
+        pthread_cond_timedwait(&g_master_sessions_cond, &g_master_sessions_mutex, &ts);
+
+        unsigned long long now = sync_now_ms();
+        std::vector<std::string> expired;
+        for (std::unordered_map<std::string, master_session_t>::const_iterator it =
+                 g_master_sessions.begin();
+             it != g_master_sessions.end(); ++it) {
+            if (it->second.deadline_ms <= now) {
+                expired.push_back(it->first);
+            }
+        }
+        pthread_mutex_unlock(&g_master_sessions_mutex);
+        for (size_t i = 0; i < expired.size(); ++i) {
+            sync_abort_master_session(expired[i], "session timeout");
+        }
+        pthread_mutex_lock(&g_master_sessions_mutex);
+    }
+    pthread_mutex_unlock(&g_master_sessions_mutex);
+    return NULL;
+}
+
+int kvs_sync_handle_sync(int client_fd, char* tokens[], int count, char* response,
+                         int response_size) {
     if (g_sync_role != KVS_ROLE_MASTER) {
         return snprintf(response, response_size, "-ERROR\r\n");
-    }
-    if (g_sync_in_progress) {
-        // 上一次同步没能走到 SYNC FINISHED（例如 rdma-client 传输失败、Replica
-        // 中途退出）。单从机设计下，再次收到 SYNC 就说明对端在重试：回收上一次的
-        // 客户端与残留文件，用这一次重新开始，避免「卡住后再也同步不了」。
-        kvs_log(KVS_LOG_WARN,
-                "[SYNC] previous sync did not finish; superseding it with a new attempt");
-        sync_kill_child(&g_rdma_client_pid);
-        unlink(kSyncTmpFile);
-        g_sync_in_progress = 0;
     }
 
     // eBPF 强制（设计 D3）：采集进程没注册就不做全量同步。
@@ -345,13 +440,7 @@ int kvs_sync_handle_sync(char* tokens[], int count, char* response, int response
 
     char replica_ip[INET_ADDRSTRLEN] = {0};
     int replica_port = 0;
-    if (count == 1) {
-        snprintf(replica_ip, sizeof(replica_ip), "%s", kvs_config_replica_host());
-        replica_port = kvs_config_rdma_port();
-        kvs_log(KVS_LOG_WARN,
-                "[SYNC] legacy SYNC without advertised endpoint; using replica_host=%s:%d",
-                replica_ip, replica_port);
-    } else if (count == 3 && tokens != NULL && tokens[1] != NULL && tokens[2] != NULL) {
+    if (count == 3 && tokens != NULL && tokens[1] != NULL && tokens[2] != NULL) {
         struct in_addr parsed_address;
         char* end = NULL;
         long parsed_port = strtol(tokens[2], &end, 10);
@@ -369,60 +458,120 @@ int kvs_sync_handle_sync(char* tokens[], int count, char* response, int response
         return snprintf(response, response_size, "-ERROR\r\n");
     }
 
-    // (1) 先把「同步开始」写进有序采集流：agent 读到这条记录后进入 CACHING，
-    //     之后落地的写命令都会被缓存。该调用在存储锁内、且在序列化之前，
-    //     因此缓存窗口必然覆盖整个快照窗口（设计 §7.1）。
-    char* sync_token[1] = {(char*)"SYNC"};
-    kvs_ebpf_notify_command(1, sync_token);
+    if (client_fd < 0) {
+        return snprintf(response, response_size, "-ERROR\r\n");
+    }
 
+    master_session_t session;
+    char session_id[KVS_REPL_SESSION_ID_SIZE + 1] = {0};
+    pthread_mutex_lock(&g_master_sessions_mutex);
+    if (g_master_sessions.size() >= (size_t)kvs_config_max_replicas()) {
+        pthread_mutex_unlock(&g_master_sessions_mutex);
+        return snprintf(response, response_size, "-ERROR\r\n");
+    }
+    do {
+        unsigned long long candidate = g_next_session_id.fetch_add(1);
+        if (kvs_repl_format_session_id(candidate, session_id, sizeof(session_id)) != 0) {
+            pthread_mutex_unlock(&g_master_sessions_mutex);
+            return snprintf(response, response_size, "-ERROR\r\n");
+        }
+    } while (g_master_sessions.find(session_id) != g_master_sessions.end());
+
+    session.session_id = session_id;
+    session.control_fd = client_fd;
+    session.rdma_client_pid = -1;
+    session.deadline_ms =
+        sync_now_ms() + (unsigned long long)kvs_config_sync_session_timeout_ms();
+    session.state = MASTER_SESSION_PREPARING;
+    sync_master_tmp_path(session_id, session.tmp_path, sizeof(session.tmp_path));
+    g_master_sessions.insert(std::make_pair(session.session_id, session));
+    g_control_sessions[client_fd] = session.session_id;
+    pthread_mutex_unlock(&g_master_sessions_mutex);
+
+    // SYNC 事件与序列化在同一存储锁窗口内，只影响 session_id 对应目标。
+    char* sync_token[] = {(char*)"SYNC", session_id};
     char* blob = NULL;
     size_t blob_len = 0;
-    if (kvs_snapshot_serialize(&blob, &blob_len) != 0 || blob == NULL) {
+    kvs_data_lock();
+    kvs_ebpf_notify_command(2, sync_token);
+    int serialize_rc = kvs_snapshot_serialize(&blob, &blob_len);
+    kvs_data_unlock();
+    if (serialize_rc != 0 || blob == NULL) {
         kvs_log(KVS_LOG_ERROR, "[SYNC] snapshot serialize failed");
         free(blob);
+        sync_abort_master_session(session_id, "snapshot serialize failed");
         return snprintf(response, response_size, "-ERROR\r\n");
     }
 
-    const char* path = kSyncTmpFile;
-    int rc = sync_write_tmp_atomic(path, blob, blob_len);
+    int rc = sync_write_tmp_atomic(session.tmp_path, blob, blob_len);
     free(blob);
     if (rc != 0) {
-        kvs_log(KVS_LOG_ERROR, "[SYNC] write snapshot %s failed", path);
+        kvs_log(KVS_LOG_ERROR, "[SYNC] write snapshot %s failed", session.tmp_path);
+        sync_abort_master_session(session_id, "snapshot write failed");
         return snprintf(response, response_size, "-ERROR\r\n");
     }
-    kvs_log(KVS_LOG_INFO, "[SYNC] snapshot written: %s (%zu bytes)", path, blob_len);
+    kvs_log(KVS_LOG_INFO, "[SYNC] session %s snapshot written: %s (%zu bytes)", session_id,
+            session.tmp_path, blob_len);
 
-    // 阶段 2：全量搬运交给独立进程。派生失败说明这次同步无法完成，直接回 -ERROR，
-    // 让 Replica 重试，避免留下一个永远等不到文件的半成品状态。
-    if (sync_spawn_rdma_client(path, replica_ip, replica_port) != 0) {
-        unlink(path);
+    pid_t child_pid = -1;
+    if (sync_spawn_rdma_client(session.tmp_path, replica_ip, replica_port, &child_pid) != 0) {
+        sync_abort_master_session(session_id, "rdma-client spawn failed");
         return snprintf(response, response_size, "-ERROR\r\n");
     }
 
-    g_sync_in_progress = 1;
-    return snprintf(response, response_size, "+OK\r\n");
+    pthread_mutex_lock(&g_master_sessions_mutex);
+    std::unordered_map<std::string, master_session_t>::iterator active =
+        g_master_sessions.find(session_id);
+    if (active == g_master_sessions.end()) {
+        pthread_mutex_unlock(&g_master_sessions_mutex);
+        sync_kill_child(&child_pid);
+        sync_remove_session_files(session.tmp_path);
+        return snprintf(response, response_size, "-ERROR\r\n");
+    }
+    active->second.rdma_client_pid = child_pid;
+    active->second.state = MASTER_SESSION_AWAITING_FINISHED;
+    pthread_mutex_unlock(&g_master_sessions_mutex);
+    return snprintf(response, response_size, "+OK %s\r\n", session_id);
 }
 
-int kvs_sync_handle_sync_finished(char* response, int response_size) {
+int kvs_sync_handle_sync_finished(int client_fd, char* tokens[], int count, char* response,
+                                  int response_size) {
     if (g_sync_role != KVS_ROLE_MASTER) {
         return snprintf(response, response_size, "-ERROR\r\n");
     }
-
-    // 先把「同步结束」写进同一条有序流：agent 读到后会冲刷缓存并转入实时转发。
-    // Replica 只有在快照已加载完之后才会发这条命令，因此缓存命令必然落在
-    // 快照之后，顺序正确。
-    char* done_token[1] = {(char*)"SYNC FINISHED"};
-    kvs_ebpf_notify_command(1, done_token);
-
-    // 回收 rdma-client：正常情况下它已经发完并退出，这里只是收尸。
-    sync_kill_child(&g_rdma_client_pid);
-
-    const char* path = kSyncTmpFile;
-    if (unlink(path) != 0 && errno != ENOENT) {
-        kvs_log(KVS_LOG_WARN, "[SYNC] unlink %s failed: %s", path, strerror(errno));
+    if (tokens == NULL || count != 2 || !kvs_repl_validate_session_id(tokens[1])) {
+        return snprintf(response, response_size, "-ERROR\r\n");
     }
-    g_sync_in_progress = 0;
-    kvs_log(KVS_LOG_INFO, "[SYNC] sync finished, rdma-client released and %s removed", path);
+
+    master_session_t session;
+    pthread_mutex_lock(&g_master_sessions_mutex);
+    std::unordered_map<std::string, master_session_t>::iterator it =
+        g_master_sessions.find(tokens[1]);
+    if (it == g_master_sessions.end() ||
+        (client_fd >= 0 && it->second.control_fd != client_fd) ||
+        it->second.state != MASTER_SESSION_AWAITING_FINISHED) {
+        pthread_mutex_unlock(&g_master_sessions_mutex);
+        return snprintf(response, response_size, "-ERROR\r\n");
+    }
+    session = it->second;
+    g_master_sessions.erase(it);
+    std::unordered_map<int, std::string>::iterator fd_it =
+        g_control_sessions.find(session.control_fd);
+    if (fd_it != g_control_sessions.end() && fd_it->second == session.session_id) {
+        g_control_sessions.erase(fd_it);
+    }
+    pthread_cond_broadcast(&g_master_sessions_cond);
+    pthread_mutex_unlock(&g_master_sessions_mutex);
+
+    char* done_token[] = {(char*)"SYNC FINISHED", (char*)session.session_id.c_str()};
+    kvs_data_lock();
+    kvs_ebpf_notify_command(2, done_token);
+    kvs_data_unlock();
+
+    sync_kill_child(&session.rdma_client_pid);
+    sync_remove_session_files(session.tmp_path);
+    kvs_log(KVS_LOG_INFO, "[SYNC] session %s finished, rdma-client released and %s removed",
+            session.session_id.c_str(), session.tmp_path);
     return snprintf(response, response_size, "+OK\r\n");
 }
 
@@ -430,27 +579,18 @@ int kvs_sync_handle_sync_finished(char* response, int response_size) {
 
 // ==================== 采集进程注册 / 增量通道（阶段 3） ====================
 
-static int sync_handshake_matches(const char* data, int length, const char* token) {
-    if (data == NULL || token == NULL || length <= 0) {
-        return 0;
-    }
-    size_t token_len = strlen(token);
-    return (size_t)length == token_len && memcmp(data, token, token_len) == 0;
-}
-
 int kvs_sync_ebpf_armed(void) { return g_ebpf_agent_fd >= 0; }
 
 int kvs_sync_accept_ebpf_handshake(int fd, const char* data, int length) {
     if (g_sync_role != KVS_ROLE_MASTER || fd < 0) {
         return 0;
     }
-    if (!sync_handshake_matches(data, length, KVS_REPL_HANDSHAKE_EBPF)) {
+    if (kvs_repl_parse_ebpf_handshake(data, length) != 0) {
         return 0;
     }
     if (g_ebpf_agent_fd >= 0 && g_ebpf_agent_fd != fd) {
-        // 单从机/单采集进程设计：后到的连接顶替前一个，前一个失联通常意味着
-        // agent 重启过，这里以最新注册为准。
         kvs_log(KVS_LOG_WARN, "[SYNC] ebpf-agent re-registered: fd %d -> %d", g_ebpf_agent_fd, fd);
+        sync_abort_all_master_sessions("ebpf-agent re-registered");
     }
     __atomic_store_n(&g_ebpf_agent_fd, fd, __ATOMIC_RELEASE);
     // 注册之前的记录对本次同步没有意义；开启采集并清空旧记录，
@@ -502,7 +642,7 @@ static void sync_replay_increment(int fd, char* payload, int length) {
     static unsigned long long replayed = 0;
     char response[256] = {0};
     kvs_replication_set_replaying(1);
-    kvs_protocol(payload, length, response, sizeof(response));
+    kvs_protocol(-1, payload, length, response, sizeof(response));
     kvs_replication_set_replaying(0);
     if (++replayed % 5000 == 0) {
         kvs_log(KVS_LOG_INFO, "[SYNC] replayed %llu increment command(s)", replayed);
@@ -543,14 +683,18 @@ static void* sync_increment_reader_thread(void* argument) {
     return NULL;
 }
 
-static int sync_connect_increment_channel() {
+static int sync_connect_increment_channel(const char* session_id) {
+    char payload[256];
+    size_t payload_len = 0;
+    if (kvs_repl_build_repl_inc(session_id, payload, sizeof(payload), &payload_len) != 0) {
+        return -1;
+    }
     int fd = kvs_net_connect(g_master_ip, g_agent_port, KVS_SYNC_CONNECT_TIMEOUT_MS);
     if (fd < 0) {
         kvs_log(KVS_LOG_WARN, "[SYNC] connect agent %s:%d failed", g_master_ip, g_agent_port);
         return -1;
     }
-    if (kvs_net_send_frame(fd, KVS_REPL_HANDSHAKE_REPL_INC,
-                           strlen(KVS_REPL_HANDSHAKE_REPL_INC), KVS_SYNC_IO_TIMEOUT_MS) != 0 ||
+    if (kvs_net_send_frame(fd, payload, payload_len, KVS_SYNC_IO_TIMEOUT_MS) != 0 ||
         kvs_net_recv_frame_ok(fd, KVS_SYNC_IO_TIMEOUT_MS) != 1) {
         kvs_log(KVS_LOG_WARN, "[SYNC] agent rejected REPL_INC handshake");
         close(fd);
@@ -606,6 +750,19 @@ void kvs_sync_forget_fd(int fd) {
         __atomic_store_n(&g_ebpf_agent_fd, -1, __ATOMIC_RELEASE);
         kvs_ebpf_capture_enable(0);
         kvs_log(KVS_LOG_WARN, "[SYNC] ebpf-agent disconnected (fd=%d), SYNC disabled", fd);
+        sync_abort_all_master_sessions("ebpf-agent disconnected");
+        return;
+    }
+
+    std::string session_id;
+    pthread_mutex_lock(&g_master_sessions_mutex);
+    std::unordered_map<int, std::string>::iterator it = g_control_sessions.find(fd);
+    if (it != g_control_sessions.end()) {
+        session_id = it->second;
+    }
+    pthread_mutex_unlock(&g_master_sessions_mutex);
+    if (!session_id.empty()) {
+        sync_abort_master_session(session_id, "control connection closed");
     }
 }
 
@@ -635,14 +792,20 @@ int kvs_sync_wait_increment(int wait_connected, int timeout_ms) {
     return 0;
 }
 
-// Replica 侧的本地接收路径：与 Master 的发布路径区分开，避免单机验证时两者
-// 指向同一个文件。Master 写 <kSyncTmpFile>，rdma-server 写 <kSyncTmpFile>.recv。
-static void sync_recv_path(char* out, size_t out_size) {
-    snprintf(out, out_size, "%s.recv", kSyncTmpFile);
+// Replica 在收到 Master 会话 ID 之前必须先启动 RDMA 接收端，因此接收中的
+// 临时文件按控制连接 fd 隔离；收到会话 ID 后再改名为会话文件并校验加载。
+static void sync_recv_base_path(int control_fd, char* out, size_t out_size) {
+    snprintf(out, out_size, "../data/kvstore.sync.replica.%d.%d.tmp.recv", (int)getpid(),
+             control_fd);
 }
 
-static void sync_ready_path(char* out, size_t out_size) {
-    snprintf(out, out_size, "%s.ready", kSyncTmpFile);
+static void sync_ready_path(int control_fd, char* out, size_t out_size) {
+    snprintf(out, out_size, "../data/kvstore.sync.replica.%d.%d.ready", (int)getpid(),
+             control_fd);
+}
+
+static void sync_recv_session_path(const char* session_id, char* out, size_t out_size) {
+    snprintf(out, out_size, "../data/kvstore.sync.%s.tmp.recv", session_id);
 }
 
 static int sync_path_exists(const char* path) {
@@ -651,15 +814,17 @@ static int sync_path_exists(const char* path) {
 }
 
 // 派生 rdma-server 并等它开始监听（就绪文件出现）。
-static int sync_spawn_rdma_server() {
+static int sync_spawn_rdma_server(int control_fd) {
     char recv_path[512];
     char ready_path[512];
     char log_path[512];
     char port_str[16];
     char timeout_str[16];
-    sync_recv_path(recv_path, sizeof(recv_path));
-    sync_ready_path(ready_path, sizeof(ready_path));
-    snprintf(log_path, sizeof(log_path), "%s.rdma-server.log", kSyncTmpFile);
+    sync_recv_base_path(control_fd, recv_path, sizeof(recv_path));
+    sync_ready_path(control_fd, ready_path, sizeof(ready_path));
+    snprintf(log_path, sizeof(log_path),
+             "../data/kvstore.sync.replica.%d.%d.rdma-server.log", (int)getpid(),
+             control_fd);
     snprintf(port_str, sizeof(port_str), "%d", kvs_config_rdma_port());
     snprintf(timeout_str, sizeof(timeout_str), "%d", kvs_config_rdma_transfer_timeout_ms());
 
@@ -712,24 +877,29 @@ static int sync_spawn_rdma_server() {
 // 一次完整的 Replica 侧全量同步。成功返回 0。
 static int sync_run_replica_once(int fd) {
     char resp[256];
-    char recv_path[512];
+    char recv_base_path[512];
+    char recv_session_path[512] = {0};
     char ready_path[512];
     char log_path[512];
-    sync_recv_path(recv_path, sizeof(recv_path));
-    sync_ready_path(ready_path, sizeof(ready_path));
-    snprintf(log_path, sizeof(log_path), "%s.rdma-server.log", kSyncTmpFile);
+    char session_id[KVS_REPL_SESSION_ID_SIZE + 1] = {0};
+    sync_recv_base_path(fd, recv_base_path, sizeof(recv_base_path));
+    sync_ready_path(fd, ready_path, sizeof(ready_path));
+    snprintf(log_path, sizeof(log_path),
+             "../data/kvstore.sync.replica.%d.%d.rdma-server.log", (int)getpid(), fd);
 
     int rc = -1;
     int waited = 0;
     int load_rc = -1;
     int increment_fd = -1;
     bool increment_started = false;
+    bool received_renamed = false;
     char advertise_ip[INET_ADDRSTRLEN] = {0};
     int advertise_port = 0;
+    const char* finished_args[2] = {NULL, NULL};
 
     // (1) 先起接收端并等它就绪，再向 Master 要快照——否则 Master 派生的
     //     rdma-client 可能先到、连接被拒。
-    if (sync_spawn_rdma_server() != 0) {
+    if (sync_spawn_rdma_server(fd) != 0) {
         return -1;
     }
 
@@ -744,10 +914,13 @@ static int sync_run_replica_once(int fd) {
         kvs_log(KVS_LOG_WARN, "[SYNC] no response for SYNC");
         goto cleanup;
     }
-    if (strncmp(resp, "+OK", 3) != 0) {
+    if (kvs_repl_parse_ok_session(resp, (int)strlen(resp), session_id,
+                                  sizeof(session_id)) != 0) {
         kvs_log(KVS_LOG_WARN, "[SYNC] master rejected SYNC: %s", resp);
         goto cleanup;
     }
+    sync_recv_session_path(session_id, recv_session_path, sizeof(recv_session_path));
+    kvs_log(KVS_LOG_INFO, "[SYNC] full-sync session assigned: %s", session_id);
 
     // (3) 等 rdma-server 收完文件并退出，这同时是「文件已完整落盘」的信号。
     waited = sync_wait_child(g_rdma_server_pid, kvs_config_sync_wait_timeout_ms());
@@ -761,27 +934,35 @@ static int sync_run_replica_once(int fd) {
         goto cleanup;
     }
     g_rdma_server_pid = -1;
+    if (rename(recv_base_path, recv_session_path) != 0) {
+        kvs_log(KVS_LOG_ERROR, "[SYNC] rename received snapshot %s -> %s failed: %s",
+                recv_base_path, recv_session_path, strerror(errno));
+        goto cleanup;
+    }
+    received_renamed = true;
 
     // (4) 加载快照。kvs_snapshot_load 内部会先 kvs_reset_data()，必须持存储锁。
     kvs_data_lock();
-    load_rc = kvs_snapshot_load(recv_path);
+    load_rc = kvs_snapshot_load(recv_session_path);
     kvs_data_unlock();
     if (load_rc != 0) {
-        kvs_log(KVS_LOG_ERROR, "[SYNC] load snapshot %s failed", recv_path);
+        kvs_log(KVS_LOG_ERROR, "[SYNC] load snapshot %s failed", recv_session_path);
         goto cleanup;
     }
-    kvs_log(KVS_LOG_INFO, "[SYNC] snapshot loaded from %s", recv_path);
+    kvs_log(KVS_LOG_INFO, "[SYNC] snapshot loaded from %s", recv_session_path);
 
     // (5) Replica 在发送 SYNC FINISHED 前主动接入 Agent。Agent 读到 FINISHED
     //     后会立刻冲刷全量窗口内的缓存，因此通道必须先就绪。
-    increment_fd = sync_connect_increment_channel();
+    increment_fd = sync_connect_increment_channel(session_id);
     if (increment_fd < 0 || sync_start_increment_reader(increment_fd) != 0) {
         goto cleanup;
     }
     increment_started = true;
 
     // (6) 告诉 Master 可以删 .tmp、回收 rdma-client 了。
-    if (sync_send_command(fd, "SYNC FINISHED") != 0) {
+    finished_args[0] = "SYNC FINISHED";
+    finished_args[1] = session_id;
+    if (sync_send_commands(fd, finished_args, 2) != 0) {
         kvs_log(KVS_LOG_WARN, "[SYNC] send SYNC FINISHED failed");
         goto cleanup;
     }
@@ -802,9 +983,14 @@ static int sync_run_replica_once(int fd) {
 cleanup:
     sync_kill_child(&g_rdma_server_pid);
     unlink(ready_path);
-    if (rc == 0) {
-        unlink(recv_path); // 已加载进内存，本地副本不再需要
-    } else if (increment_started) {
+    unlink(recv_base_path);
+    if (!received_renamed && recv_session_path[0] != '\0') {
+        unlink(recv_session_path);
+    }
+    if (rc == 0 && received_renamed) {
+        unlink(recv_session_path);
+    }
+    if (rc != 0 && increment_started) {
         sync_stop_increment_reader();
     }
     return rc;
@@ -866,11 +1052,19 @@ int kvs_sync_init(kvs_role_t role) {
         }
         g_master_port = kvs_config_master_port();
         g_agent_port = kvs_config_agent_port();
-        kvs_log(KVS_LOG_INFO, "[SYNC] tmp snapshot file: %s, rdma port: %d, agent port: %d",
-                kSyncTmpFile, kvs_config_rdma_port(), g_agent_port);
+        kvs_log(KVS_LOG_INFO, "[SYNC] per-session snapshots, rdma port: %d, agent port: %d",
+                kvs_config_rdma_port(), g_agent_port);
     } else {
-        kvs_log(KVS_LOG_INFO, "[SYNC] tmp snapshot file: %s, rdma port: %d", kSyncTmpFile,
-                kvs_config_rdma_port());
+        g_session_reaper_running = 1;
+        if (pthread_create(&g_session_reaper_tid, NULL, sync_session_reaper_thread, NULL) != 0) {
+            g_session_reaper_running = 0;
+            kvs_log(KVS_LOG_ERROR, "[SYNC] failed to create session reaper thread");
+            return -1;
+        }
+        kvs_log(KVS_LOG_INFO,
+                "[SYNC] per-session snapshots, rdma port: %d, max replicas: %d, timeout: %dms",
+                kvs_config_rdma_port(), kvs_config_max_replicas(),
+                kvs_config_sync_session_timeout_ms());
     }
     return 0;
 }
@@ -922,6 +1116,13 @@ void kvs_sync_destroy() {
     if (g_sync_role == KVS_ROLE_REPLICA) {
         kvs_sync_stop();
     } else {
-        sync_kill_child(&g_rdma_client_pid);
+        if (g_session_reaper_running) {
+            pthread_mutex_lock(&g_master_sessions_mutex);
+            g_session_reaper_running = 0;
+            pthread_cond_broadcast(&g_master_sessions_cond);
+            pthread_mutex_unlock(&g_master_sessions_mutex);
+            pthread_join(g_session_reaper_tid, NULL);
+        }
+        sync_abort_all_master_sessions("master shutting down");
     }
 }

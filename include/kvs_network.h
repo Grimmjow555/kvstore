@@ -18,8 +18,10 @@
 #define KVS_SHUTDOWN_POLL_MS 200
 #endif
 
-// 协议处理回调：msg 不以 '\0' 结尾，长度由 length 指定。
-typedef int (*msg_handler)(char* msg, int length, char* response, int response_size);
+// 协议处理回调：msg 不以 '\0' 结尾，长度由 length 指定。client_fd 让复制
+// 控制命令能够绑定具体连接；本地/后台回放没有网络连接时传 -1。
+typedef int (*msg_handler)(int client_fd, char* msg, int length, char* response,
+                           int response_size);
 
 #ifdef __cplusplus
 extern "C" {

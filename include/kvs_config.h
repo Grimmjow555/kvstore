@@ -45,6 +45,8 @@ int kvs_config_load_default(void);
 //   --master-port <port>
 //   --agent-port <port>
 //   --rdma-advertise-host <ip>
+//   --max-replicas <1..16>
+//   --sync-session-timeout-ms <0|1000..86400000>
 //   --persistence-mode <none|rdb|aof>
 //   --rdb <on|off>
 //   --aof <on|off>
@@ -70,6 +72,8 @@ const char* kvs_config_replica_host(void);
 const char* kvs_config_rdma_advertise_host(void);
 int kvs_config_rdma_port(void);
 int kvs_config_agent_port(void);
+int kvs_config_max_replicas(void);
+int kvs_config_sync_session_timeout_ms(void);
 int kvs_config_rdma_transfer_timeout_ms(void);
 int kvs_config_sync_wait_timeout_ms(void);
 int kvs_config_ebpf_capture_mode(void);

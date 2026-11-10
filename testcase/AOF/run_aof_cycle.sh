@@ -2,13 +2,13 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
 SERVER="$BUILD_DIR/kvstore"
-SAVE_CLIENT="$BUILD_DIR/testcase/RDB/save"
-LOAD_CLIENT="$BUILD_DIR/testcase/RDB/load"
+SAVE_CLIENT="$BUILD_DIR/testcase/AOF/save"
+LOAD_CLIENT="$BUILD_DIR/testcase/AOF/load"
 SERVER_PID=""
-TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/kvstore-rdb-cycle.XXXXXX")"
+TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/kvstore-aof-cycle.XXXXXX")"
 RUN_DIR="$TEST_ROOT/run"
 SERVER_LOG="$TEST_ROOT/server.log"
 PORT="${KVSTORE_TEST_PORT:-9999}"
@@ -16,14 +16,13 @@ PORT="${KVSTORE_TEST_PORT:-9999}"
 start_server() {
     (
         cd "$RUN_DIR"
-        exec "$SERVER" --bind 127.0.0.1 --port "$PORT" --role master --rdb on --aof off
+        exec "$SERVER" --bind 127.0.0.1 --port "$PORT" --role master --rdb off --aof on
     ) >"$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
 }
 
 stop_server() {
     if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
-        # 向服务进程发送 SIGINT，等同于前台按 Ctrl+C。
         kill -INT "$SERVER_PID" 2>/dev/null || true
         wait "$SERVER_PID" 2>/dev/null || true
     fi
@@ -61,17 +60,17 @@ trap cleanup EXIT INT TERM
     exit 1
 }
 
-echo "Starting kvstore for RDB save..."
+echo "Starting kvstore for AOF save..."
 mkdir -p "$RUN_DIR"
 start_server
 wait_for_server
 "$SAVE_CLIENT" 127.0.0.1 "$PORT"
 stop_server
 
-echo "Restarting kvstore for RDB auto-load..."
+echo "Restarting kvstore for AOF auto-load..."
 start_server
 wait_for_server
 "$LOAD_CLIENT" 127.0.0.1 "$PORT"
 stop_server
 
-echo "RDB save/auto-load cycle completed."
+echo "AOF save/auto-load cycle completed."

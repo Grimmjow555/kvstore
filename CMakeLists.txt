@@ -109,6 +109,7 @@ set(KVSTORE_SOURCES
     persistence/io_uring.cpp
 
     replication/kvs_replication.cpp
+    replication/kvs_replication_protocol.cpp
     replication/kvs_ebpf_ring.cpp
     replication/kvs_sync.cpp
     replication/kvs_netutil.cpp
@@ -125,6 +126,8 @@ add_executable(kvstore ${KVSTORE_SOURCES})
 # 或 sim 模式读 master 创建的共享内存环）。产地在 build/ 根目录。
 add_executable(ebpf_agent
     tools/ebpf_agent.cpp
+    replication/kvs_replica_hub.cpp
+    replication/kvs_replication_protocol.cpp
     replication/kvs_ebpf_agent.cpp
     replication/kvs_ebpf_ring.cpp
     replication/kvs_netutil.cpp
@@ -146,8 +149,35 @@ target_link_libraries(agent_config_test Threads::Threads)
 set_target_properties(agent_config_test PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/ebpf-agent")
 
+add_executable(replication_config_test
+    testcase/config/test_replication_config.cpp
+    config/kvs_agent_config.cpp
+    config/kvs_config.cpp
+)
+target_include_directories(replication_config_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(replication_config_test Threads::Threads)
+set_target_properties(replication_config_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/config")
+
+add_executable(replication_protocol_test
+    testcase/replication/test_replication_protocol.cpp
+    replication/kvs_replication_protocol.cpp
+)
+target_include_directories(replication_protocol_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+set_target_properties(replication_protocol_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/replication")
+
+add_executable(replica_hub_test
+    testcase/replication/test_replica_hub.cpp
+    replication/kvs_replica_hub.cpp
+)
+target_include_directories(replica_hub_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+set_target_properties(replica_hub_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/replication")
+
 add_executable(agent_startup_test
     testcase/ebpf-agent/test_agent_startup.cpp
+    replication/kvs_replication_protocol.cpp
     replication/kvs_ebpf_ring.cpp
     replication/kvs_netutil.cpp
 )
@@ -187,7 +217,6 @@ add_executable(rdb_load testcase/RDB/load.cpp)
 add_executable(aof_save testcase/AOF/save.cpp)
 add_executable(aof_load testcase/AOF/load.cpp)
 add_executable(aof_insert10w testcase/AOF/insert10w.cpp)
-add_executable(aof_insert10w_copy "testcase/AOF/insert10w copy.cpp")
 add_executable(get10w testcase/master-replica/get10w.cpp)
 add_executable(insert_after5w testcase/master-replica/insert_after5w.cpp)
 add_executable(insert_before5w testcase/master-replica/insert_before5w.cpp)
@@ -206,7 +235,6 @@ set_target_properties(rdb_load PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINA
 set_target_properties(aof_save PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/AOF" OUTPUT_NAME save)
 set_target_properties(aof_load PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/AOF" OUTPUT_NAME load)
 set_target_properties(aof_insert10w PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/AOF" OUTPUT_NAME insert10w)
-set_target_properties(aof_insert10w_copy PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/AOF" OUTPUT_NAME insert10w_copy)
 set_target_properties(get10w insert_after5w insert_before5w
     PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/master-replica"
 )

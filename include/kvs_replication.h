@@ -1,5 +1,7 @@
 #pragma once
 
+#include "kvs_replication_protocol.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -8,13 +10,10 @@ extern "C" {
 //
 // 握手负载本身也是 RESP 数组（外层仍是「4 字节长度头 + 负载」），由复制双方共用：
 //
-//   KVS_REPL_HANDSHAKE_EBPF     ebpf-agent -> Master   采集进程注册
-//   KVS_REPL_HANDSHAKE_REPL_INC Replica -> ebpf-agent  增量通道建立
+//   EBPF 2                 ebpf-agent -> Master   采集进程注册
+//   REPL_INC 2 <session>   Replica -> ebpf-agent  增量通道建立
 //
-// 接收侧在 tools/ebpf_agent.cpp，发送侧在 replication/kvs_sync.cpp。
-// 两侧必须字面一致，因此集中定义在这里。
-#define KVS_REPL_HANDSHAKE_EBPF "*1\r\n$4\r\nEBPF\r\n"
-#define KVS_REPL_HANDSHAKE_REPL_INC "*1\r\n$8\r\nREPL_INC\r\n"
+// 编解码集中在 replication/kvs_replication_protocol.cpp，避免两侧格式漂移。
 
 // 当前进程在复制拓扑中的角色。
 typedef enum { KVS_ROLE_MASTER = 0, KVS_ROLE_REPLICA = 1 } kvs_role_t;
@@ -32,8 +31,8 @@ typedef enum { KVS_ROLE_MASTER = 0, KVS_ROLE_REPLICA = 1 } kvs_role_t;
 //   4) 区分「复制回放线程」与「本地客户端线程」，避免回放误记 AOF
 //      （kvs_replication_is_replaying / _set_replaying）。
 //
-// 旧的进程内 backlog、副本槽位、发送线程、REPLICA 握手与进程内 RDMA 监听
-// 都已在阶段 4 删除（见 docs/replication-redesign.md §12）。
+// 当前由 Master 为每次全量同步分配独立 session_id，Agent 按 session_id 维护
+// 最多 16 个目标；旧的进程内 backlog、发送线程与进程内 RDMA 监听已删除。
 
 // 设置角色。复制拓扑里 Master 负责全量快照，Replica 负责接收与回放。
 int kvs_replication_init(kvs_role_t role);
@@ -63,9 +62,11 @@ void kvs_replication_set_replaying(int value);
 // ==================== 主从全量同步控制流 ====================
 //
 //   Replica --SYNC <rdma_ip> <rdma_port>--> Master
-//   Master  : 序列化快照 -> 原子写 data/kvstore.sync.tmp -> 派生 rdma-client
-//   Replica : 接收 .tmp -> kvs_snapshot_load() -> 主动连接 Agent -> --SYNC FINISHED--> Master
-//   Master  : 回收 rdma-client -> 删除 .tmp -> +OK
+//   Master  : 分配 session_id -> 序列化快照 -> 写会话专用 .tmp -> 派生 rdma-client
+//             -> +OK <session_id>
+//   Replica : 接收 .tmp -> 加载 -> REPL_INC 2 <session_id>
+//             -> SYNC FINISHED <session_id> -> Master
+//   Master  : 只回收该 session_id 的 rdma-client 与临时文件 -> +OK
 //
 // Replica 在反向 REPL_INC 通道断开时重新执行全量同步。
 
@@ -75,10 +76,12 @@ int kvs_sync_init(kvs_role_t role);
 // Replica 侧：显式设置要连接的 Master 地址。
 void kvs_sync_set_master_addr(const char* ip, int port);
 
-// Master 命令处理。两个函数都必须在 kvs_filter_protocol 内、持有存储锁时调用：
-// SYNC 需要在锁内序列化，保证文件内容就是命令到达时刻的一致快照。
-int kvs_sync_handle_sync(char* tokens[], int count, char* response, int response_size);
-int kvs_sync_handle_sync_finished(char* response, int response_size);
+// Master 命令处理。处理器只会在发布有序事件和序列化快照时自行持有存储锁；
+// 文件 I/O 与子进程管理在锁外执行，避免多个会话互相阻塞普通写入。
+int kvs_sync_handle_sync(int client_fd, char* tokens[], int count, char* response,
+                         int response_size);
+int kvs_sync_handle_sync_finished(int client_fd, char* tokens[], int count, char* response,
+                                  int response_size);
 
 // Replica 同步驱动。start() 只拉起后台线程，Master 未启动时也会按退避重试。
 int kvs_sync_start();

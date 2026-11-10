@@ -20,7 +20,8 @@ int kvs_request(struct conn* c) {
 
     // 容量留出 4 字节：发送时在响应体前面补长度头，一次 send 发完
     c->wlength =
-        kvs_handler(c->rbuffer.data(), c->rlength, c->wbuffer.data(), c->wbuffer.size() - 4);
+        kvs_handler(c->fd, c->rbuffer.data(), c->rlength, c->wbuffer.data(),
+                    c->wbuffer.size() - 4);
 
     return 0;
 }

@@ -140,6 +140,8 @@ cd build
 - `role`：`master` 或 `replica`（也接受 `slave`、`0`、`1`）。
 - `master_ip` / `master_port`：角色为 `replica` 时连接的主节点地址与端口。
 - `agent_port`：Replica 主动连接 Master 主机上 `ebpf-agent` 的增量端口，默认 `11001`。
+- `max_replicas`：Master/Agent 的多从机容量，默认 `16`。
+- `sync_session_timeout_ms`：全量会话超时；`0` 表示按 RDMA 与等待超时自动推导。
 - `rdma_advertise_host`：Replica 上报给 Master 的可选 RDMA 地址覆盖；默认自动检测。
 - `persistence_mode`：`none`、`rdb` 或 `aof`，RDB 与 AOF 互斥；也可用
   `rdb on/off`、`aof on/off` 分别控制，但不能同时开启。默认为 `none`。
@@ -292,7 +294,8 @@ cd build
   capability，验证全部走 `sim` 模式；建议在有 root 的机器上复验一次。
 - 大流量增量受既有引擎性能限制：`kvs_array_set` 为线性扫描（插入 O(n²)），5 万条 `SET`
   回放约 15s，而 `RSET` 仅约 1.6s。
-- 当前仅支持单从机；`rdma-client` 的健康检查是被动的（靠 Replica 等待失败/超时触发重试）。
+- 默认支持最多 16 台 Replica；一个 `ebpf-agent` 为每台从机维护独立缓存和发送队列。
+  `rdma-client` 的健康检查仍是被动的（靠 Replica 等待失败/超时触发重试）。
 - RDB 记录长度依赖 `strlen`，不支持嵌入 NUL 的 key/value，也不支持跨主机字节序移植。
 - AOF 批量落盘，进程被强制杀死时可能丢失未达刷新阈值的缓冲数据。
 
@@ -345,7 +348,8 @@ $5\r\nvalue\r\n
 - hash：`HSET HGET HDEL HMOD HEXIST`
 - skiptable：`SSET SGET SDEL SMOD SEXIST`
 - 持久化：`RDB SAVE`、`AOF CLEAR`；恢复只在服务启动时自动执行
-- 主从全量同步（重设计阶段 1）：`SYNC`、`SYNC FINISHED`（由服务端之间使用，详见
+- 多从机同步：`SYNC` 返回 `+OK <session_id>`；Replica 使用 `SYNC FINISHED <session_id>`
+  （由服务端之间使用，详见
   [docs/replication-redesign.md](docs/replication-redesign.md)）
 
 > `RDB SAVE` 等带空格的命令是一个整体 token，不是两个参数。
@@ -367,30 +371,30 @@ $5\r\nvalue\r\n
 
 | 角色 | 可执行文件 | 职责 |
 | --- | --- | --- |
-| Master | `build/kvstore`（role=0） | 处理 `SYNC` / `SYNC FINISHED`、生成 `.tmp` 快照、启停 `rdma-client` |
+| Master | `build/kvstore`（role=0） | 处理多会话 `SYNC` / `SYNC FINISHED`、生成会话专用 `.tmp`、启停 `rdma-client` |
 | Replica | `build/kvstore`（role=1） | 启停 `rdma-server`、发 `SYNC`、加载 `.tmp`、回放增量 |
 | RDMA 客户端 | `build/rdma-client` | 读 `.tmp`，用 RDMA 写给对端 `rdma-server` |
 | RDMA 服务端 | `build/rdma-server` | 接收 RDMA 文件并原子落盘，收完退出 |
-| eBPF 采集 | `build/ebpf-agent` | 采集写命令与控制记录，缓存/转发增量给 Replica |
+| eBPF 采集 | `build/ebpf-agent` | 单采集流按 session_id 扇出到最多 16 个 Replica |
 
 关键点：
 
-- **全量**：Replica 发 `SYNC` → Master 把快照写成 `data/kvstore.sync.tmp` 并派生
-  `rdma-client` → 文件经 RDMA 到 Replica 侧 `rdma-server`（落在 `<tmp>.recv`）→
-  Replica 加载后回 `SYNC FINISHED`，Master 删除 `.tmp` 并回收 `rdma-client`。
+- **全量**：Replica 发 `SYNC` → Master 分配 session_id，把快照写成
+  `data/kvstore.sync.<session_id>.tmp` 并派生独立 `rdma-client` → 文件经 RDMA 到
+  Replica 侧 `rdma-server` → Replica 加载后回 `SYNC FINISHED <session_id>`；
+  Master 只删除该会话的 `.tmp` 并回收对应 `rdma-client`。
 - **增量**：Replica 在加载快照后、发送 `SYNC FINISHED` 前主动连接 Agent
-  (`master_ip:agent_port`) 并发送 `REPL_INC`；全量窗口内的写命令由 agent 缓存，
-  读到 `SYNC FINISHED` 记录后按序补发，之后转实时转发。
+  (`master_ip:agent_port`) 并发送 `REPL_INC 2 <session_id>`；全量窗口内的写命令只缓存到
+  该目标，读到对应 `SYNC FINISHED <session_id>` 后按序补发，之后转实时转发。
 - **顺序保证**：写命令与 `SYNC` / `SYNC FINISHED` 都经同一个 uprobe 挂载点
   （`kvs_ebpf_notify_write`）在存储锁内取号，采集流顺序 == 提交顺序，因此
   「缓存窗口 ⊇ 快照窗口」由顺序本身保证，不依赖额外水位。
-- **eBPF 强制**：Master 只在 agent 注册（`EBPF` 握手）后才受理 `SYNC`；采集不可用时
+- **eBPF 强制**：Master 只在 agent 注册（`EBPF 2` 握手）后才受理 `SYNC`；采集不可用时
   直接回 `-ERROR`，不会静默降级。
 - **启动恢复顺序**：持久化数据在网络服务和 Replica 同步线程启动前加载，因此不会引入
   在线重同步窗口。客户端不再提供运行期 `RDB LOAD` / `AOF LOAD` 命令。
-- **断连处理**：Master 的 EBPF 注册 fd 由网络后端通过
-  `kvs_replication_remove_replica()` 清理；Replica 主动建立的增量 fd 由同步接收线程
-  检测关闭并触发重新全量同步。
+- **断连处理**：Master 的 EBPF 注册 fd 由网络后端清理；SYNC 控制 fd 只中止对应会话。
+  Agent 为每个 Replica 保存独立增量 fd，一台断线或队列超限不会影响其他从机。
 - 存储引擎没有内部锁，所有访问都经过 `kvstore.cpp` 的可重入存储锁。
 
 ## RDMA 全量搬运（独立进程）
@@ -398,7 +402,7 @@ $5\r\nvalue\r\n
 编译时能找到 libibverbs/librdmacm 会额外构建 `rdma-client` 与 `rdma-server` 两个可执行文件；
 **`kvstore` 自身不再链接 RDMA 库**（`ldd build/kvstore` 无 ibverbs/rdmacm 依赖）：
 
-- Master 收到 `SYNC` 后把快照写到固定的 `data/kvstore.sync.tmp`（不可配置），再派生 `rdma-client` 把文件发给
+- Master 收到 `SYNC` 后把快照写到会话专用的 `data/kvstore.sync.<session_id>.tmp`，再派生 `rdma-client` 把文件发给
   Replica 侧的 `rdma-server`；后者原子落盘（`.partial` + rename）后退出，Replica 以
   「子进程退出」作为文件就绪信号。
 - Replica 在发 `SYNC` 之前先派生 `rdma-server` 并等它创建就绪文件，避免 `rdma-client`
@@ -435,14 +439,14 @@ rdma link show                # 应显示 siw1/1 state ACTIVE
 实时增量由**独立的 `ebpf-agent` 进程**采集与转发（不再在 kvstore 进程内消费）：
 
 ```text
-Master 写路径 / SYNC / SYNC FINISHED（都在存储锁内）
+Master 写路径 / SYNC <id> / SYNC FINISHED <id>（都在存储锁内）
   -> kvs_ebpf_notify_write(seq, argc, argv)   uprobe 挂载点（kvstore 侧）
        uprobe 模式：函数体不采集，参数由挂在函数入口的 BPF 程序读取并写 ringbuf
        sim   模式：函数体把记录写进共享内存环
   -> ebpf-agent 消费（ringbuf 或共享内存环），校验序号连续性
-  -> 状态机：IDLE -> CACHING（读到 SYNC）-> LIVE（读到 SYNC FINISHED）
-  <- Replica 主动建立 REPL_INC 通道
-  -> 通过该连接把增量投递给 Replica
+  -> 每个 session 独立状态：AWAITING_SYNC -> CACHING -> LIVE
+  <- 最多 16 台 Replica 主动建立 REPL_INC 2 <id> 通道
+  -> 写命令广播给所有 LIVE 目标，并缓存到各自的 CACHING 目标
 ```
 
 关键点：
@@ -457,7 +461,8 @@ Master 写路径 / SYNC / SYNC FINISHED（都在存储锁内）
 - **顺序即正确性**：写命令与 `SYNC` / `SYNC FINISHED` 走同一条有序流（都在存储锁内取号），
   所以 agent 读到 `SYNC` 一定早于其后发生的任何写命令，「缓存窗口 ⊇ 快照窗口」由顺序保证。
 - **丢事件可检测**：ringbuf/环满会丢记录，因此每条记录带自增序号；agent 一旦发现序号缺口就
-  断开增量通道，让 Replica 重新全量同步，绝不静默丢命令。缓存溢出同理。
+  断开所有目标并让它们重新全量同步，绝不静默丢命令。
+- **慢从机隔离**：每目标有独立缓存和发送缓冲；某目标超限时只断开该目标。
 - **不截断命令**：单条命令最多 3 个参数、每个参数最多 `KVS_EBPF_EVENT_ARG_MAX`(1024) 字节。
 - **强制依赖**：采集不可用时 agent 直接退出，Master 也只在 agent 注册后才受理 `SYNC`
   （eBPF 强制）。这与旧实现「失败就回退直写 backlog」的行为不同。

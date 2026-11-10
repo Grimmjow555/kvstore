@@ -253,8 +253,8 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
                                                      ctx->msg_len) == 1) {
                     ret = snprintf(ctx->wbuffer.data(), ctx->wbuffer.size() - 4, "+OK\r\n");
                 } else {
-                    ret = kvs_handler(ctx->rbuffer.data(), ctx->msg_len, ctx->wbuffer.data(),
-                                      (int)(ctx->wbuffer.size() - 4));
+                    ret = kvs_handler(ctx->clientfd, ctx->rbuffer.data(), ctx->msg_len,
+                                      ctx->wbuffer.data(), (int)(ctx->wbuffer.size() - 4));
                 }
                 // 转入发送阶段，不要 delete ctx。
                 set_event_send(ring, ctx, ret, 0);
@@ -272,7 +272,7 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
         } else {
             // printf("connection [%d], recv %d: %s\n", ctx->clientfd, recvlen, ctx->rbuffer);
 
-            int ret = kvs_handler(ctx->rbuffer, recvlen, ctx->wbuffer);
+            int ret = kvs_handler(ctx->clientfd, ctx->rbuffer, recvlen, ctx->wbuffer);
 
             set_event_send(ring, ctx, ret, 0);
         }

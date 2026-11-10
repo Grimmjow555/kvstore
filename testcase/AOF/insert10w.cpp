@@ -84,15 +84,21 @@ static void print_stats(const char* name, long long cmd_count, long long time_ms
            cmd_count, time_ms, qps, avg_ms);
 }
 
-void testcase(int connfd, const char* msg, const char* expected_pattern, const char* casename,
-              int thread_id) {
+void testcase(int connfd, const char* msg, const char* expected_pattern, const char* casename) {
     if (!msg || !expected_pattern || !casename)
         return;
 
-    send_msg(connfd, msg, strlen(msg));
+    if (send_msg(connfd, msg, strlen(msg)) != 0) {
+        printf("==> FAILED -> %s, send error\n", casename);
+        exit(1);
+    }
 
     char result[MAX_MSG_LENGTH] = {0};
-    recv_msg(connfd, result, MAX_MSG_LENGTH);
+    int result_length = recv_msg(connfd, result, MAX_MSG_LENGTH);
+    if (result_length < 0) {
+        printf("==> FAILED -> %s, receive error\n", casename);
+        exit(1);
+    }
 
     if (strcmp(result, expected_pattern) == 0) {
 #if PRINT_PASS
@@ -107,6 +113,10 @@ void testcase(int connfd, const char* msg, const char* expected_pattern, const c
 int connect_tcpserver(const char* ip, unsigned short port) {
 
     int connfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (connfd < 0) {
+        perror("socket");
+        return -1;
+    }
 
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(struct sockaddr_in));
@@ -117,6 +127,7 @@ int connect_tcpserver(const char* ip, unsigned short port) {
 
     if (0 != connect(connfd, (struct sockaddr*)&server_addr, sizeof(struct sockaddr_in))) {
         perror("connect");
+        close(connfd);
         return -1;
     }
     printf("connect %s on port %d, fd: %d\n", ip, port, connfd);
@@ -124,12 +135,11 @@ int connect_tcpserver(const char* ip, unsigned short port) {
     return connfd;
 }
 
-void hash_testcase(int connfd) {
+// 基准阶段只负责完成请求/响应往返，严格内容校验放到计时结束后。
+void benchmark_hash_inserts(int connfd) {
     char req[REQ_BUF_SIZE];
-    struct timeval tv_begin, tv_end;
-    gettimeofday(&tv_begin, NULL);
+    char result[MAX_MSG_LENGTH] = {0};
 
-#if SAVE
     for (int i = 0; i < SET_NUMS; i++) {
         char key[32];
         int len = sprintf(key, "Teacher%d", i);
@@ -140,11 +150,20 @@ void hash_testcase(int connfd) {
         const char* args[] = {key, value};
         if (build_resp_request(req, sizeof(req), "HSET", 2, args) < 0)
             exit(1);
-        testcase(connfd, req, "+OK\r\n", "HSET-Teacher", 0);
+
+        if (send_msg(connfd, req, strlen(req)) != 0) {
+            printf("==> FAILED -> HSET-Teacher, send error\n");
+            exit(1);
+        }
+        if (recv_msg(connfd, result, MAX_MSG_LENGTH) < 0) {
+            printf("==> FAILED -> HSET-Teacher, receive error\n");
+            exit(1);
+        }
     }
+}
 
-#else
-
+void verify_hash_records(int connfd) {
+    char req[REQ_BUF_SIZE];
     for (int i = 0; i < SET_NUMS; i++) {
         char key[32];
         int len = sprintf(key, "Teacher%d", i);
@@ -156,16 +175,8 @@ void hash_testcase(int connfd) {
         char expected[64];
         snprintf(expected, sizeof(expected), "$%zu\r\nKing%d\r\n",
                  strlen("King") + (size_t)snprintf(NULL, 0, "%d", i), i);
-        testcase(connfd, req, expected, "HGET-Teacher", 0);
+        testcase(connfd, req, expected, "HGET-Teacher");
     }
-#endif
-
-    gettimeofday(&tv_end, NULL);
-#if SAVE
-    print_stats("AOF SAVE hash HSET", SET_NUMS, TIME_SUB_MS(tv_end, tv_begin));
-#else
-    print_stats("AOF AUTO LOAD hash HGET", SET_NUMS, TIME_SUB_MS(tv_end, tv_begin));
-#endif
 }
 
 //   ./test 192.168.234.135  2000 1
@@ -186,23 +197,15 @@ int main(int argc, char* argv[]) {
 #if SAVE
     printf("AOF SAVE: insert %d records, and recorded to AOF file\n", SET_NUMS);
 
-    const char* args_save[] = {};
-    char req[REQ_BUF_SIZE];
-    if (build_resp_request(req, sizeof(req), "AOF CLEAR", 0, args_save) < 0)
-        exit(1);
     struct timeval tv_begin, tv_end;
     gettimeofday(&tv_begin, NULL);
-    // testcase(connfd, req, "+OK\r\n", "AOF CLEAR", 0);
-    // gettimeofday(&tv_end, NULL);
-    // print_stats("AOF SAVE: \"AOF CLEAR\"", 1, TIME_SUB_MS(tv_end, tv_begin));
-
-    // 只统计后续真正的写命令，排除 AOF CLEAR 本身
-    gettimeofday(&tv_begin, NULL);
-
-    hash_testcase(connfd);
-
+    benchmark_hash_inserts(connfd);
     gettimeofday(&tv_end, NULL);
     print_stats("AOF SAVE TOTAL", SET_NUMS, TIME_SUB_MS(tv_end, tv_begin));
+
+    printf("AOF SAVE: verify %d records after benchmark\n", SET_NUMS);
+    verify_hash_records(connfd);
+    printf("***AOF SAVE HASH VERIFY SUCCESS***\n");
 
 #else
 
@@ -212,7 +215,7 @@ int main(int argc, char* argv[]) {
     struct timeval tv_begin, tv_end;
     gettimeofday(&tv_begin, NULL);
 
-    hash_testcase(connfd);
+    verify_hash_records(connfd);
 
     gettimeofday(&tv_end, NULL);
     print_stats("AOF AUTO LOAD TOTAL", SET_NUMS, TIME_SUB_MS(tv_end, tv_begin));

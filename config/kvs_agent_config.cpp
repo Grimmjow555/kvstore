@@ -15,6 +15,8 @@ namespace {
 
 const long kDefaultCacheMaxBytes = 256L * 1024L * 1024L;
 const long kDefaultCacheMaxRecords = 500000L;
+const long kDefaultMaxReplicas = 16L;
+const long kDefaultMemoryBudgetBytes = 1024L * 1024L * 1024L;
 
 std::string trim(const std::string& text) {
     size_t begin = 0;
@@ -161,6 +163,20 @@ bool apply_key(kvs_agent_config_t* config, const std::string& raw_key,
         config->cache_max_records = parsed;
         return true;
     }
+    if (key == "max_replicas") {
+        if (!parse_long(value, 1, 16, &parsed)) {
+            return false;
+        }
+        config->max_replicas = parsed;
+        return true;
+    }
+    if (key == "memory_budget_bytes") {
+        if (!parse_long(value, 1, LONG_MAX, &parsed)) {
+            return false;
+        }
+        config->memory_budget_bytes = parsed;
+        return true;
+    }
     return false;
 }
 
@@ -177,6 +193,8 @@ void kvs_agent_config_init(kvs_agent_config_t* config) {
     config->mode = 0;
     config->cache_max_bytes = kDefaultCacheMaxBytes;
     config->cache_max_records = kDefaultCacheMaxRecords;
+    config->max_replicas = kDefaultMaxReplicas;
+    config->memory_budget_bytes = kDefaultMemoryBudgetBytes;
 }
 
 int kvs_agent_config_load_file(kvs_agent_config_t* config, const char* path) {
@@ -333,6 +351,16 @@ int kvs_agent_config_parse_args(kvs_agent_config_t* config, int argc, char* cons
                 return -1;
             }
             config->cache_max_records = parsed;
+        } else if (strcmp(option, "--max-replicas") == 0) {
+            if (!parse_long(value, 1, 16, &parsed)) {
+                return -1;
+            }
+            config->max_replicas = parsed;
+        } else if (strcmp(option, "--memory-budget-bytes") == 0) {
+            if (!parse_long(value, 1, LONG_MAX, &parsed)) {
+                return -1;
+            }
+            config->memory_budget_bytes = parsed;
         } else {
             return -1;
         }
@@ -344,7 +372,9 @@ int kvs_agent_config_validate(const kvs_agent_config_t* config) {
     if (config == NULL || config->master_ip[0] == '\0' || config->master_port <= 0 ||
         config->master_port > 65535 || config->listen_ip[0] == '\0' ||
         config->listen_port <= 0 || config->listen_port > 65535 ||
-        config->cache_max_bytes <= 0 || config->cache_max_records <= 0) {
+        config->cache_max_bytes <= 0 || config->cache_max_records <= 0 ||
+        config->max_replicas <= 0 || config->max_replicas > 16 ||
+        config->memory_budget_bytes <= 0) {
         return -1;
     }
     if (config->mode == 1) {

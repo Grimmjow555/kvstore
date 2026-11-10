@@ -17,6 +17,8 @@ typedef struct {
     char master_binary[512];
     long cache_max_bytes;
     long cache_max_records;
+    long max_replicas;
+    long memory_budget_bytes;
 } kvs_agent_config_t;
 
 void kvs_agent_config_init(kvs_agent_config_t* config);

@@ -29,6 +29,8 @@ typedef struct {
     char rdma_advertise_host[64]; // Replica 侧：可选 RDMA 地址覆盖；空表示自动检测
     int rdma_port;             // RDMA 端口
     int agent_port;            // Replica 主动连接 Agent 的增量通道端口
+    int max_replicas;          // Master 并发全量同步会话上限
+    int sync_session_timeout_ms; // 0 = 根据 RDMA 与 Replica 等待超时自动推导
     int rdma_transfer_timeout_ms; // rdma-client / rdma-server 的整体超时
     int sync_wait_timeout_ms;     // Replica 等待 RDMA 文件落盘的超时
     int ebpf_capture_mode;        // 0 = uprobe，1 = sim
@@ -408,6 +410,28 @@ static int apply_config_key(const std::string& raw_key, const std::string& raw_v
         return 0;
     }
 
+    if (key == "max_replicas") {
+        int parsed = 0;
+        if (!parse_int_range(value, 1, 16, &parsed)) {
+            return -1;
+        }
+        g_config.max_replicas = parsed;
+        return 0;
+    }
+
+    if (key == "sync_session_timeout_ms") {
+        int parsed = 0;
+        if (value == "0") {
+            g_config.sync_session_timeout_ms = 0;
+            return 0;
+        }
+        if (!parse_int_range(value, 1000, 24L * 3600 * 1000, &parsed)) {
+            return -1;
+        }
+        g_config.sync_session_timeout_ms = parsed;
+        return 0;
+    }
+
     if (key == "rdma_transfer_timeout_ms") {
         int parsed = 0;
         if (!parse_int_range(value, 100, 24L * 3600 * 1000, &parsed)) {
@@ -472,6 +496,8 @@ void kvs_config_set_defaults(void) {
     snprintf(g_config.replica_host, sizeof(g_config.replica_host), "%s", "127.0.0.1");
     g_config.rdma_port = 10000;
     g_config.agent_port = 11001;
+    g_config.max_replicas = 16;
+    g_config.sync_session_timeout_ms = 0;
     g_config.rdma_transfer_timeout_ms = 60000;
     g_config.sync_wait_timeout_ms = 120000;
 
@@ -647,6 +673,23 @@ int kvs_config_parse_switches(int* argc, char*** argv) {
                 return -1;
             }
             match = 1;
+        } else if (get_option_value(args, input_count, i, "--max-replicas", &value,
+                                    &consumed) == 0) {
+            if (!parse_int_range(value == nullptr ? "" : value, 1, 16,
+                                 &g_config.max_replicas)) {
+                return -1;
+            }
+            match = 1;
+        } else if (get_option_value(args, input_count, i, "--sync-session-timeout-ms", &value,
+                                    &consumed) == 0) {
+            if (value != nullptr && strcmp(value, "0") == 0) {
+                g_config.sync_session_timeout_ms = 0;
+            } else if (!parse_int_range(value == nullptr ? "" : value, 1000,
+                                        24L * 3600 * 1000,
+                                        &g_config.sync_session_timeout_ms)) {
+                return -1;
+            }
+            match = 1;
         } else if (get_option_value(args, input_count, i, "--rdma-advertise-host", &value,
                                     &consumed) == 0) {
             if (value == nullptr || value[0] == '\0' ||
@@ -752,6 +795,15 @@ const char* kvs_config_rdma_advertise_host(void) { return g_config.rdma_advertis
 int kvs_config_rdma_port(void) { return g_config.rdma_port; }
 
 int kvs_config_agent_port(void) { return g_config.agent_port; }
+
+int kvs_config_max_replicas(void) { return g_config.max_replicas; }
+
+int kvs_config_sync_session_timeout_ms(void) {
+    if (g_config.sync_session_timeout_ms > 0) {
+        return g_config.sync_session_timeout_ms;
+    }
+    return g_config.rdma_transfer_timeout_ms + g_config.sync_wait_timeout_ms + 30000;
+}
 
 int kvs_config_rdma_transfer_timeout_ms(void) { return g_config.rdma_transfer_timeout_ms; }
 

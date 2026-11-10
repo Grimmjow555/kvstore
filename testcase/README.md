@@ -1,10 +1,13 @@
-# `testcase` 脚本说明
+# testcase 测试说明
 
-本目录中的 `.sh` 脚本用于启动真实的 `kvstore`、`ebpf-agent` 和 RDMA 辅助进程，
-再通过项目协议或专用测试客户端验证持久化、网络后端和主从复制行为。
+本目录包含 `kvstore` 的协议回归、持久化循环、性能压测、内存分配器测试，以及主从复制使用的辅助客户端。
+测试客户端通过 TCP 连接真实服务；服务端和客户端之间使用两层协议：
 
-脚本不是纯单元测试：运行前需要先完成构建，并准备脚本所需的本地端口、`io_uring`
-或 RDMA 环境。
+1. 外层为 4 字节网络字节序长度前缀。
+2. 内层为 RESP 数组和 bulk string。
+
+除 mock 测试外，运行前都需要先构建并启动对应服务。测试脚本会创建临时运行目录，不读取或覆盖仓库
+`data/` 中的现有持久化文件。
 
 ## 构建准备
 
@@ -15,436 +18,248 @@ cmake -S . -B build
 cmake --build build -j"$(nproc)"
 ```
 
-脚本默认使用以下产物：
+也可以只构建常用测试目标：
+
+```bash
+cmake --build build --target \
+    kvstore \
+    rdb_save rdb_load aof_save aof_load aof_insert10w \
+    test memptest memptest_pthread \
+    batchsend batchsend_hash longdata \
+    get10w insert_before5w insert_after5w \
+    -j"$(nproc)"
+```
+
+CMake 配置要求所有声明引用的测试源都存在。如果配置阶段报告
+`Cannot find source file`，应先补齐或恢复对应测试源，再执行构建；不要使用 `build/` 中遗留的旧
+二进制代替当前源码的构建产物。
+
+主要测试产物位于：
 
 ```text
 build/kvstore
-build/ebpf-agent
-build/rdma-client
-build/rdma-server
-build/testcase/...
+build/testcase/RDB/{save,load}
+build/testcase/AOF/{save,load,insert10w}
+build/testcase/test/test
+build/testcase/memorypool/{memptest,memptest_pthread}
+build/testcase/batchsend/{batchsend,batchsend_hash}
+build/testcase/longdata/longdata
+build/testcase/master-replica/{get10w,insert_before5w,insert_after5w}
 ```
 
-缺少对应可执行文件时，脚本通常会在启动前直接退出。
+## 推荐验证顺序
 
-## 脚本一览
+提交前至少根据改动范围选择以下测试：
 
-| 脚本 | 是否直接运行 | 主要功能 |
-| --- | --- | --- |
-| `lib_sync_test.sh` | 否 | 同步测试公共函数库 |
-| `run_rdb_cycle.sh` | 是 | RDB 保存和启动恢复 |
-| `run_aof_cycle.sh` | 是 | AOF 写入、清空和启动回放 |
-| `run_persistence_integrity.sh` | 是 | 快照与 AOF 完整性、篡改检测 |
-| `run_backends_check.sh` | 是 | 三种网络后端的协议一致性 |
-| `ECHO/run_echo_test.sh` | 是 | 四引擎共十万条 ntyco 原样回发测试 |
-| `run_sync_fullsync.sh` | 是 | 主从全量同步 |
-| `run_sync_increment.sh` | 是 | 主从全量加增量同步 |
-| `run_sync_reverse_inc.sh` | 是 | 用本地 mock RDMA 验证 Replica 主动连接 Agent 及断线重同步 |
-| `run_sync_faults.sh` | 是 | 主从同步异常和恢复 |
-
-### 协议帧单次发送回归
-
-`test_frame_send_once.py` 使用本地 mock 服务和 `strace` 检查
-`batchsend`、`batchsend_hash`、`integrity_client` 是否正确地把“4 字节长度头 +
-RESP 负载”放在同一次 socket 发送中。分两次发送会在部分 TCP 环境中触发 Nagle
-和延迟 ACK，使每个批次额外等待约 40 ms。
-
-```bash
-python3 testcase/test_frame_send_once.py
-```
-
-测试依赖已构建的三个客户端，并需要系统中提供 `strace`。
-
-### Hash 引擎回归
-
-`hash_engine_test` 直接使用生产 hash 存储引擎和 slab 分配器，验证动态扩容、
-75% 负载因子、FNV-1a 分布、重复键、修改、删除、重新插入，以及节点和扩容分配
-失败后的清理语义。
-
-```bash
-cmake --build build --target hash_engine_test -j"$(nproc)"
-./build/testcase/hash/hash_engine_test
-```
-
-`ebpf-agent` 的独立配置测试目标：
-
-```bash
-cmake --build build --target agent_config_test agent_startup_test -j"$(nproc)"
-./build/testcase/ebpf-agent/agent_config_test
-./build/testcase/ebpf-agent/agent_startup_test
-```
-
-`agent_config_test` 验证配置字段、默认路径、命令行覆盖和错误校验；
-`agent_startup_test` 在临时目录放置 `ebpf-agent.conf`，确认不带参数的
-`./ebpf-agent` 能从当前目录加载配置、启动 sim 采集，并正确处理反向
-`REPL_INC` 握手和非法握手。
-
-## 公共函数库
-
-### `lib_sync_test.sh`
-
-该脚本只用于被其他脚本 `source`，自身不会启动服务。主要提供：
-
-- 推导仓库根目录、`build/` 和 `data/` 路径。
-- 后台启动服务并保存 PID。
-- 等待端口监听和日志关键字。
-- 使用 `SIGINT`、超时和 `SIGKILL` 停止进程。
-- 清理遗留的 `rdma-client`、`rdma-server` 进程。
-- 生成复制测试配置。
-- 清理同步临时快照、接收文件和 eBPF 共享内存环。
-
-默认网络参数：
-
-```text
-Master TCP 端口：9999
-Replica TCP 端口：10001
-Agent 增量端口：11001
-RDMA 端口：10000
-测试用 RDMA 上报地址：192.168.234.135
-```
-
-这些值可通过环境变量覆盖，具体见下文。
+| 改动类型 | 最小验证 |
+| --- | --- |
+| 协议、命令分发或存储引擎 | `test`，再分别选择四个 engine mode |
+| 网络后端或半包/粘包 | 对 reactor、ntyco、proactor 分别运行 `test` 和 `longdata` |
+| RDB、`kvs_reset_data()` 或引擎销毁逻辑 | `RDB/run_rdb_cycle.sh` |
+| AOF | `AOF/run_aof_cycle.sh` |
+| 批量发送 | `batchsend/test_batchsend.py` 和 `batchsend_hash` |
+| 内存池或并发分配 | `memptest` 和 `memptest_pthread` |
+| 主从复制客户端 | `insert_before5w`、`insert_after5w`、`get10w`，并配合复制链路脚本 |
 
 ## 持久化测试
 
-### `run_rdb_cycle.sh`
+### RDB 保存与启动恢复
 
-执行完整的 RDB 往返：
+[RDB/run_rdb_cycle.sh](RDB/run_rdb_cycle.sh) 会完成一次完整往返：
 
-1. 在临时目录中启动 RDB 模式的 Master。
-2. 使用 `testcase/RDB/save` 写入 10 万条数据。
+1. 在临时目录中启动启用 RDB 的 Master。
+2. 使用 [RDB/save.cpp](RDB/save.cpp) 向四个引擎共写入 100,000 条记录。
 3. 执行 `RDB SAVE`。
-4. 正常停止服务并重新启动。
-5. 启动时自动加载 `kvstore.data`。
-6. 使用 `testcase/RDB/load` 逐条读取并验证 10 万条数据。
-
-脚本使用独立临时目录，不会覆盖仓库 `data/` 中已有的 `kvstore.data`。
-
-运行：
+4. 正常停止并重新启动服务。
+5. 使用 [RDB/load.cpp](RDB/load.cpp) 逐条读取并校验 100,000 条记录。
 
 ```bash
-bash testcase/run_rdb_cycle.sh
+bash testcase/RDB/run_rdb_cycle.sh
+```
+
+默认使用 `127.0.0.1:9999`，可通过 `KVSTORE_TEST_PORT` 覆盖：
+
+```bash
+KVSTORE_TEST_PORT=19999 bash testcase/RDB/run_rdb_cycle.sh
 ```
 
 成功时最后输出：
 
 ```text
-***RDB TEST SUCCESS***
 RDB save/auto-load cycle completed.
 ```
 
-### `run_aof_cycle.sh`
+### AOF 写入与启动回放
 
-执行完整的 AOF 往返：
+[AOF/run_aof_cycle.sh](AOF/run_aof_cycle.sh) 使用全新的临时目录启动 AOF 模式 Master：
 
-1. 在临时目录中启动 AOF 模式的 Master。
-2. 使用 `testcase/AOF/save` 执行 `AOF CLEAR`。
-3. 写入 10 万条命令。
-4. 正常停止并重新启动服务。
-5. 启动时自动回放 `append.aof`。
-6. 使用 `testcase/AOF/load` 验证 10 万条数据。
-
-脚本使用独立临时目录，不会覆盖仓库 `data/` 中已有的 AOF。
-
-运行：
+1. 使用 [AOF/save.cpp](AOF/save.cpp) 向四个引擎共写入 100,000 条记录。
+2. 正常停止服务，使 AOF 缓冲刷新并落盘。
+3. 重新启动服务并自动回放 AOF。
+4. 使用 [AOF/load.cpp](AOF/load.cpp) 逐条校验恢复结果。
 
 ```bash
-bash testcase/run_aof_cycle.sh
+bash testcase/AOF/run_aof_cycle.sh
 ```
 
-成功时最后输出：
+同样支持 `KVSTORE_TEST_PORT`。成功时最后输出：
 
 ```text
-***AOF TEST SUCCESS***
 AOF save/auto-load cycle completed.
 ```
 
-### `run_persistence_integrity.sh`
+[AOF/insert10w.cpp](AOF/insert10w.cpp) 单独执行 100,000 条 HSET 并验证结果，主要用于 AOF
+开启/关闭时的吞吐对比，目标名为 `aof_insert10w`。该性能测试没有独立的正确性脚本，建议优先使用
+上面两个循环脚本验证持久化行为。
 
-验证持久化文件的格式和 SHA-256 完整性：
+不要直接在仓库的 `build/` 目录中手工运行 `RDB/save` 或 `AOF/save` 来测试持久化，否则可能写入
+`../data/`。如需手工测试，请像脚本一样切换到独立临时目录后再启动服务。
 
-- 生成合法的 `KVSDB02` 快照并确认可以重新加载。
-- 修改快照内容、截断快照、追加尾部数据，确认服务拒绝启动。
-- 修改为旧 `KVSDB01` 格式，确认旧格式被拒绝。
-- 生成合法的 `#KVSAOF02` AOF。
-- 修改 AOF 命令、删除中间记录、交换记录、截断摘要和移除新文件头。
-- 每次失败后比较文件摘要，确认服务没有自动修复或覆盖损坏文件。
-- 验证 AOF 重启后仍能从最后一条有效记录的摘要继续追加。
+## 协议与存储引擎测试
 
-测试使用以下辅助文件：
-
-```text
-testcase/integrity/client.cpp
-testcase/integrity/aof_mutate.py
-testcase/integrity/test_integrity.cpp
-```
-
-运行：
+先在一个终端中启动服务：
 
 ```bash
-bash testcase/run_persistence_integrity.sh
+cd build
+./kvstore \
+    --bind 127.0.0.1 \
+    --port 9999 \
+    --role master \
+    --network ntyco \
+    --rdb off \
+    --aof off
 ```
 
-成功时输出：
-
-```text
-persistence integrity tests passed
-```
-
-## 网络后端测试
-
-### `run_backends_check.sh`
-
-依次以三种网络后端启动 Master：
-
-```text
-reactor
-ntyco
-proactor
-```
-
-对每个后端验证：
-
-- `SET / GET / DEL / EXIST`
-- `RSET / RGET / RDEL / REXIST`
-- `HSET / HGET / HDEL`
-- `SSET / SGET / SDEL`
-- 重复写入的 `+EXIST`
-- 不存在键和不存在修改的 `NO EXIST`
-
-脚本使用固定端口 `10199`，并通过 Python 正确收发“4 字节长度头 + RESP”协议。
-
-运行：
+在另一个终端执行基础协议测试：
 
 ```bash
-bash testcase/run_backends_check.sh
+./build/testcase/test/test 127.0.0.1 9999 0
+./build/testcase/test/test 127.0.0.1 9999 1
+./build/testcase/test/test 127.0.0.1 9999 2
+./build/testcase/test/test 127.0.0.1 9999 3
 ```
 
-成功时输出：
+第三个参数用于选择引擎：
 
-```text
-Backends protocol check completed.
+| 参数 | 引擎 | 命令前缀 |
+| --- | --- | --- |
+| `0` | rbtree | `RSET/RGET/RDEL/RMOD/REXIST` |
+| `1` | array | `SET/GET/DEL/MOD/EXIST` |
+| `2` | hash | `HSET/HGET/HDEL/HMOD/HEXIST` |
+| `3` | skiptable | `SSET/SGET/SDEL/SMOD/SEXIST` |
+
+当前 [test/testcase.cpp](test/testcase.cpp) 默认启用 `LEVEL3`：每种引擎使用 10 个线程，每个线程
+重复 10,000 轮九条命令。需要快速调试时，可在该文件顶部切换为 `LEVEL1` 后重新构建 `test`。
+
+### 网络后端起停切换
+
+三个网络后端都编译进同一个 `kvstore` 二进制，但每次启动只能选择一个。应分别重启服务并运行同一组
+客户端回归：
+
+```bash
+./kvstore --network reactor ...
+./kvstore --network ntyco ...
+./kvstore --network proactor ...
 ```
 
-### `ECHO/run_echo_test.sh`
+proactor 依赖可用的 `io_uring`。切换后至少覆盖：
 
-以 `testcase/AOF/save.cpp` 的四引擎用例为基础，验证 `network/ntyco.c` 的
-`ECHO=1` 模式：
+- `SET/GET/DEL/MOD/EXIST` 及其余三个引擎的对应命令。
+- 半包、粘包和长度前缀处理。
+- `longdata`，以及超过 `MAX_ALLOWED_LEN` 的 1 MB 限制。
 
-- 启动 ntyco 后端的真实 `kvstore` 服务。
-- 四引擎各发送 25,000 条，共 100,000 条：
-  - array：`SET`
-  - rbtree：`RSET`
-  - hash：`HSET`
-  - skiptable：`SSET`
-- 每条请求都逐字节校验回发的长度头、RESP 请求和 payload。
-- 输出四引擎各自的命令数、耗时和 QPS，以及总计统计。
-- 客户端默认限时 60 秒，可通过 `ECHO_TEST_TIMEOUT` 覆盖。
+## 长消息与内存池
 
-运行前先构建 `kvstore` 和 `echo_save`：
+启动无持久化服务后执行：
+
+```bash
+./build/testcase/longdata/longdata 127.0.0.1 9999
+./build/testcase/memorypool/memptest 127.0.0.1 9999
+./build/testcase/memorypool/memptest_pthread 127.0.0.1 9999
+```
+
+`longdata` 用包含空格和换行的长 value 测试四个引擎的 SET/MOD/EXIST/DEL 路径。
+
+`memptest` 串行对四个引擎分别执行 25,000 组 SET/MOD/DEL 或对应命令，共 300,000 条命令。
+`memptest_pthread` 为四个引擎各启动一个线程并发执行相同规模，主要用于验证内存池和存储锁下的并发
+分配行为。
+
+## 批量发送
+
+`batchsend` 把多条命令放入同一个外层帧，验证服务端粘包解析和响应拼接：
+
+```bash
+./build/testcase/batchsend/batchsend 127.0.0.1 9999 160
+```
+
+支持的 batch size 为 `10`、`20`、`40`、`80`、`160`。每批命令会均匀分配到四个引擎，并检查
+响应数量以及 `+OK`/`+EXIST`。
+
+不启动 `kvstore` 也可以使用本地 mock 服务检查客户端构造的帧：
+
+`batchsend_hash` 固定发送 100,000 条 HSET，用 batch size 控制每次外层帧中的命令数量，适合做
+批处理吞吐对比：
+
+```bash
+./build/testcase/batchsend/batchsend_hash 127.0.0.1 9999 10
+./build/testcase/batchsend/batchsend_hash 127.0.0.1 9999 160
+```
+
+[batchsend_old.cpp](batchsend/batchsend_old.cpp) 仅保留作历史参考，不属于 CMake 测试目标。
+
+## 主从复制辅助客户端
+
+三个客户端需要配合真实 Master/Replica、`ebpf-agent` 和可用的 RDMA/SoftiWARP 链路使用：
+
+| 客户端 | 参数 | 用途 |
+| --- | --- | --- |
+| `insert_before5w` | `<ip> <port>` | 写入前半段 50,000 条四引擎数据 |
+| `insert_after5w` | `<ip> <port>` | 写入后半段 50,000 条四引擎数据 |
+| `get10w` | `<ip> <port>` | 逐条读取并校验完整 100,000 条数据 |
+
+典型数据准备和校验方式：
+
+```bash
+./build/testcase/master-replica/insert_before5w 127.0.0.1 9999
+./build/testcase/master-replica/insert_after5w 127.0.0.1 9999
+./build/testcase/master-replica/get10w 127.0.0.1 9999
+```
+
+`insert_after5w.cpp` 通过定义 `START_NUM=50000` 后包含 `insert_before5w.cpp`，两个客户端共同
+覆盖 `Teacher0` 到 `Teacher99999`。单独运行 `get10w` 前必须保证目标实例已经写入完整数据。
+
+全量同步由独立的 `rdma-client`/`rdma-server` 搬运快照。CMake 找不到 RDMA 开发库时不会构建这两个
+工具，此时无法完成主从全量同步验证。没有硬件时可执行 `sudo ./setup_rdma.sh`，并用
+`rdma link show` 确认链路为 `ACTIVE`。复制场景还需要启动 `build/ebpf-agent`；没有复制脚本时不要让
+这三个客户端单独承担主从正确性结论。
+
+## ECHO 实验模式
+
+[ECHO/echo.cpp](ECHO/echo.cpp) 用于验证 ntyco 后端的原样回发路径，而不是普通 KV 命令路径。
+它要求将 [network/ntyco.c](../network/ntyco.c) 顶部的 `ECHO` 改为 `1` 后重新构建 `kvstore`：
 
 ```bash
 cmake --build build --target kvstore echo_save -j"$(nproc)"
-bash testcase/ECHO/run_echo_test.sh
+./build/testcase/ECHO/ECHO 127.0.0.1 9999
 ```
 
-成功时输出：
+当前 `ECHO` 默认为 `0`，因此不要在普通服务实例上把该客户端作为 KV 回归。普通协议回归应使用
+`test`、`longdata` 和 `batchsend`。
 
-```text
-***ECHO TEST SUCCESS***
-```
+## Redis 对比测试
 
-## 主从复制测试
+`redis/` 目录提供 HSET 吞吐对比和 Redis AOF 开/关对比，包含独立的 Redis 启动与清理逻辑。用法、
+结果文件和限制见 [redis/README.md](redis/README.md)。
 
-### `run_sync_fullsync.sh`
+## 环境变量与清理
 
-验证主从全量同步链路：
-
-1. Master 写入并自检 10 万条数据。
-2. 启动 `ebpf-agent` 的 `sim` 模式。
-3. Replica 派生 `rdma-server` 并发送 `SYNC`。
-4. Master 生成同步快照并派生 `rdma-client`。
-5. Replica 接收快照、验证并加载。
-6. Master 收到 `SYNC FINISHED` 后回收辅助进程。
-7. 检查 `.tmp`、`.recv`、`.ready`、`.partial` 没有残留。
-8. 分别读取 Master 和 Replica 的 10 万条数据并比较。
-
-该脚本需要可用的 RDMA 设备。没有硬件时可使用 SoftiWARP：
-
-```bash
-sudo ./setup_rdma.sh
-rdma link show
-```
-
-运行：
-
-```bash
-bash testcase/run_sync_fullsync.sh
-```
-
-成功时输出：
-
-```text
-Full sync (RDMA process split) cycle completed.
-```
-
-### `run_sync_increment.sh`
-
-验证全量同步期间的缓存和后续增量转发：
-
-1. Master 写入前 5 万条。
-2. 启动 `ebpf-agent` 并等待其注册。
-3. 启动 Replica 触发全量同步。
-4. 同步进行期间再写入 5 万条。
-5. agent 缓存窗口内的写入，并在 `SYNC FINISHED` 后按序补发。
-6. Replica 建立增量通道并追平数据。
-7. 逐条校验 Replica 的 10 万条数据。
-
-脚本会检查以下日志状态：
-
-```text
-registered with master
-SYNC observed
-SYNC FINISHED observed
-increment channel connected to agent
-full sync completed
-```
-
-运行：
-
-```bash
-bash testcase/run_sync_increment.sh
-```
-
-成功时输出：
-
-```text
-Increment sync (ebpf-agent process split) cycle completed.
-```
-
-### `run_sync_reverse_inc.sh`
-
-在无 RDMA 硬件的环境验证反向增量通道。脚本用本地文件复制包装脚本替代
-`rdma-client` / `rdma-server`，但仍启动真实的 Master、Replica 和 `ebpf-agent`。
-
-验证内容：
-
-1. Agent 监听 `11001`，Replica 主动连接并发送 `REPL_INC`。
-2. Replica 在 `SYNC` 中动态上报 RDMA endpoint，Master 的 mock `rdma-client`
-   必须收到该地址，而不是静态 `replica_host`。
-3. 全量窗口内的缓存由 Agent 通过已接受的连接冲刷。
-4. 后 5 万条实时增量到达 Replica，最终校验 10 万条。
-5. 停止并重启 Agent，确认 Replica 检测到通道断开后重新全量同步，并补齐
-   Agent 离线期间写入的数据。
-
-运行：
-
-```bash
-bash testcase/run_sync_reverse_inc.sh
-```
-
-成功时输出：
-
-```text
-Reverse increment sync cycle completed.
-```
-
-### `run_sync_faults.sh`
-
-运行复制异常注入和恢复测试。默认依次执行 A、B、C、D：
-
-| 场景 | 注入的异常 | 预期结果 |
+| 变量 | 适用范围 | 说明 |
 | --- | --- | --- |
-| A | Replica 请求同步时没有 `ebpf-agent` | Master 拒绝 `SYNC`，启动 agent 后恢复 |
-| B | agent 缓存上限设为 1 条并持续写入 | 缓存溢出，Replica 重新全量同步并收敛 |
-| C | `rdma-client` 第一次运行直接失败 | Replica 重试后传输成功并收敛 |
-| D | `rdma-client` 发送前修改 `.tmp` 快照 | Replica 校验失败，保留已有数据 |
+| `KVSTORE_TEST_PORT` | RDB/AOF 循环脚本 | 覆盖默认测试端口 `9999` |
+| `TMPDIR` | 所有临时目录脚本 | 控制临时目录根路径 |
 
-默认运行全部场景：
-
-```bash
-bash testcase/run_sync_faults.sh
-```
-
-只运行指定场景：
-
-```bash
-KVS_TEST_SCENARIOS=A,C bash testcase/run_sync_faults.sh
-```
-
-成功时每个场景输出 `A passed`、`B passed` 等，最后输出：
-
-```text
-Fault-injection checks completed.
-```
-
-## 可配置环境变量
-
-### 持久化测试
-
-```text
-KVSTORE_TEST_PORT
-```
-
-用于 `run_rdb_cycle.sh`、`run_aof_cycle.sh` 和
-`run_persistence_integrity.sh`。
-
-默认值：
-
-```text
-RDB/AOF cycle：9999
-integrity：19888
-```
-
-### 主从复制测试
-
-```text
-KVS_TEST_MASTER_PORT
-KVS_TEST_REPLICA_PORT
-KVS_TEST_RDMA_PORT
-KVS_TEST_RDMA_HOST
-```
-
-示例：
-
-```bash
-KVS_TEST_MASTER_PORT=19001 \
-KVS_TEST_REPLICA_PORT=19002 \
-KVS_TEST_RDMA_PORT=19003 \
-KVS_TEST_RDMA_HOST=192.168.234.135 \
-bash testcase/run_sync_fullsync.sh
-```
-
-### 异常场景选择
-
-```text
-KVS_TEST_SCENARIOS
-```
-
-只用于 `run_sync_faults.sh`，支持逗号分隔的 `A`、`B`、`C`、`D`。
-
-## 运行环境限制
-
-- 持久化测试依赖 `io_uring` 和本地 TCP 套接字。
-- `run_persistence_integrity.sh` 还需要 `python3` 修改 AOF 测试数据。
-- `run_backends_check.sh` 和 `run_sync_faults.sh` 需要 `python3`；缺少时脚本会跳过。
-- `run_sync_fullsync.sh`、`run_sync_increment.sh` 和 `run_sync_faults.sh` 需要可用的
-  RDMA/SoftiWARP 环境。
-- 复制脚本默认使用 `ebpf-agent --mode sim`，不要求 `CAP_BPF`。
-- 受限容器如果禁止 socket、`io_uring` 或 RDMA，测试可能因环境限制退出，而不是业务断言失败。
-
-## 日志与清理
-
-脚本把日志放在 `TMPDIR` 或 `/tmp`，通常包含 PID，便于并行运行时隔离。
-
-脚本退出时会通过 `trap`：
-
-- 停止其启动的 Master、Replica 和 agent。
-- 回收遗留的 `rdma-client`、`rdma-server`。
-- 删除同步临时文件、就绪文件和 eBPF 共享内存环。
-- RDB、AOF 和完整性脚本删除自己的临时运行目录。
-
-如果进程被 `SIGKILL` 强制终止，清理函数可能来不及执行，需要手动检查：
+持久化脚本退出时会通过 `trap` 停止服务并删除自己的临时运行目录。若进程被 `SIGKILL` 强制终止，
+清理逻辑可能来不及执行，可检查：
 
 ```bash
 pgrep -a -x kvstore
@@ -452,3 +267,13 @@ pgrep -a -x ebpf-agent
 pgrep -a -x rdma-client
 pgrep -a -x rdma-server
 ```
+
+## 常见问题
+
+- `missing executable`：先构建对应 CMake target，并确认测试脚本中的路径仍与当前输出目录一致。
+- `Connection refused`：确认服务已监听目标 IP/端口，且客户端使用的是“长度头 + RESP”协议。
+- 持久化文件加载失败：检查服务工作目录。脚本应在独立临时目录中运行，避免误用仓库 `data/`。
+- proactor 启动失败：检查内核和容器是否允许使用 `io_uring`。
+- CMake 配置失败：确认 `CMakeLists.txt` 声明的测试源都存在；构建 target 的源码位置以当前
+  `CMakeLists.txt` 为准。
+- 测试结果异常：优先检查最新构建产物、服务日志和端口冲突，不要使用目录中遗留的旧二进制判断结果。

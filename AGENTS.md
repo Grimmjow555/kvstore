@@ -163,7 +163,8 @@ RESP 解析目前只接受完整的数组和 bulk string；不支持 null bulk s
 - `GET` 成功：批量字符串，如 `$5\r\nvalue\r\n`；键不存在：`$8\r\nNO EXIST\r\n`。
 - `DEL` / `MOD` 不存在：`$8\r\nNO EXIST\r\n`。
 - `EXIST`：存在返回 `$5\r\nEXIST\r\n`，不存在返回 `$8\r\nNO EXIST\r\n`。
-- `RDB SAVE`、`AOF CLEAR`、`SYNC`、`SYNC FINISHED`：`+OK\r\n` 或 `-ERROR\r\n`。
+- `RDB SAVE`、`AOF CLEAR`、`SYNC FINISHED`：`+OK\r\n` 或 `-ERROR\r\n`。
+- `SYNC` 成功返回 `+OK <16 位十六进制 session_id>\r\n`，失败返回 `-ERROR\r\n`。
 
 运行期不再提供 `RDB LOAD` / `AOF LOAD`。恢复只发生在服务启动阶段。
 
@@ -268,6 +269,7 @@ bash testcase/run_backends_check.sh
 # 主从复制
 bash testcase/run_sync_fullsync.sh
 bash testcase/run_sync_increment.sh
+bash testcase/run_sync_multi_replica.sh
 bash testcase/run_sync_reverse_inc.sh
 bash testcase/run_sync_faults.sh
 ```
@@ -293,17 +295,17 @@ bash testcase/run_sync_faults.sh
 
 | 可执行文件 | 角色 | 职责 |
 | --- | --- | --- |
-| `build/kvstore`（role=0） | Master | 处理 `SYNC` / `SYNC FINISHED`、生成 `.tmp` 快照、按需派生 `rdma-client` |
+| `build/kvstore`（role=0） | Master | 处理多会话 `SYNC` / `SYNC FINISHED`、生成会话专用 `.tmp`、派生 `rdma-client` |
 | `build/kvstore`（role=1） | Replica | 派生 `rdma-server`、发 `SYNC`、加载 `.tmp`、回放增量 |
 | `build/rdma-client` / `build/rdma-server` | 全量搬运 | RDMA 传输 `.tmp`（`kvstore` 自身不再链接 ibverbs/rdmacm） |
-| `build/ebpf-agent` | 增量采集 | 采集写命令与控制记录，监听并接受 Replica 的反向增量连接（手动启动） |
+| `build/ebpf-agent` | 增量采集 | 单采集流按 session_id 扇出到最多 16 个 Replica（手动启动） |
 
 `replication/kvs_replication.cpp` 只是薄层，保留 6 个接口；`kvstore.cpp` 里的调用点不要绕过：
 
 - `kvs_replication_append(argc, argv)`：写路径入口，只把命令交给有序采集流
   （`kvs_ebpf_notify_command`）。调用点在 `kvs_filter_protocol` 写分支内，天然持存储锁。
-- `kvs_replication_accept_handshake(fd, data, len)`：网络层识别 Master 侧的 `EBPF`
-  （agent 注册）；三个后端共用这一个入口，返回 1 时后端回 `+OK`。反向 `REPL_INC`
+- `kvs_replication_accept_handshake(fd, data, len)`：网络层识别 Master 侧的 `EBPF 2`
+  （agent 注册）；三个后端共用这一个入口，返回 1 时后端回 `+OK`。反向 `REPL_INC 2`
   由 Replica 同步线程直接连接 Agent，不经过网络后端。
 - `kvs_replication_remove_replica(fd)`：断连清理，转发到 `kvs_sync_forget_fd`。
 - `kvs_replication_is_replaying()` / `_set_replaying()`：线程局部回放标记，写分支据此跳过
@@ -315,17 +317,18 @@ bash testcase/run_sync_faults.sh
 全量同步（Replica 主动驱动）：
 
 1. Replica 派生 `rdma-server`，等它创建就绪文件（避免 `rdma-client` 先到被拒）；
-2. Replica 发 `SYNC <rdma_ip> <rdma_port>` 动态上报自身 RDMA endpoint。Master 先校验
-   agent 已注册（eBPF 强制，否则回 `-ERROR`），然后在存储锁内序列化快照、原子写
-   `../data/kvstore.sync.tmp`（`.partial` + rename）、用上报地址派生 `rdma-client`；
-3. 文件经 RDMA 落到 Replica 的 `../data/kvstore.sync.tmp.recv`，`rdma-server` 退出即表示文件就绪；
-4. Replica 加载快照后主动连接 `master_ip:agent_port`，发送 `REPL_INC` 并等待 `+OK`；
-5. Replica 启动增量接收线程，再发 `SYNC FINISHED`；Master 回收 `rdma-client` 并删除 `.tmp`；
+2. Replica 发 `SYNC <rdma_ip> <rdma_port>`。Master 校验 agent 已注册后分配 session_id，
+   只在该会话的锁内窗口发布 `SYNC <session_id>` 事件并序列化快照，随后在锁外原子写
+   `../data/kvstore.sync.<session_id>.tmp`、派生独立 `rdma-client`，返回 `+OK <session_id>`；
+3. 文件经 RDMA 落到 Replica 的 `../data/kvstore.sync.replica.<pid>.<fd>.tmp.recv`，
+   收到会话 ID 后改名为 `../data/kvstore.sync.<session_id>.tmp.recv` 并校验加载；
+4. Replica 加载快照后主动连接 `master_ip:agent_port`，发送 `REPL_INC 2 <session_id>`；
+5. Replica 启动增量接收线程，再发 `SYNC FINISHED <session_id>`；Master 只回收该会话资源；
 6. 反向通道断开时回到第 1 步重新全量同步。
 
-增量同步：`ebpf-agent` 消费采集流，状态机 `IDLE -> CACHING(读到 SYNC) -> LIVE(读到
-SYNC FINISHED)`，通过 Replica 主动建立的 `REPL_INC` 连接把命令发给 Replica；Replica
-的专用接收线程按复制回放处理。
+增量同步：`ebpf-agent` 消费采集流，并为每个 session 独立维护
+`AWAITING_SYNC -> CACHING -> LIVE` 状态。普通写命令广播给所有 `LIVE` 目标，同时缓存到
+各自的 `CACHING` 目标；`SYNC FINISHED <session_id>` 只把对应目标转成 `LIVE`。
 
 改代码时必须保持的约束：
 
@@ -341,17 +344,17 @@ SYNC FINISHED)`，通过 Replica 主动建立的 `REPL_INC` 连接把命令发�
   有界环会被注册前的写入灌满并制造 seq 缺口。
 - **RDMA endpoint 不静态依赖 `replica_host`**：Replica 默认通过对 Master 的控制连接
   `getsockname()` 获取本地地址；多网卡/单机测试用 `rdma_advertise_host` 覆盖。
-- **缓存溢出必须放弃本轮**：溢出时关闭反向增量连接，让 Replica 观察到断开后重新全量同步；
-  不能带着缺口进入实时转发。
-- fd 生命周期按归属清理：Master 的 EBPF 注册 fd 归网络层；Replica 主动建立的增量 fd 归
-  Replica 同步线程和接收线程；Agent 监听到的增量 fd 归 Agent 服务循环。
+- **缓存溢出只放弃对应目标**：每目标缓存/发送队列或全局内存预算超限时，只关闭该目标的
+  反向增量连接；其他 Replica 继续实时转发。
+- fd 生命周期按归属清理：Master 的 EBPF 注册 fd 仍归网络层；SYNC 控制 fd 与会话表绑定，
+  断连只中止对应 session；Agent 为每个目标独立保存增量 fd，断线时只移除该目标。
 - RDMA 实现用普通 `IBV_WR_RDMA_WRITE` + 单独一条 SEND 通知，**不要改回
   `IBV_WR_RDMA_WRITE_WITH_IMM`**：SoftiWARP 下 `ibv_post_send` 返回 ENOSPC(28)。
 
 存储引擎没有内部锁，所有存储访问必须经过 `kvstore.cpp` 的 `kvs_data_lock()` /
-`kvs_data_unlock()`（可重入锁）。当前加锁点：命令分发 `kvs_filter_protocol`、Replica 增量回放、
-快照加载、全量快照序列化、`SYNC` 的序列化。旧的复制锁 `g_repl_mutex` 已随 backlog/发送线程
-一起删除，现在没有第二把复制锁，也不再有锁顺序要求。
+`kvs_data_unlock()`（可重入锁）。普通命令在 `kvs_filter_protocol` 内统一加锁；`SYNC` 和
+`SYNC FINISHED` 处理器自行加锁，只在发布有序事件和序列化/整理状态时持锁，文件 I/O 与
+子进程回收不占用存储锁。旧的复制锁 `g_repl_mutex` 已删除。
 
 避免复制/AOF 回环的核心条件在 `kvstore.cpp` 的写分支中：
 
@@ -408,8 +411,9 @@ if (!kvs_replication_is_replaying()) {
   `build/ebpf-agent` 并确认它打印 `registered with master`（采集是强制依赖）。
 - Replica 日志出现 `connect agent ... failed`：检查 Agent 的 `listen_ip/listen_port`、
   Replica 的 `agent_port` 以及防火墙；通道失败会触发重新全量同步。
-- 同步用例失败但 `kvstore` 正常：确认 `rdma_port` 未被占用、动态上报/覆盖的 RDMA 地址不是
-  127.0.0.1，并检查 `../data/kvstore.sync.tmp.rdma-{client,server}.log`。
+- 同步用例失败但 `kvstore` 正常：确认各 Replica 的 `rdma_port` 未被占用、上报地址可路由，
+  并检查 `../data/kvstore.sync.<session_id>.tmp.rdma-client.log` 与
+  `../data/kvstore.sync.replica.<pid>.<fd>.rdma-server.log`。
 - 没有 RDMA 设备：先执行 `setup_rdma.sh` 并确认 `rdma link show` 显示链路 ACTIVE；
   `rdma_create_event_channel`/`No such device` 属于环境问题，优先于业务日志排查。
 - 测试脚本按场景拆分：`run_rdb_cycle.sh`、`run_aof_cycle.sh`、

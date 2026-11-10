@@ -220,18 +220,18 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    printf("ECHO: verify %d records across four storage engines\n", SET_NUMS);
-    struct timeval tv_begin, tv_end;
-    gettimeofday(&tv_begin, NULL);
+    // printf("ECHO: verify %d records across four storage engines\n", SET_NUMS);
+    // struct timeval tv_begin, tv_end;
+    // gettimeofday(&tv_begin, NULL);
 
     // rbtree_testcase(connfd);
     // array_testcase(connfd);
     hash_testcase(connfd);
     // skiptable_testcase(connfd);
 
-    gettimeofday(&tv_end, NULL);
-    print_stats("ECHO TOTAL", SET_NUMS, TIME_SUB_MS(tv_end, tv_begin));
-    printf("***ECHO TEST SUCCESS***\n");
+    // gettimeofday(&tv_end, NULL);
+    // print_stats("ECHO TOTAL", SET_NUMS, TIME_SUB_MS(tv_end, tv_begin));
+    // printf("***ECHO TEST SUCCESS***\n");
 
     close(connfd);
     return 0;

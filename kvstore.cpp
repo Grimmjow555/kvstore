@@ -3,13 +3,13 @@
 #include "kvs_config.h"
 #include "kvs_ebpf.h"
 #include "kvs_hash.h"
+#include "kvs_network.h"
 #include "kvs_rbtree.h"
 #include "kvs_replication.h"
+#include "kvs_runtime.h"
 #include "kvs_skiptable.h"
 #include "kvs_snapshot.h"
-#include "kvs_runtime.h"
 #include "memorypool/memorypool.h"
-#include "kvs_network.h"
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstdio>
@@ -160,13 +160,13 @@ void kvs_free(void* ptr) {
 #endif
 }
 
-const char* command[] = {"SET",      "GET",      "DEL",      "MOD",      "EXIST",
+const char* command[] = {"SET",      "GET",          "DEL",  "MOD",  "EXIST",
 
-                         "RSET",     "RGET",     "RDEL",     "RMOD",     "REXIST",
+                         "RSET",     "RGET",         "RDEL", "RMOD", "REXIST",
 
-                         "HSET",     "HGET",     "HDEL",     "HMOD",     "HEXIST",
+                         "HSET",     "HGET",         "HDEL", "HMOD", "HEXIST",
 
-                         "SSET",     "SGET",     "SDEL",     "SMOD",     "SEXIST",
+                         "SSET",     "SGET",         "SDEL", "SMOD", "SEXIST",
 
                          "RDB SAVE", "AOF CLEAR",
 
@@ -308,13 +308,10 @@ char** resp_parse_command(char* buffer, int* argc, int* consumed) {
 // tokens[2]: Value
 // response: 存储相应信息（已包含RESP协议头）
 // return: response长度
-int kvs_filter_protocol(char* tokens[], int count, char* response, int response_size) {
+int kvs_filter_protocol(int client_fd, char* tokens[], int count, char* response,
+                        int response_size) {
     if (tokens == nullptr || count == 0 || response == nullptr)
         return -1;
-
-    // 整个命令（含持久化、复制入队）都在存储锁内完成，保证 Replica 回放
-    // 线程与本地客户端线程不会并发修改 rbtree/skiptable 等非线程安全结构。
-    kvs_data_lock();
 
     int cmd = KVS_CMD_START;
     for (cmd = KVS_CMD_START; cmd < KVS_CMD_COUNT; ++cmd) {
@@ -322,6 +319,21 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
             break;
         }
     }
+
+    // 多从机同步处理器自己控制锁边界：SYNC 只在发布有序事件和序列化快照时
+    // 持存储锁，落盘与派生子进程不阻塞普通写入；SYNC FINISHED 也由会话层
+    // 在锁内发布目标事件。因此不能套用下面普通命令的统一锁。
+    if (cmd == KVS_CMD_SYNC) {
+        return kvs_sync_handle_sync(client_fd, tokens, count, response, response_size);
+    }
+    if (cmd == KVS_CMD_SYNC_FINISHED) {
+        return kvs_sync_handle_sync_finished(client_fd, tokens, count, response, response_size);
+    }
+
+    // 普通命令（含持久化、复制入队）都在存储锁内完成，保证 Replica 回放
+    // 线程与本地客户端线程不会并发修改 rbtree/skiptable 等非线程安全结构。
+    kvs_data_lock();
+
     int length = 0;
     // char* key = tokens[1];
     // char* value = tokens[2];
@@ -730,20 +742,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
     }
 #endif
 
-    // 主从全量同步控制命令（重设计阶段 1）：在这里处理意味着天然持存储锁，
-    // SYNC 的序列化因此就是「收到命令那一刻」的一致快照。
-    case KVS_CMD_SYNC: {
-        length = kvs_sync_handle_sync(tokens, count, response, response_size);
-        break;
-    }
-
-    case KVS_CMD_SYNC_FINISHED: {
-        length = kvs_sync_handle_sync_finished(response, response_size);
-        break;
-    }
-
     default: {
-        // 命令表已删除的旧命令（例如 RDB LOAD / AOF LOAD）以及未知命令
         // 统一返回协议错误，避免发送 0 长度帧。
         length = snprintf(response, response_size, "-ERROR\r\n");
         break;
@@ -761,7 +760,7 @@ int kvs_filter_protocol(char* tokens[], int count, char* response, int response_
  *response_size: size of response buffer
  *@return: length of response
  */
-int kvs_protocol(char* msg, int length, char* response, int response_size) {
+int kvs_protocol(int client_fd, char* msg, int length, char* response, int response_size) {
     int msg_used = 0;
     int resp_offset = 0;
     while (msg_used < length && resp_offset < response_size) {
@@ -781,7 +780,7 @@ int kvs_protocol(char* msg, int length, char* response, int response_size) {
         if (!tmp_resp)
             break;
 
-        int len = kvs_filter_protocol(argv, argc, tmp_resp, remaining);
+        int len = kvs_filter_protocol(client_fd, argv, argc, tmp_resp, remaining);
         if (len > 0 && len < remaining) {
             memcpy(response + resp_offset, tmp_resp, len);
             resp_offset += len;
@@ -988,8 +987,7 @@ int main(int argc, char* argv[]) {
         // 阶段 3：Master 侧准备采集通道。uprobe 模式下这里只登记模式（挂载由
         // 独立的 ebpf-agent 完成）；sim 模式下创建 agent 要读的共享内存环。
         {
-            const char* mode_name =
-                kvs_config_ebpf_capture_mode() == 1 ? "sim" : "uprobe";
+            const char* mode_name = kvs_config_ebpf_capture_mode() == 1 ? "sim" : "uprobe";
             if (kvs_ebpf_capture_init(kvs_config_ebpf_ring_file(),
                                       kvs_config_ebpf_capture_mode()) == 0) {
                 kvs_log(KVS_LOG_INFO, "[EBPF] master capture channel ready (mode=%s)", mode_name);

@@ -241,7 +241,7 @@ void server_reader(void* arg) {
         if (is_replica) {
             slength = snprintf(response, KVS_NET_MAX_MESSAGE_SIZE + 1, "+OK\r\n");
         } else {
-            slength = kvs_handler(buf, (int)msg_len, response, KVS_NET_MAX_MESSAGE_SIZE + 1);
+            slength = kvs_handler(fd, buf, (int)msg_len, response, KVS_NET_MAX_MESSAGE_SIZE + 1);
         }
         if (slength < 0) {
             slength = 0; // 或发送错误响应
