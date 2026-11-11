@@ -1,4 +1,4 @@
-// 实时增量采集（ebpf-agent 侧）：uprobe + BPF ringbuf / 共享内存环。
+// CaptureRuntime 的底层后端：uprobe + BPF ringbuf / 共享内存环。
 //
 // 重设计阶段 3：采集从 kvstore 进程搬到独立的 ebpf-agent 进程。kvstore 里只剩
 // 一个挂载点 kvs_ebpf_notify_write()（见 replication/kvs_replication.cpp），本文件负责
@@ -18,9 +18,9 @@
 #include "kvs_ebpf_agent.h"
 #include "kvs_ebpf_ring.h"
 
+#include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <elf.h>
 #include <linux/bpf.h>
 #include <linux/perf_event.h>
 #include <poll.h>
@@ -299,8 +299,8 @@ static void dispatch_record(const unsigned char* data, unsigned int len) {
     int argc = kvs_ebpf_event_parse(data, len, &seq, argbuf, sizeof(argbuf), argv,
                                     KVS_EBPF_EVENT_MAX_ARGS);
     if (argc <= 0) {
-        kvs_log(KVS_LOG_ERROR,
-                "[EBPF] ringbuf record malformed/truncated (len=%u), force resync", len);
+        kvs_log(KVS_LOG_ERROR, "[EBPF] ringbuf record malformed/truncated (len=%u), force resync",
+                len);
         agent_signal_resync("malformed record");
         return;
     }
@@ -471,8 +471,7 @@ static int resolve_symbol_offset_in_elf(const char* path, const char* symbol,
 
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
-        kvs_log(KVS_LOG_WARN, "[EBPF] open %s failed (errno=%d, %s)", path, errno,
-                strerror(errno));
+        kvs_log(KVS_LOG_WARN, "[EBPF] open %s failed (errno=%d, %s)", path, errno, strerror(errno));
         return -1;
     }
 
@@ -497,8 +496,7 @@ static int resolve_symbol_offset_in_elf(const char* path, const char* symbol,
     }
 
     eh = (const Elf64_Ehdr*)base;
-    if (eh->e_shoff == 0 || eh->e_shnum == 0 ||
-        eh->e_shentsize != sizeof(Elf64_Shdr) ||
+    if (eh->e_shoff == 0 || eh->e_shnum == 0 || eh->e_shentsize != sizeof(Elf64_Shdr) ||
         (size_t)eh->e_shoff + (size_t)eh->e_shnum * sizeof(Elf64_Shdr) > size) {
         kvs_log(KVS_LOG_WARN, "[EBPF] %s has no usable section table", path);
         goto done;
@@ -540,7 +538,8 @@ static int resolve_symbol_offset_in_elf(const char* path, const char* symbol,
 
     // 虚拟地址 -> 文件偏移：找到包含该地址的 PT_LOAD 段。
     for (int i = 0; i < eh->e_phnum; ++i) {
-        const Elf64_Phdr* ph = (const Elf64_Phdr*)(base + eh->e_phoff + (size_t)i * eh->e_phentsize);
+        const Elf64_Phdr* ph =
+            (const Elf64_Phdr*)(base + eh->e_phoff + (size_t)i * eh->e_phentsize);
         if (ph->p_type != PT_LOAD || ph->p_memsz == 0) {
             continue;
         }
@@ -939,7 +938,8 @@ int kvs_ebpf_agent_capture_start(int mode, const char* ring_path, int master_pid
     if (g_agent_mode == KVS_EBPF_MODE_SIM) {
         // sim：内核采集不可用时由 master 直接写共享内存环，agent 只负责读。
         if (kvs_ebpf_ring_open(ring_path) != 0) {
-            kvs_log(KVS_LOG_ERROR, "[EBPF] open capture ring %s failed", ring_path ? ring_path : "");
+            kvs_log(KVS_LOG_ERROR, "[EBPF] open capture ring %s failed",
+                    ring_path ? ring_path : "");
             return -1;
         }
         snprintf(g_agent_ring_path, sizeof(g_agent_ring_path), "%s", ring_path ? ring_path : "");

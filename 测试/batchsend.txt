@@ -1,0 +1,11 @@
+测试条件：10w条HASH插入指令，kvstore选用NtyCo
+测试批量处理qps，batch size分别取10/20/40/80/160，对比redis pipeline
+
+batch size      kvstore qps     redis qps
+10	            89771	        91766
+20	            165615	        166909
+40	            284350	        286554
+80	            432911	        412007
+160	            526889          526977
+
+

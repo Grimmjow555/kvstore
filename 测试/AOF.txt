@@ -1,0 +1,12 @@
+测试条件：10w条HASH插入指令，kvstore选用NtyCo
+测试echo，kvstore关闭增量持久化，开启增量持久化时的qps
+对比redis的aof关闭，redis的aof开启的qps
+
+
+10w条HASH插入                 qps
+ECHO	                      11015
+关闭AOF	                      10944
+开启AOF	                      9403
+redis关闭AOF                  10613
+redis开启AOF                  9810
+

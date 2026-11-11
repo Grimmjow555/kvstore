@@ -300,7 +300,18 @@ bash testcase/run_sync_faults.sh
 | `build/rdma-client` / `build/rdma-server` | 全量搬运 | RDMA 传输 `.tmp`（`kvstore` 自身不再链接 ibverbs/rdmacm） |
 | `build/ebpf-agent` | 增量采集 | 单采集流按 session_id 扇出到最多 16 个 Replica（手动启动） |
 
-`replication/kvs_replication.cpp` 只是薄层，保留 6 个接口；`kvstore.cpp` 里的调用点不要绕过：
+同步内部边界：
+
+- `replication/api/replication_facade.cpp`：保留给 `kvstore.cpp` 和 C 网络后端的
+  `extern "C"` 薄门面。
+- `replication/sync/`：`MasterSyncCoordinator`、`ReplicaSyncCoordinator`、
+  `ReplicaIncrementChannel`、`ManagedChildProcess` 与同步公共工具。
+- `replication/capture/capture_runtime.*`：Agent 侧采集生命周期门面；sim/uprobe 后端由
+  `replication/capture/uprobe_capture.cpp` 与 `replication/kvs_ebpf_ring.cpp` 实现。
+- `replication/agent/agent_service.*`：Agent 注册、监听、poll 和 Hub 生命周期；
+  `tools/ebpf_agent.cpp` 只负责配置、信号和对象启动。
+
+`replication/kvs_replication.cpp` 是写路径采集与复制状态门面；`kvstore.cpp` 里的调用点不要绕过：
 
 - `kvs_replication_append(argc, argv)`：写路径入口，只把命令交给有序采集流
   （`kvs_ebpf_notify_command`）。调用点在 `kvs_filter_protocol` 写分支内，天然持存储锁。
@@ -310,10 +321,6 @@ bash testcase/run_sync_faults.sh
 - `kvs_replication_remove_replica(fd)`：断连清理，转发到 `kvs_sync_forget_fd`。
 - `kvs_replication_is_replaying()` / `_set_replaying()`：线程局部回放标记，写分支据此跳过
   AOF 记录（必须是线程局部量，否则会误伤本地客户端）。
-- `kvs_replication_resync()`：保留的兼容接口，会往有序采集流写一条 `INVALIDATE` 记录。
-  当前运行期已删除 `RDB LOAD` / `AOF LOAD`，因此没有命令路径直接调用它；不要把它描述成
-  当前恢复流程的一部分。
-
 全量同步（Replica 主动驱动）：
 
 1. Replica 派生 `rdma-server`，等它创建就绪文件（避免 `rdma-client` 先到被拒）；
@@ -342,7 +349,7 @@ bash testcase/run_sync_faults.sh
   uprobe 要求 Master 二进制不被 strip；agent 采集失败会直接退出，不会静默降级。
 - **采集只在 agent 注册后产出**：由 `kvs_ebpf_capture_enable` 控制，注册时重置采集环；否则
   有界环会被注册前的写入灌满并制造 seq 缺口。
-- **RDMA endpoint 不静态依赖 `replica_host`**：Replica 默认通过对 Master 的控制连接
+- **RDMA endpoint 不静态配置**：Replica 默认通过对 Master 的控制连接
   `getsockname()` 获取本地地址；多网卡/单机测试用 `rdma_advertise_host` 覆盖。
 - **缓存溢出只放弃对应目标**：每目标缓存/发送队列或全局内存预算超限时，只关闭该目标的
   反向增量连接；其他 Replica 继续实时转发。
@@ -356,25 +363,18 @@ bash testcase/run_sync_faults.sh
 `SYNC FINISHED` 处理器自行加锁，只在发布有序事件和序列化/整理状态时持锁，文件 I/O 与
 子进程回收不占用存储锁。旧的复制锁 `g_repl_mutex` 已删除。
 
-避免复制/AOF 回环的核心条件在 `kvstore.cpp` 的写分支中：
-
-```cpp
-if (!kvs_aof_is_replaying() && !kvs_replication_is_replaying()) {
-    kvs_aof_append(...);
-}
-if (!kvs_replication_is_replaying()) {
-    kvs_replication_append(...);
-}
-```
-
-新增写命令时不要绕过这两个判断，否则会导致 AOF 重复记录或 Master/Replica 相互转发。
+避免复制/AOF 回环的判断集中在 `kvstore.cpp` 的私有函数
+`kvs_commit_write_side_effects(argc, tokens)` 中。普通写命令只有在校验引擎返回 `0`
+成功后，才可在存储锁内调用该函数。不要在命令分支中重新展开 AOF 与复制 replay 判断，
+否则容易造成 AOF 重复记录或 Master/Replica 相互转发。
 
 ## Agent 验证清单
 
 修改代码后至少检查与改动类型对应的项目：
 
 - 新增或删除命令：同步修改 `command[]`、`KVS_CMD` 和 `kvs_filter_protocol` 三个位置。
-- 新增写命令：保留“AOF 记录”和“复制转发”所需的 replay 判断，避免回放时重复记录或形成回环。
+- 新增写命令：成功修改数据后调用 `kvs_commit_write_side_effects()`，不要绕过统一的
+  AOF/复制回放判断。
 - 修改协议或网络后端：对 reactor、ntyco、proactor 都执行协议回归，并覆盖半包、粘包和 1MB 上限。
 - 修改持久化：同时验证正常保存/恢复、摘要失败、截断、旧格式拒绝，以及 AOF 重启后链状态续接。
 - 修改快照或复制：至少执行 `run_rdb_cycle.sh`、`run_persistence_integrity.sh` 和一项主从同步测试。

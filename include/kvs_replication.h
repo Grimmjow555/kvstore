@@ -44,16 +44,8 @@ int kvs_replication_append(int argc, char* argv[]);
 // 「这条连接已被复制模块受理」，网络层据此回 +OK。
 int kvs_replication_accept_handshake(int fd, const char* data, int length);
 
-// 握手响应发送完成后由网络层调用。新架构下握手本身不触发任何服务端动作
-// （全量同步由 Replica 主动发 SYNC 驱动），保留函数以维持网络层调用点。
-void kvs_replication_finish_handshake(int fd);
-
 // 连接断开时由网络层调用：清理该 fd 在同步模块里登记的会话。
 void kvs_replication_remove_replica(int fd);
-
-// 运行期整库替换后要求在线 Replica 重新全量同步：往有序采集流写一条
-// INVALIDATE 记录，ebpf-agent 读到后断开增量通道，Replica 据此重新走 SYNC。
-int kvs_replication_resync();
 
 // 复制回放状态：回放线程置 1，使写分支跳过 AOF 记录与再转发。
 int kvs_replication_is_replaying();
@@ -97,10 +89,6 @@ int kvs_sync_ebpf_armed(void);
 
 // 连接断开时清理该 fd 在同步模块里登记的会话。
 void kvs_sync_forget_fd(int fd);
-
-// Replica 侧：等待增量通道状态变化（wait_connected=1 等接入、0 等断开）。
-// 返回 1 表示达到目标状态，0 表示超时或复制驱动已停止。
-int kvs_sync_wait_increment(int wait_connected, int timeout_ms);
 
 #ifdef __cplusplus
 }

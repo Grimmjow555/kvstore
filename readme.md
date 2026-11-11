@@ -235,7 +235,7 @@ cd build
 
 # 0. 准备：
 #    * kvstore.conf 里配好 rdma_port、agent_port、ebpf_capture_mode sim；
-#      Replica 默认自动上报控制连接使用的本地 RDMA 地址，无需配置 replica_host；
+#      Replica 默认自动上报控制连接使用的本地 RDMA 地址；
 #    * ebpf-agent.conf 里配好 master_ip/master_port、listen_ip/listen_port、
 #      mode sim 和 ring；
 #    * RDMA 链路用 setup_rdma.sh 准备。
@@ -301,7 +301,90 @@ cd build
 
 ## 性能数据
 
-> 目前只有内存占用实测数据，吞吐、延迟等指标待补充。
+以下数据来自 `测试需求/` 中的汇总记录，本次只整理结果，没有重新运行压测。kvstore 的 AOF
+与批处理测试使用 NtyCo 后端；AOF 和批处理测试固定执行 10 万条 HASH 插入，RDB 测试将数据
+均匀分配到四种存储引擎。结果适合观察相对趋势，不代表生产环境容量承诺。
+
+### AOF 增量持久化
+
+测试对比 ECHO 基线、kvstore AOF 关闭/开启，以及 Redis AOF 关闭/开启时的 QPS。ECHO 是服务端
+编译期回显模式，需要将 [network/ntyco.c](network/ntyco.c) 顶部的 `ECHO` 临时设为 `1` 后
+重新构建；当前默认值为 `0`。
+
+| 场景 | QPS | 相对变化 |
+| --- | ---: | --- |
+| ECHO | 11015 | kvstore 关闭 AOF 比 ECHO 低约 0.64% |
+| kvstore 关闭 AOF | 10944 | 基准值 |
+| kvstore 开启 AOF | 9403 | 比关闭 AOF 低约 14.08% |
+| Redis 关闭 AOF | 10613 | kvstore 关闭 AOF 时比 Redis 高约 3.12% |
+| Redis 开启 AOF | 9810 | 比关闭 AOF 低约 7.57%；kvstore 开启 AOF 时比 Redis 低约 4.15% |
+
+kvstore 的 AOF 在 1024 字节阈值缓冲达到后批量 flush 并 `fsync`；Redis AOF 测试使用
+`appendfsync everysec`，两者刷盘策略不同，因此该对比反映的是当前配置下的实际吞吐差异，不是
+相同落盘语义下的严格等价比较。
+
+### 批量处理与 Redis Pipeline
+
+两边每次固定发送 10 万条 HSET，kvstore 将同一批命令放入一个外层长度帧，Redis 使用
+`redis-benchmark -P <batch-size>`，均为单连接。
+
+| Batch size | kvstore QPS | Redis QPS | kvstore 相对 Redis |
+| ---: | ---: | ---: | --- |
+| 10 | 89771 | 91766 | 低约 2.17% |
+| 20 | 165615 | 166909 | 低约 0.78% |
+| 40 | 284350 | 286554 | 低约 0.77% |
+| 80 | 432911 | 412007 | 高约 5.07% |
+| 160 | 526889 | 526977 | 基本持平 |
+
+两种实现的吞吐量都随 batch size 增大而提升，但增幅逐渐收窄。小批次时 Redis 略优，80 批次
+时 kvstore 较高，160 批次时基本持平。
+
+### RDB SAVE 性能
+
+测试将数据均匀分配到 array、rbtree、hash、skiptable 四种存储引擎，执行 `RDB SAVE` 时观察到
+的 QPS 如下：
+
+| 数据条数 | QPS |
+| ---: | ---: |
+| 100 万 | 1 |
+| 10 万 | 9 |
+| 1 万 | 83 |
+| 1 千 | 333 |
+
+数据规模越大，记录到的 QPS 越低。当前结果没有提供“不执行 `RDB SAVE`”的对照组，因此不能
+据此精确计算 `RDB SAVE` 单独造成的性能损失。
+
+### 复现方式
+
+AOF 开关对比和批量 Pipeline 对比可先构建对应目标，再通过脚本运行：
+
+```bash
+cmake --build build --target kvstore aof_insert10w batchsend_hash -j"$(nproc)"
+
+# 10 万条 HSET，AOF 开启/关闭及 Redis 对比
+bash testcase/redis/run_hash_10w.sh kvstore off
+bash testcase/redis/run_hash_10w.sh kvstore on
+bash testcase/redis/run_hash_10w.sh redis off
+bash testcase/redis/run_hash_10w.sh redis on
+
+# 批量 HSET Pipeline 对比
+for batch in 10 20 40 80 160; do
+    bash testcase/redis/run_batch.sh kvstore "$batch"
+    bash testcase/redis/run_batch.sh redis "$batch"
+done
+```
+
+详细参数、原始结果位置和 Redis 随机字段说明见
+[testcase/redis/README.md](testcase/redis/README.md)。RDB 规模和 ECHO 基线目前没有现成的一键
+基准脚本，需手工启动服务并使用相应测试客户端。
+
+### 数据说明与限制
+
+- 当前记录缺少完整的 CPU、内存、操作系统、Redis 版本、重复次数、波动范围及延迟分位数，
+  不适合用于严格的跨机器横向比较。
+- ECHO 与 RDB 数据只有汇总结果，没有保留对应的自动化脚本和原始日志，复现时需要手工准备
+  编译模式、数据规模和服务参数。
+- 所有结果均为本地单机测试，不能直接外推为多机、网络抖动或高并发场景下的性能保证。
 
 ### 内存占用（实测）
 
@@ -423,7 +506,7 @@ rdma link show                # 应显示 siw1/1 state ACTIVE
 
 - `rdma link add` 创建的 SoftiWARP 链路不持久化，重启后需重新执行 `setup_rdma.sh`。
 - Replica 在 `SYNC <rdma_ip> <rdma_port>` 中动态上报 RDMA endpoint，Master 直接使用该
-  地址启动 `rdma-client`，因此无需提前配置 `replica_host`。
+  地址启动 `rdma-client`。
 - 自动地址来自 Replica 到 Master 控制连接所用的本地接口。多网卡、控制网卡与 RDMA
   网卡不同或单机测试时可配置 `rdma_advertise_host`；该地址必须是实际 RDMA 网卡 IPv4，
   不能使用 `127.0.0.1`，否则 `rdma_resolve_addr` 会返回 EINVAL。

@@ -94,7 +94,7 @@ int kvs_repl_build_resp_array(const char* const argv[], int argc, char* out, siz
         return -1;
     }
     for (int i = 0; i < argc; ++i) {
-        if (argv[i] == NULL || argv[i][0] == '\0') {
+        if (argv[i] == NULL) {
             return -1;
         }
         int written = snprintf(out + offset, out_size - (size_t)offset, "$%zu\r\n%s\r\n",

@@ -111,8 +111,12 @@ set(KVSTORE_SOURCES
     replication/kvs_replication.cpp
     replication/kvs_replication_protocol.cpp
     replication/kvs_ebpf_ring.cpp
-    replication/kvs_sync.cpp
     replication/kvs_netutil.cpp
+    replication/api/replication_facade.cpp
+    replication/sync/sync_support.cpp
+    replication/sync/master_sync.cpp
+    replication/sync/replica_increment.cpp
+    replication/sync/replica_sync.cpp
 )
 
 add_library(kvs_integrity STATIC persistence/integrity.cpp)
@@ -126,67 +130,145 @@ add_executable(kvstore ${KVSTORE_SOURCES})
 # 或 sim 模式读 master 创建的共享内存环）。产地在 build/ 根目录。
 add_executable(ebpf_agent
     tools/ebpf_agent.cpp
+    replication/agent/agent_service.cpp
+    replication/capture/capture_runtime.cpp
     replication/kvs_replica_hub.cpp
     replication/kvs_replication_protocol.cpp
-    replication/kvs_ebpf_agent.cpp
+    replication/capture/uprobe_capture.cpp
     replication/kvs_ebpf_ring.cpp
     replication/kvs_netutil.cpp
     config/kvs_config.cpp
     config/kvs_agent_config.cpp
 )
-target_include_directories(ebpf_agent PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(ebpf_agent PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/replication
+)
 target_link_libraries(ebpf_agent Threads::Threads)
 set_target_properties(ebpf_agent PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}" OUTPUT_NAME "ebpf-agent")
 
-add_executable(agent_config_test
-    testcase/ebpf-agent/test_agent_config.cpp
-    config/kvs_agent_config.cpp
-    config/kvs_config.cpp
-)
-target_include_directories(agent_config_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(agent_config_test Threads::Threads)
-set_target_properties(agent_config_test PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/ebpf-agent")
+if(EXISTS "${CMAKE_SOURCE_DIR}/testcase/ebpf-agent/test_agent_config.cpp")
+    add_executable(agent_config_test
+        testcase/ebpf-agent/test_agent_config.cpp
+        config/kvs_agent_config.cpp
+        config/kvs_config.cpp
+    )
+    target_include_directories(agent_config_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(agent_config_test Threads::Threads)
+    set_target_properties(agent_config_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/ebpf-agent")
+endif()
 
-add_executable(replication_config_test
-    testcase/config/test_replication_config.cpp
-    config/kvs_agent_config.cpp
-    config/kvs_config.cpp
-)
-target_include_directories(replication_config_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(replication_config_test Threads::Threads)
-set_target_properties(replication_config_test PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/config")
+if(EXISTS "${CMAKE_SOURCE_DIR}/testcase/config/test_replication_config.cpp")
+    add_executable(replication_config_test
+        testcase/config/test_replication_config.cpp
+        config/kvs_agent_config.cpp
+        config/kvs_config.cpp
+    )
+    target_include_directories(replication_config_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(replication_config_test Threads::Threads)
+    set_target_properties(replication_config_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/config")
+endif()
 
-add_executable(replication_protocol_test
-    testcase/replication/test_replication_protocol.cpp
-    replication/kvs_replication_protocol.cpp
-)
-target_include_directories(replication_protocol_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
-set_target_properties(replication_protocol_test PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/replication")
+if(EXISTS "${CMAKE_SOURCE_DIR}/testcase/replication/test_replication_protocol.cpp")
+    add_executable(replication_protocol_test
+        testcase/replication/test_replication_protocol.cpp
+        replication/kvs_replication_protocol.cpp
+    )
+    target_include_directories(replication_protocol_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    set_target_properties(replication_protocol_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/replication")
+endif()
 
-add_executable(replica_hub_test
-    testcase/replication/test_replica_hub.cpp
-    replication/kvs_replica_hub.cpp
-)
-target_include_directories(replica_hub_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
-set_target_properties(replica_hub_test PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/replication")
+if(EXISTS "${CMAKE_SOURCE_DIR}/testcase/replication/test_replica_hub.cpp")
+    add_executable(replica_hub_test
+        testcase/replication/test_replica_hub.cpp
+        replication/kvs_replica_hub.cpp
+        replication/kvs_replication_protocol.cpp
+    )
+    target_include_directories(replica_hub_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    set_target_properties(replica_hub_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/replication")
+endif()
 
-add_executable(agent_startup_test
-    testcase/ebpf-agent/test_agent_startup.cpp
-    replication/kvs_replication_protocol.cpp
-    replication/kvs_ebpf_ring.cpp
-    replication/kvs_netutil.cpp
-)
-target_include_directories(agent_startup_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_compile_definitions(agent_startup_test PRIVATE
-    KVS_AGENT_BINARY="$<TARGET_FILE:ebpf_agent>")
-add_dependencies(agent_startup_test ebpf_agent)
-set_target_properties(agent_startup_test PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/ebpf-agent")
+if(EXISTS "${CMAKE_SOURCE_DIR}/testcase/replication/test_sync_support.cpp")
+    add_executable(sync_support_test
+        testcase/replication/test_sync_support.cpp
+        replication/sync/sync_support.cpp
+    )
+    target_include_directories(sync_support_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/replication
+    )
+    set_target_properties(sync_support_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/replication")
+endif()
+
+if(EXISTS "${CMAKE_SOURCE_DIR}/testcase/replication/test_master_sync.cpp")
+    add_executable(master_sync_test
+        testcase/replication/test_master_sync.cpp
+        replication/sync/master_sync.cpp
+        replication/sync/sync_support.cpp
+        replication/kvs_replication_protocol.cpp
+        persistence/io_uring.cpp
+    )
+    target_include_directories(master_sync_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/replication
+    )
+    target_link_libraries(master_sync_test Threads::Threads ${URING_LIBRARY})
+    set_target_properties(master_sync_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/replication")
+endif()
+
+if(EXISTS "${CMAKE_SOURCE_DIR}/testcase/replication/test_replica_increment.cpp")
+    add_executable(replica_increment_test
+        testcase/replication/test_replica_increment.cpp
+        replication/sync/replica_increment.cpp
+    )
+    target_include_directories(replica_increment_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/replication
+    )
+    target_link_libraries(replica_increment_test Threads::Threads)
+    set_target_properties(replica_increment_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/replication")
+endif()
+
+if(EXISTS "${CMAKE_SOURCE_DIR}/testcase/replication/test_replica_sync.cpp")
+    add_executable(replica_sync_test
+        testcase/replication/test_replica_sync.cpp
+        replication/sync/replica_sync.cpp
+        replication/sync/replica_increment.cpp
+        replication/sync/sync_support.cpp
+        replication/kvs_replication_protocol.cpp
+        replication/kvs_netutil.cpp
+    )
+    target_include_directories(replica_sync_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/replication
+    )
+    target_link_libraries(replica_sync_test Threads::Threads)
+    set_target_properties(replica_sync_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/replication")
+endif()
+
+if(EXISTS "${CMAKE_SOURCE_DIR}/testcase/ebpf-agent/test_agent_startup.cpp")
+    add_executable(agent_startup_test
+        testcase/ebpf-agent/test_agent_startup.cpp
+        replication/kvs_replication_protocol.cpp
+        replication/kvs_ebpf_ring.cpp
+        replication/kvs_netutil.cpp
+    )
+    target_include_directories(agent_startup_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_compile_definitions(agent_startup_test PRIVATE
+        KVS_AGENT_BINARY="$<TARGET_FILE:ebpf_agent>")
+    add_dependencies(agent_startup_test ebpf_agent)
+    set_target_properties(agent_startup_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/ebpf-agent")
+endif()
 
 # 阶段 2：RDMA 全量搬运拆成两个独立进程。它们与 kvstore 分开构建，
 # 由 Master / Replica 在 SYNC 流程中按需派生（见 docs/replication-redesign.md）。
@@ -223,8 +305,12 @@ add_executable(insert_before5w testcase/master-replica/insert_before5w.cpp)
 add_executable(test testcase/test/testcase.cpp)
 add_executable(memptest testcase/memorypool/memptest.cpp)
 add_executable(memptest_pthread testcase/memorypool/memptest_pthread.cpp)
-add_executable(integrity_test testcase/integrity/test_integrity.cpp)
-add_executable(integrity_client testcase/integrity/client.cpp)
+if(EXISTS "${CMAKE_SOURCE_DIR}/testcase/integrity/test_integrity.cpp")
+    add_executable(integrity_test testcase/integrity/test_integrity.cpp)
+endif()
+if(EXISTS "${CMAKE_SOURCE_DIR}/testcase/integrity/client.cpp")
+    add_executable(integrity_client testcase/integrity/client.cpp)
+endif()
 add_executable(batchsend testcase/batchsend/batchsend.cpp)
 add_executable(batchsend_hash testcase/batchsend/batchsend_hash.cpp)
 add_executable(longdata testcase/longdata/longdata.cpp)
@@ -242,12 +328,16 @@ set_target_properties(test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_D
 set_target_properties(memptest memptest_pthread
     PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/memorypool"
 )
-set_target_properties(integrity_test
-    PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/integrity"
-)
-set_target_properties(integrity_client
-    PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/integrity"
-)
+if(TARGET integrity_test)
+    set_target_properties(integrity_test
+        PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/integrity"
+    )
+endif()
+if(TARGET integrity_client)
+    set_target_properties(integrity_client
+        PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/integrity"
+    )
+endif()
 set_target_properties(batchsend batchsend_hash
     PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/batchsend"
 )
@@ -258,9 +348,11 @@ set_target_properties(echo_save
     PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/testcase/ECHO" OUTPUT_NAME ECHO
 )
 
-target_include_directories(integrity_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(integrity_test OpenSSL::Crypto)
-target_link_libraries(integrity_test kvs_integrity)
+if(TARGET integrity_test)
+    target_include_directories(integrity_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(integrity_test OpenSSL::Crypto)
+    target_link_libraries(integrity_test kvs_integrity)
+endif()
 
 target_link_libraries(test Threads::Threads)
 target_link_libraries(memptest Threads::Threads)
@@ -270,6 +362,7 @@ target_link_libraries(memptest_pthread Threads::Threads)
 target_include_directories(kvstore PRIVATE
     ${NTYCO_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/replication
 )
 
 # 链接库

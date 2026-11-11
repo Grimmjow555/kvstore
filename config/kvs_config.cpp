@@ -25,7 +25,6 @@ typedef struct {
     int network;         // kvs_network_t 对应的整数
     char rdma_client_bin[256]; // Master 派生的发送端可执行文件
     char rdma_server_bin[256]; // Replica 派生的接收端可执行文件
-    char replica_host[64];     // Master 侧：Replica 的 RDMA 网卡 IP
     char rdma_advertise_host[64]; // Replica 侧：可选 RDMA 地址覆盖；空表示自动检测
     int rdma_port;             // RDMA 端口
     int agent_port;            // Replica 主动连接 Agent 的增量通道端口
@@ -373,15 +372,6 @@ static int apply_config_key(const std::string& raw_key, const std::string& raw_v
         return 0;
     }
 
-    if (key == "replica_host" || key == "replica_ip") {
-        std::string ip = trim(value);
-        if (ip.empty() || ip.size() >= sizeof(g_config.replica_host)) {
-            return -1;
-        }
-        snprintf(g_config.replica_host, sizeof(g_config.replica_host), "%s", ip.c_str());
-        return 0;
-    }
-
     if (key == "rdma_advertise_host" || key == "rdma_advertise_ip") {
         std::string ip = trim(value);
         if (ip.empty() || ip.size() >= sizeof(g_config.rdma_advertise_host)) {
@@ -493,7 +483,6 @@ void kvs_config_set_defaults(void) {
     // 阶段 2：RDMA 搬运由独立进程完成，这里给出可执行文件与端口的默认值。
     snprintf(g_config.rdma_client_bin, sizeof(g_config.rdma_client_bin), "%s", "./rdma-client");
     snprintf(g_config.rdma_server_bin, sizeof(g_config.rdma_server_bin), "%s", "./rdma-server");
-    snprintf(g_config.replica_host, sizeof(g_config.replica_host), "%s", "127.0.0.1");
     g_config.rdma_port = 10000;
     g_config.agent_port = 11001;
     g_config.max_replicas = 16;
@@ -787,8 +776,6 @@ int kvs_config_aof_enabled(void) { return g_config.aof_enabled; }
 const char* kvs_config_rdma_client_bin(void) { return g_config.rdma_client_bin; }
 
 const char* kvs_config_rdma_server_bin(void) { return g_config.rdma_server_bin; }
-
-const char* kvs_config_replica_host(void) { return g_config.replica_host; }
 
 const char* kvs_config_rdma_advertise_host(void) { return g_config.rdma_advertise_host; }
 

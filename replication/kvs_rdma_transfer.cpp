@@ -126,7 +126,7 @@ static int xfer_read_file(const char* path, char** out_data, size_t* out_len) {
 // 父进程以「子进程退出」作为文件就绪信号，rename 保证即使父进程提前观察，
 // 也只会看到完整文件。
 //
-// 说明：Master 侧写 .tmp 有一份等价实现（replication/kvs_sync.cpp 的
+// 说明：Master 侧写 .tmp 有一份等价实现（replication/sync/master_sync.cpp 的
 // sync_write_tmp_atomic）。两者刻意没有合并：本进程是独立的 rdma-* 可执行文件，
 // 只为一次落盘引入 liburing 不划算，因此用裸 write + fsync；Master 侧走 io_uring
 // 以与 RDB SAVE 的写盘方式一致。改动其一时请同步核对另一处。

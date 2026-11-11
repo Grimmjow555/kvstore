@@ -302,6 +302,21 @@ char** resp_parse_command(char* buffer, int* argc, int* consumed) {
     return argv;
 }
 
+// 写命令成功修改数据后的统一提交点。调用方必须已持有存储锁。
+static void kvs_commit_write_side_effects(int argc, char* tokens[]) {
+    if (argc <= 0 || tokens == nullptr) {
+        return;
+    }
+
+    const bool replication_replaying = kvs_replication_is_replaying();
+    if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() && !replication_replaying) {
+        kvs_aof_append(argc, tokens);
+    }
+    if (!replication_replaying) {
+        kvs_replication_append(argc, tokens);
+    }
+}
+
 // SET Key Value
 // tokens[0]: SET
 // tokens[1]: Key
@@ -344,17 +359,7 @@ int kvs_filter_protocol(int client_fd, char* tokens[], int count, char* response
     case KVS_CMD_SET: {
         int ret = kvs_array_set(&global_array, tokens[1], tokens[2]);
         if (ret == 0) {
-            // 在AOF功能打开时，正常写入时记录 AOF；AOF 恢复或 Replica 重放时不重复记录
-            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
-                !kvs_replication_is_replaying()) {
-                kvs_aof_append(3, tokens);
-            }
-
-            // 非 Replica 重放状态下，将写操作同步给 Replica
-            if (!kvs_replication_is_replaying()) {
-                kvs_replication_append(3, tokens);
-            }
-
+            kvs_commit_write_side_effects(count, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
             length = snprintf(response, response_size, "+EXIST\r\n"); // 键已存在（仍视为成功）
@@ -378,16 +383,7 @@ int kvs_filter_protocol(int client_fd, char* tokens[], int count, char* response
     case KVS_CMD_DEL: {
         int ret = kvs_array_del(&global_array, tokens[1]);
         if (ret == 0) {
-
-            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
-                !kvs_replication_is_replaying()) {
-                kvs_aof_append(2, tokens);
-            }
-
-            if (!kvs_replication_is_replaying()) {
-                kvs_replication_append(2, tokens);
-            }
-
+            kvs_commit_write_side_effects(count, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
             length = snprintf(response, response_size,
@@ -400,16 +396,7 @@ int kvs_filter_protocol(int client_fd, char* tokens[], int count, char* response
     case KVS_CMD_MOD: {
         int ret = kvs_array_mod(&global_array, tokens[1], tokens[2]);
         if (ret == 0) {
-
-            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
-                !kvs_replication_is_replaying()) {
-                kvs_aof_append(3, tokens);
-            }
-
-            if (!kvs_replication_is_replaying()) {
-                kvs_replication_append(3, tokens);
-            }
-
+            kvs_commit_write_side_effects(count, tokens);
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
             length = snprintf(response, response_size, "$8\r\nNO EXIST\r\n");
@@ -437,16 +424,7 @@ int kvs_filter_protocol(int client_fd, char* tokens[], int count, char* response
     case KVS_CMD_RSET: {
         int ret = kvs_rbtree_set(&global_rbtree, tokens[1], tokens[2]);
         if (ret == 0) {
-
-            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
-                !kvs_replication_is_replaying()) {
-                kvs_aof_append(3, tokens);
-            }
-
-            if (!kvs_replication_is_replaying()) {
-                kvs_replication_append(3, tokens);
-            }
-
+            kvs_commit_write_side_effects(count, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
             length = snprintf(response, response_size, "+EXIST\r\n"); // 键已存在（仍视为成功）
@@ -470,16 +448,7 @@ int kvs_filter_protocol(int client_fd, char* tokens[], int count, char* response
     case KVS_CMD_RDEL: {
         int ret = kvs_rbtree_del(&global_rbtree, tokens[1]);
         if (ret == 0) {
-
-            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
-                !kvs_replication_is_replaying()) {
-                kvs_aof_append(2, tokens);
-            }
-
-            if (!kvs_replication_is_replaying()) {
-                kvs_replication_append(2, tokens);
-            }
-
+            kvs_commit_write_side_effects(count, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
             length = snprintf(response, response_size,
@@ -492,16 +461,7 @@ int kvs_filter_protocol(int client_fd, char* tokens[], int count, char* response
     case KVS_CMD_RMOD: {
         int ret = kvs_rbtree_mod(&global_rbtree, tokens[1], tokens[2]);
         if (ret == 0) {
-
-            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
-                !kvs_replication_is_replaying()) {
-                kvs_aof_append(3, tokens);
-            }
-
-            if (!kvs_replication_is_replaying()) {
-                kvs_replication_append(3, tokens);
-            }
-
+            kvs_commit_write_side_effects(count, tokens);
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
             length = snprintf(response, response_size, "$8\r\nNO EXIST\r\n");
@@ -529,16 +489,7 @@ int kvs_filter_protocol(int client_fd, char* tokens[], int count, char* response
     case KVS_CMD_HSET: {
         int ret = kvs_hash_set(&global_hash, tokens[1], tokens[2]);
         if (ret == 0) {
-
-            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
-                !kvs_replication_is_replaying()) {
-                kvs_aof_append(3, tokens);
-            }
-
-            if (!kvs_replication_is_replaying()) {
-                kvs_replication_append(3, tokens);
-            }
-
+            kvs_commit_write_side_effects(count, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
             length = snprintf(response, response_size, "+EXIST\r\n"); // 键已存在（仍视为成功）
@@ -562,16 +513,7 @@ int kvs_filter_protocol(int client_fd, char* tokens[], int count, char* response
     case KVS_CMD_HDEL: {
         int ret = kvs_hash_del(&global_hash, tokens[1]);
         if (ret == 0) {
-
-            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
-                !kvs_replication_is_replaying()) {
-                kvs_aof_append(2, tokens);
-            }
-
-            if (!kvs_replication_is_replaying()) {
-                kvs_replication_append(2, tokens);
-            }
-
+            kvs_commit_write_side_effects(count, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
             length = snprintf(response, response_size,
@@ -584,16 +526,7 @@ int kvs_filter_protocol(int client_fd, char* tokens[], int count, char* response
     case KVS_CMD_HMOD: {
         int ret = kvs_hash_mod(&global_hash, tokens[1], tokens[2]);
         if (ret == 0) {
-
-            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
-                !kvs_replication_is_replaying()) {
-                kvs_aof_append(3, tokens);
-            }
-
-            if (!kvs_replication_is_replaying()) {
-                kvs_replication_append(3, tokens);
-            }
-
+            kvs_commit_write_side_effects(count, tokens);
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
             length = snprintf(response, response_size, "$8\r\nNO EXIST\r\n");
@@ -622,16 +555,7 @@ int kvs_filter_protocol(int client_fd, char* tokens[], int count, char* response
     case KVS_CMD_SSET: {
         int ret = kvs_skiptable_set(&global_skiptable, tokens[1], tokens[2]);
         if (ret == 0) {
-
-            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
-                !kvs_replication_is_replaying()) {
-                kvs_aof_append(3, tokens);
-            }
-
-            if (!kvs_replication_is_replaying()) {
-                kvs_replication_append(3, tokens);
-            }
-
+            kvs_commit_write_side_effects(count, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 成功
         } else if (ret > 0) {
             length = snprintf(response, response_size, "+EXIST\r\n"); // 键已存在（仍视为成功）
@@ -655,16 +579,7 @@ int kvs_filter_protocol(int client_fd, char* tokens[], int count, char* response
     case KVS_CMD_SDEL: {
         int ret = kvs_skiptable_del(&global_skiptable, tokens[1]);
         if (ret == 0) {
-
-            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
-                !kvs_replication_is_replaying()) {
-                kvs_aof_append(2, tokens);
-            }
-
-            if (!kvs_replication_is_replaying()) {
-                kvs_replication_append(2, tokens);
-            }
-
+            kvs_commit_write_side_effects(count, tokens);
             length = snprintf(response, response_size, "+OK\r\n"); // 删除成功
         } else if (ret > 0) {
             length = snprintf(response, response_size,
@@ -677,16 +592,7 @@ int kvs_filter_protocol(int client_fd, char* tokens[], int count, char* response
     case KVS_CMD_SMOD: {
         int ret = kvs_skiptable_mod(&global_skiptable, tokens[1], tokens[2]);
         if (ret == 0) {
-
-            if (kvs_config_aof_enabled() && !kvs_aof_is_replaying() &&
-                !kvs_replication_is_replaying()) {
-                kvs_aof_append(3, tokens);
-            }
-
-            if (!kvs_replication_is_replaying()) {
-                kvs_replication_append(3, tokens);
-            }
-
+            kvs_commit_write_side_effects(count, tokens);
             length = snprintf(response, response_size, "+OK\r\n");
         } else if (ret > 0) {
             length = snprintf(response, response_size, "$8\r\nNO EXIST\r\n");

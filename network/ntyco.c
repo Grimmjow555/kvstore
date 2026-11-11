@@ -270,9 +270,6 @@ void server_reader(void* arg) {
             nty_client_close(fd);
             break;
         }
-        if (is_replica) {
-            kvs_replication_finish_handshake(fd);
-        }
     }
 }
 

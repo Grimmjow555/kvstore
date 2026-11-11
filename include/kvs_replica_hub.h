@@ -57,7 +57,6 @@ public:
     // 返回 true 表示至少一个目标因队列/内存超限或发送失败被移除。
     bool on_write(int argc, char* argv[]);
     void on_capture_resync(const char* reason);
-    void on_invalidate();
 
     void flush();
     void clear();

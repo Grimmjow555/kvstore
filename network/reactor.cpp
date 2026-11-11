@@ -264,8 +264,6 @@ int send_cb(int clientfd) {
         return -1;
     }
 
-    kvs_replication_finish_handshake(clientfd);
-
     // 发送完成，重新监听读事件
     set_event(clientfd, EPOLLIN, 0);
 

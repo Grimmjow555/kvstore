@@ -7,15 +7,14 @@
 //   * 全局采集序号与 kvs_ebpf_notify_command()：保证写命令与 SYNC/SYNC FINISHED
 //     控制记录落在同一条有序流里（设计 §7.1 的正确性基础）；
 //   * 写路径入口 kvs_replication_append()：只把命令交给上面这条流；
-//   * 网络层 EBPF 注册路由、断连清理、回放线程标记；
-//   * 运行期整库替换后写入 INVALIDATE 记录，触发从机重新全量同步。
+//   * 网络层 EBPF 注册路由、断连清理、回放线程标记。
 //
 // 之所以把「采集挂载点」和「复制入口」放在同一个文件：它们都是 kvstore 进程内、
 // 写路径上的胶水代码，调用链就是
 //   kvs_replication_append -> kvs_ebpf_notify_command -> kvs_ebpf_notify_write，
 // 放在一起比拆成两个文件更容易看清顺序与锁的关系。
 //
-// 注意：这些调用点都在存储锁内（见 kvs_filter_protocol 与 kvs_sync.cpp），
+// 注意：这些调用点都在存储锁内（见 kvs_filter_protocol 与 sync/master_sync.cpp），
 // 序号因此在锁内单调递增，采集流顺序 == 提交顺序。
 #include "kvs_replication.h"
 
@@ -153,28 +152,12 @@ int kvs_replication_accept_handshake(int fd, const char* data, int length) {
     return 0;
 }
 
-void kvs_replication_finish_handshake(int fd) { (void)fd; }
-
 void kvs_replication_remove_replica(int fd) {
     if (fd < 0) {
         return;
     }
     // 连接断开时把该 fd 上的复制/同步会话摘掉，否则 fd 复用后旧映射仍然有效。
     kvs_sync_forget_fd(fd);
-}
-
-int kvs_replication_resync() {
-    if (g_role != KVS_ROLE_MASTER) {
-        return 0;
-    }
-
-    // 新架构下没有「服务端主动推快照」的通道：Master 只能把「数据已变」这件事
-    // 写进有序采集流，由 agent 断开增量通道，Replica 侧观察到断开后重新走
-    // SYNC（设计 §8.2 步骤 7）。
-    char* token[1] = {(char*)"INVALIDATE"};
-    kvs_ebpf_notify_command(1, token);
-    kvs_log(KVS_LOG_INFO, "[REPLICATION] invalidate recorded; online replica will re-sync");
-    return 0;
 }
 
 int kvs_replication_is_replaying() { return replication_replaying; }

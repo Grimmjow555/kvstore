@@ -332,7 +332,6 @@ int handle_cqe(struct io_uring* ring, struct io_uring_cqe* entries, int listenfd
             break; // 保留 ctx，等待下一次 WRITE 完成事件
         }
 
-        kvs_replication_finish_handshake(ctx->clientfd);
         set_event_recv(ring, ctx->clientfd, 0);
         // printf("sendback to connection --> %d: [%zu]%s\n", ctx->clientfd,
         //        ctx->wsent_len - 4, ctx->wbuffer.data());

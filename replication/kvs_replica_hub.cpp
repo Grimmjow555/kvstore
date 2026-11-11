@@ -1,4 +1,5 @@
 #include "kvs_replica_hub.h"
+#include "kvs_replication_protocol.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -139,27 +140,20 @@ bool ReplicaHub::encode_command(int argc, char* argv[], std::string* output) {
         return false;
     }
     size_t size = 32;
+    std::vector<const char*> args;
+    args.reserve((size_t)argc);
     for (int i = 0; i < argc; ++i) {
         if (argv[i] == NULL) {
             return false;
         }
+        args.push_back(argv[i]);
         size += strlen(argv[i]) + 32;
     }
     output->resize(size);
-    int offset = snprintf(&(*output)[0], size, "*%d\r\n", argc);
-    if (offset <= 0) {
-        return false;
-    }
-    for (int i = 0; i < argc; ++i) {
-        int written = snprintf(&(*output)[0] + offset, size - (size_t)offset,
-                               "$%zu\r\n%s\r\n", strlen(argv[i]), argv[i]);
-        if (written <= 0 || (size_t)offset + (size_t)written >= size) {
-            return false;
-        }
-        offset += written;
-    }
-    output->resize((size_t)offset);
-    return true;
+    size_t length = 0;
+    int rc = kvs_repl_build_resp_array(args.data(), argc, &(*output)[0], size, &length);
+    output->resize(rc == 0 ? length : 0);
+    return rc == 0;
 }
 
 bool ReplicaHub::on_write(int argc, char* argv[]) {
@@ -213,11 +207,6 @@ bool ReplicaHub::on_write_locked(int argc, char* argv[]) {
 void ReplicaHub::on_capture_resync(const char* reason) {
     std::lock_guard<std::mutex> lock(mutex_);
     (void)reason;
-    clear_locked();
-}
-
-void ReplicaHub::on_invalidate() {
-    std::lock_guard<std::mutex> lock(mutex_);
     clear_locked();
 }
 

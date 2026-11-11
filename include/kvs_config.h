@@ -68,7 +68,6 @@ int kvs_config_aof_enabled(void);
 
 const char* kvs_config_rdma_client_bin(void);
 const char* kvs_config_rdma_server_bin(void);
-const char* kvs_config_replica_host(void);
 const char* kvs_config_rdma_advertise_host(void);
 int kvs_config_rdma_port(void);
 int kvs_config_agent_port(void);
